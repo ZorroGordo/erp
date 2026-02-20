@@ -18,7 +18,7 @@ async function bootstrap() {
 
   const allowedOrigins = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',')
-    : ['https://victorsdou.com', 'https://www.victorsdou.com', 'https://erp-rpjk.vercel.app'];
+    : ['https://victorsdou.pe', 'https://www.victorsdou.pe', 'https://victorsdou.com', 'https://www.victorsdou.com', 'https://erp-rpjk.vercel.app'];
 
   app.enableCors({
     origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
