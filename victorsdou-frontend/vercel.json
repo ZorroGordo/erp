@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://erp-production-10eb.up.railway.app/:path*"
+    },
+    {
+      "source": "/((?!assets|favicon.ico).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
