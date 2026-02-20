@@ -25,7 +25,7 @@ api.interceptors.response.use(
       try {
         const { data } = await api.post('/v1/auth/refresh');
         // API shape: { data: { tokens: { accessToken } } }
-        localStorage.setItem('accessToken', data.data.tokens.accessToken);
+        localStorage.setItem('accessToken', data.accessToken);
         isRefreshing = false;
         return api(original);
       } catch {
