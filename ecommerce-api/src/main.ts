@@ -16,10 +16,12 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  const allowedOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',')
+    : ['https://victorsdou.com', 'https://www.victorsdou.com', 'https://erp-rpjk.vercel.app'];
+
   app.enableCors({
-    origin: process.env.NODE_ENV === 'production'
-      ? ['https://victorsdou.com', 'https://www.victorsdou.com']
-      : true,
+    origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
     credentials: true,
   });
 
