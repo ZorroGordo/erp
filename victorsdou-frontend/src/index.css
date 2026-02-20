@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    /* Warm cream background — Victorsdou brand-50 */
+    @apply bg-brand-50 text-gray-900 antialiased;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    /* 200ms transition — UI Pro Max "subtle hover" spec for enterprise */
+    @apply bg-brand-600 hover:bg-brand-700 text-white font-medium px-4 py-2 rounded-lg
+           transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+           active:scale-[0.98];
+  }
+  .btn-secondary {
+    @apply bg-white hover:bg-brand-100 text-gray-700 font-medium px-4 py-2 rounded-lg
+           border border-brand-200 transition-all duration-200;
+  }
+  .card {
+    /* White card on warm cream bg — subtle green-tinted border */
+    /* UI Pro Max: --card-radius: 12px (rounded-xl), shadow-sm */
+    @apply bg-white rounded-xl border border-brand-200 shadow-sm;
+  }
+  /* Clickable card variant — UI Pro Max: translateY(-4px) hover lift @ 200ms */
+  .card-interactive {
+    @apply card hover:-translate-y-1 hover:shadow-md transition-all duration-200 cursor-pointer;
+  }
+  .input {
+    @apply w-full border border-brand-300 rounded-lg px-3 py-2 text-sm
+           focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent bg-white
+           transition-colors duration-200;
+  }
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .table-row-hover {
+    @apply hover:bg-brand-50 transition-colors duration-150;
+  }
+  /* UI Pro Max: overflow-x-auto wrapper for all data tables */
+  .table-container {
+    @apply w-full overflow-x-auto;
+  }
+}

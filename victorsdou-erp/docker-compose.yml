@@ -1,0 +1,107 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: victorsdou_postgres
+    environment:
+      POSTGRES_DB:       victorsdou_erp
+      POSTGRES_USER:     victorsdou
+      POSTGRES_PASSWORD: victorsdou_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U victorsdou -d victorsdou_erp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: victorsdou_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API (Node.js) ───────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: victorsdou_api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV:              development
+      PORT:                  3000
+      DATABASE_URL:          postgresql://victorsdou:victorsdou_dev_password@postgres:5432/victorsdou_erp
+      REDIS_URL:             redis://redis:6379
+      # JWT keys — replace with real RSA keys in .env
+      JWT_PRIVATE_KEY:       "${JWT_PRIVATE_KEY}"
+      JWT_PUBLIC_KEY:        "${JWT_PUBLIC_KEY}"
+      CORS_ALLOWED_ORIGINS:  "http://localhost:5173,http://localhost:3001"
+      NUBEFACT_API_TOKEN:    "${NUBEFACT_API_TOKEN:-sandbox_token}"
+      NUBEFACT_RUC:          "${COMPANY_RUC:-20000000001}"
+      COMPANY_RUC:           "${COMPANY_RUC:-20000000001}"
+      COMPANY_NAME:          "${COMPANY_NAME:-Victorsdou S.A.C.}"
+      AI_SERVICE_URL:        "http://ai:8001"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+    command: npm run dev
+
+  # ── AI Service (Python) ─────────────────────────────────────────────────────
+  ai:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: victorsdou_ai
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://victorsdou:victorsdou_dev_password@postgres:5432/victorsdou_erp
+      API_KEY:      "${AI_SERVICE_API_KEY:-dev_ai_key}"
+    ports:
+      - "8001:8001"
+    profiles:
+      - ai  # only start with: docker compose --profile ai up
+
+  # ── MinIO (S3-compatible local dev) ────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: victorsdou_minio
+    environment:
+      MINIO_ROOT_USER:     victorsdou
+      MINIO_ROOT_PASSWORD: victorsdou_minio_password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    profiles:
+      - storage
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

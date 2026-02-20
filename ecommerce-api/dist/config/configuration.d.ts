@@ -1,0 +1,29 @@
+import { z } from 'zod';
+declare const envSchema: z.ZodObject<{
+    NODE_ENV: z.ZodDefault<z.ZodEnum<{
+        development: "development";
+        production: "production";
+        test: "test";
+    }>>;
+    PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+    DATABASE_URL: z.ZodString;
+    REDIS_URL: z.ZodDefault<z.ZodString>;
+    JWT_PRIVATE_KEY: z.ZodString;
+    JWT_PUBLIC_KEY: z.ZodString;
+    JWT_ACCESS_EXPIRES: z.ZodDefault<z.ZodString>;
+    JWT_REFRESH_EXPIRES: z.ZodDefault<z.ZodString>;
+    ERP_API_URL: z.ZodDefault<z.ZodString>;
+    ERP_API_KEY: z.ZodString;
+    CULQI_PUBLIC_KEY: z.ZodString;
+    CULQI_SECRET_KEY: z.ZodString;
+    CULQI_WEBHOOK_SECRET: z.ZodString;
+    AWS_REGION: z.ZodDefault<z.ZodString>;
+    AWS_ACCESS_KEY_ID: z.ZodOptional<z.ZodString>;
+    AWS_SECRET_ACCESS_KEY: z.ZodOptional<z.ZodString>;
+    S3_BUCKET: z.ZodDefault<z.ZodString>;
+    SES_FROM_EMAIL: z.ZodString;
+    INTERNAL_API_KEY: z.ZodString;
+}, z.core.$strip>;
+export type Env = z.infer<typeof envSchema>;
+export declare const configuration: () => Env;
+export {};

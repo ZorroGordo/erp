@@ -1,0 +1,387 @@
+// victorsdou_web — ecommerce database
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserType {
+  B2C
+  B2B
+}
+
+enum DocType {
+  DNI
+  RUC
+  CE
+  PASAPORTE
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  CONFIRMED
+  PREPARING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum SubStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum SubFrequency {
+  WEEKLY
+  BIWEEKLY
+}
+
+enum EmailEventStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum DeliveryWindow {
+  MORNING   // 08:00–12:00
+  AFTERNOON // 12:00–17:00
+}
+
+// ─── Users & Auth ─────────────────────────────────────────────────────────────
+
+model WebUser {
+  id               String    @id @default(uuid()) @db.Uuid
+  email            String    @unique @db.VarChar(255)
+  passwordHash     String?   @db.VarChar(255)
+  fullName         String?   @db.VarChar(255)
+  phone            String?   @db.VarChar(30)
+  dob              DateTime? @db.Date
+  docType          DocType?
+  docNumber        String?   @db.VarChar(20)
+  type             UserType  @default(B2C)
+  erpCustomerId    String?   @db.Uuid  // FK → ERP customers.id
+  isEmailVerified  Boolean   @default(false)
+  isActive         Boolean   @default(true)
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  refreshTokens    RefreshToken[]
+  addresses        WebUserAddress[]
+  cart             Cart?
+  orders           Order[]
+  subscriptions    Subscription[]
+  emailVerifications EmailVerification[]
+  passwordResets   PasswordReset[]
+
+  @@index([email])
+  @@index([erpCustomerId])
+  @@map("web_users")
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  tokenHash  String   @unique @db.VarChar(255)  // bcrypt hash of token
+  family     String   @db.Uuid                   // rotation family
+  isRevoked  Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user       WebUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  token     String   @unique @db.VarChar(255)  // random 32-byte hex
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      WebUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_verifications")
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  token     String   @unique @db.VarChar(255)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      WebUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+model GuestSession {
+  id          String   @id @default(uuid()) @db.Uuid
+  sessionToken String  @unique @db.VarChar(255)  // opaque token sent to client
+  email       String?  @db.VarChar(255)
+  fullName    String?  @db.VarChar(255)
+  phone       String?  @db.VarChar(30)
+  docType     DocType?
+  docNumber   String?  @db.VarChar(20)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  cart        Cart?
+
+  @@index([sessionToken])
+  @@map("guest_sessions")
+}
+
+// ─── Addresses ────────────────────────────────────────────────────────────────
+
+model WebUserAddress {
+  id           String  @id @default(uuid()) @db.Uuid
+  userId       String  @db.Uuid
+  label        String  @db.VarChar(50)      // "Casa", "Oficina", etc.
+  addressLine1 String  @db.VarChar(255)
+  addressLine2 String? @db.VarChar(100)
+  district     String  @db.VarChar(100)
+  province     String? @db.VarChar(100)
+  department   String? @db.VarChar(100)
+  isDefault    Boolean @default(false)
+
+  user         WebUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders       Order[]
+
+  @@index([userId])
+  @@map("web_user_addresses")
+}
+
+// ─── Cart ─────────────────────────────────────────────────────────────────────
+
+model Cart {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String?       @unique @db.Uuid
+  guestSessionId String?       @unique @db.Uuid
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user           WebUser?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestSession   GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: Cascade)
+  items          CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  cartId        String   @db.Uuid
+  erpProductId  String   @db.Uuid  // FK → ERP products.id
+  sku           String   @db.VarChar(50)
+  name          String   @db.VarChar(255)
+  qty           Int      @default(1)
+  unitPrice     Decimal  @db.Decimal(14, 4)  // pre-IGV, post-discount
+  igvRate       Decimal  @default(0.18) @db.Decimal(5, 4)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  cart          Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, erpProductId])
+  @@map("cart_items")
+}
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+
+model Order {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderNumber       String        @unique @db.VarChar(20)   // e.g. ORD-20260220-0001
+  userId            String?       @db.Uuid
+  guestEmail        String?       @db.VarChar(255)
+  guestPhone        String?       @db.VarChar(30)
+  addressId         String?       @db.Uuid
+  deliveryAddressSnap Json?                                  // snapshot at order time
+  deliveryDate      DateTime      @db.Date
+  deliveryWindow    DeliveryWindow
+  subtotalExIgv     Decimal       @db.Decimal(14, 4)
+  igvAmount         Decimal       @db.Decimal(14, 4)
+  totalPen          Decimal       @db.Decimal(14, 4)
+  status            OrderStatus   @default(PENDING_PAYMENT)
+  erpSalesOrderId   String?       @db.Uuid   // set once ERP order is created
+  subscriptionId    String?       @db.Uuid
+  promoCode         String?       @db.VarChar(50)
+  discountAmount    Decimal       @default(0) @db.Decimal(14, 4)
+  notes             String?       @db.Text
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user              WebUser?      @relation(fields: [userId], references: [id])
+  address           WebUserAddress? @relation(fields: [addressId], references: [id])
+  items             OrderItem[]
+  payments          Payment[]
+  statusHistory     OrderStatusHistory[]
+  invoice           Invoice?
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([deliveryDate])
+  @@map("orders")
+}
+
+model OrderItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  orderId       String   @db.Uuid
+  erpProductId  String   @db.Uuid
+  sku           String   @db.VarChar(50)
+  name          String   @db.VarChar(255)
+  qty           Int
+  unitPrice     Decimal  @db.Decimal(14, 4)
+  igvRate       Decimal  @db.Decimal(5, 4)
+  lineTotal     Decimal  @db.Decimal(14, 4)
+
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(uuid()) @db.Uuid
+  orderId   String      @db.Uuid
+  status    OrderStatus
+  note      String?     @db.VarChar(255)
+  changedBy String?     @db.VarChar(100)   // staff email or 'system'
+  createdAt DateTime    @default(now())
+
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
+model Payment {
+  id              String        @id @default(uuid()) @db.Uuid
+  orderId         String        @db.Uuid
+  culqiChargeId   String?       @unique @db.VarChar(100)
+  culqiOrderId    String?       @db.VarChar(100)
+  amountCentimos  Int                                       // Culqi uses centimos
+  currency        String        @default("PEN") @db.VarChar(3)
+  status          PaymentStatus @default(PENDING)
+  failureReason   String?       @db.VarChar(255)
+  refundedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  order           Order         @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+
+model Subscription {
+  id              String       @id @default(uuid()) @db.Uuid
+  userId          String       @db.Uuid
+  frequency       SubFrequency
+  status          SubStatus    @default(ACTIVE)
+  deliveryWindow  DeliveryWindow
+  preferredDay    Int          @default(1)   // 1=Mon … 7=Sun (ISO weekday)
+  addressId       String?      @db.Uuid
+  nextBillingDate DateTime     @db.Date
+  pausedUntil     DateTime?    @db.Date
+  cancelledAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            WebUser      @relation(fields: [userId], references: [id])
+  items           SubscriptionItem[]
+  orders          Order[]
+
+  @@index([userId])
+  @@index([status, nextBillingDate])
+  @@map("subscriptions")
+}
+
+model SubscriptionItem {
+  id              String       @id @default(uuid()) @db.Uuid
+  subscriptionId  String       @db.Uuid
+  erpProductId    String       @db.Uuid
+  sku             String       @db.VarChar(50)
+  name            String       @db.VarChar(255)
+  qty             Int          @default(1)
+
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, erpProductId])
+  @@map("subscription_items")
+}
+
+// ─── Invoices ─────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @unique @db.Uuid
+  type        String   @default("BOLETA") @db.VarChar(10)   // BOLETA | FACTURA
+  series      String   @db.VarChar(5)    // B001 or F001
+  number      Int
+  s3Key       String   @db.VarChar(500)
+  s3Url       String?  @db.VarChar(1000)
+  issuedAt    DateTime @default(now())
+
+  order       Order    @relation(fields: [orderId], references: [id])
+
+  @@unique([series, number])
+  @@map("invoices")
+}
+
+// ─── Email events (idempotency log) ───────────────────────────────────────────
+
+model EmailEvent {
+  id             String           @id @default(uuid()) @db.Uuid
+  idempotencyKey String           @unique @db.VarChar(255)
+  template       String           @db.VarChar(50)
+  recipientEmail String           @db.VarChar(255)
+  userId         String?          @db.Uuid
+  status         EmailEventStatus @default(QUEUED)
+  errorMessage   String?          @db.Text
+  sentAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([recipientEmail])
+  @@map("email_events")
+}
+
+// ─── Delivery slots (capacity control) ───────────────────────────────────────
+
+model DeliverySlot {
+  id             String         @id @default(uuid()) @db.Uuid
+  date           DateTime       @db.Date
+  window         DeliveryWindow
+  maxOrders      Int            @default(50)
+  bookedOrders   Int            @default(0)
+  isBlocked      Boolean        @default(false)
+
+  @@unique([date, window])
+  @@map("delivery_slots")
+}
