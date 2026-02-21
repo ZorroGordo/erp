@@ -45,7 +45,7 @@ export async function procurementRoutes(app: FastifyInstance) {
     // Fire-and-forget: notify supplier + ops
     notifyPurchaseOrderCreated({
       poNumber: po.poNumber,
-      totalPen: po.totalPen,
+      totalPen: Number(po.totalPen),
       supplier: { businessName: po.supplier.businessName, email: (po.supplier as any).email ?? null },
     }).catch(console.error);
 

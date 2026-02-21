@@ -249,7 +249,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
         correlative: factproRes.number?.split('-')[1] ?? invoice.correlative,
         entityName:  invoice.entityName,
         entityEmail: (invoice as any).entityEmail ?? null,
-        totalPen:    invoice.totalPen,
+        totalPen:    Number(invoice.totalPen),
         pdfUrl:      factproRes.links?.pdf ?? null,
       }).catch(console.error);
     }

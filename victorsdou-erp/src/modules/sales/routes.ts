@@ -38,7 +38,7 @@ export async function salesRoutes(app: FastifyInstance) {
     // Fire-and-forget: notify customer + ops
     notifySalesOrderConfirmed({
       orderNumber: (order as any).orderNumber ?? id,
-      totalPen:    (order as any).totalPen ?? 0,
+      totalPen:    Number((order as any).totalPen ?? 0),
       customer: {
         businessName: (order as any).customer?.businessName ?? null,
         contactName:  (order as any).customer?.contactName  ?? null,
