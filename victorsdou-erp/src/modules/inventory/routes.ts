@@ -22,6 +22,37 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.send({ data: levels });
   });
 
+
+  // -- POST /v1/inventory/ingredients -- create a new ingredient master record
+  app.post('/ingredients', {
+    preHandler: [requireAnyOf('OPS_MGR', 'WAREHOUSE', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const body = req.body as {
+      sku: string;
+      name: string;
+      category: string;
+      baseUom: string;
+      avgCostPen?: number;
+      isPerishable?: boolean;
+      shelfLifeDays?: number;
+      allergenFlags?: string[];
+    };
+    const { prisma } = await import('../../lib/prisma');
+    const ingredient = await prisma.ingredient.create({
+      data: {
+        sku:           body.sku.toUpperCase(),
+        name:          body.name,
+        category:      body.category,
+        baseUom:       body.baseUom,
+        avgCostPen:    body.avgCostPen  ?? 0,
+        isPerishable:  body.isPerishable ?? false,
+        shelfLifeDays: body.shelfLifeDays ?? null,
+        allergenFlags: body.allergenFlags ?? [],
+      },
+    });
+    return reply.code(201).send({ data: ingredient });
+  });
+
   // ── GET /v1/inventory/ingredients/:id/movements ──────────────────────────────
   app.get('/ingredients/:id/movements', {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'SUPER_ADMIN')],
