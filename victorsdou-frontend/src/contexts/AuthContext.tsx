@@ -18,29 +18,28 @@ interface AuthCtx {
 
 const AuthContext = createContext<AuthCtx>(null!);
 
-/** Map the /me profile response (which uses `name`) to our User shape */
-function profileToUser(profile: Record<string, any>): User {
+/** Map the /me actor payload to our User shape */
+function profileToUser(actor: Record<string, any>): User {
   return {
-    id:       profile.id,
-    email:    profile.email,
-    fullName: profile.name ?? '',
-    roles:    [profile.type ?? 'B2C'],
+    id: actor.sub ?? actor.id ?? '',
+    email: actor.email ?? '',
+    fullName: actor.fullName ?? actor.name ?? '',
+    roles: actor.roles ?? [actor.type ?? 'B2C'],
     isActive: true,
   };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser]       = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
     if (token) {
       api.get('/v1/auth/me')
-        .then(r => setUser(profileToUser(r.data)))
+        .then(r => setUser(profileToUser(r.data.data.actor)))
         .catch(() => {
           localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
         })
         .finally(() => setLoading(false));
     } else {
@@ -49,23 +48,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
-    // API returns: { accessToken, refreshToken, expiresIn }
+    // Backend returns: { data: { user, tokens: { accessToken, expiresIn } } }
+    // RefreshToken is set as HTTP-only cookie (vos_refresh), not in response body
     const { data } = await api.post('/v1/auth/login', { email, password });
-    localStorage.setItem('accessToken',  data.accessToken);
-    localStorage.setItem('refreshToken', data.refreshToken);
+    localStorage.setItem('accessToken', data.data.tokens.accessToken);
 
-    // /me returns: { id, name, email, phone, type, ... }
+    // /me returns: { data: { actor: { sub, email, roles, ... } } }
     const me = await api.get('/v1/auth/me');
-    setUser(profileToUser(me.data));
+    setUser(profileToUser(me.data.data.actor));
   };
 
   const logout = async () => {
-    const refreshToken = localStorage.getItem('refreshToken');
-    if (refreshToken) {
-      await api.post('/v1/auth/logout', { refreshToken }).catch(() => {});
-    }
+    await api.post('/v1/auth/logout').catch(() => {});
     localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
     setUser(null);
   };
 
