@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import * as SalesService from './service';
+import { notifySalesOrderConfirmed } from '../../services/notifications';
 
 export async function salesRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
@@ -29,8 +30,22 @@ export async function salesRoutes(app: FastifyInstance) {
   app.patch('/:id/confirm', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const order = await prisma.salesOrder.update({
-      where: { id }, data: { status: 'CONFIRMED', confirmedAt: new Date() },
+      where:   { id },
+      data:    { status: 'CONFIRMED', confirmedAt: new Date() },
+      include: { customer: true },
     });
+
+    // Fire-and-forget: notify customer + ops
+    notifySalesOrderConfirmed({
+      orderNumber: (order as any).orderNumber ?? id,
+      totalPen:    (order as any).totalPen ?? 0,
+      customer: {
+        businessName: (order as any).customer?.businessName ?? null,
+        contactName:  (order as any).customer?.contactName  ?? null,
+        email:        (order as any).customer?.email        ?? null,
+      },
+    }).catch(console.error);
+
     return reply.send({ data: order });
   });
 

@@ -3,6 +3,7 @@ import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
 import { emitirDocumento, buildFacturaPayload } from './factpro';
+import { notifyInvoiceEmitted } from '../../services/notifications';
 
 export async function invoicingRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
@@ -240,6 +241,18 @@ export async function invoicingRoutes(app: FastifyInstance) {
         rejectionReason: !accepted ? (factproRes.message ?? factproRes.errors?.join('; ') ?? 'Rechazado por SUNAT') : null,
       },
     });
+
+    // Fire-and-forget: notify client + ops after successful emission
+    if (accepted) {
+      notifyInvoiceEmitted({
+        series:      factproRes.number?.split('-')[0] ?? invoice.series,
+        correlative: factproRes.number?.split('-')[1] ?? invoice.correlative,
+        entityName:  invoice.entityName,
+        entityEmail: (invoice as any).entityEmail ?? null,
+        totalPen:    invoice.totalPen,
+        pdfUrl:      factproRes.links?.pdf ?? null,
+      }).catch(console.error);
+    }
 
     return reply.send({ data: factproRes, accepted });
   });

@@ -26,8 +26,9 @@ import { accountingRoutes } from './modules/accounting/routes';
 import { deliveryRoutes }   from './modules/delivery/routes';
 import { payrollRoutes }    from './modules/payroll/routes';
 import { aiRoutes }         from './modules/ai/routes';
-import { comprobantesRoutes } from './modules/comprobantes/routes';
-import { lookupRoutes }       from './modules/lookup/routes';
+import { comprobantesRoutes }          from './modules/comprobantes/routes';
+import { lookupRoutes }                from './modules/lookup/routes';
+import { notificationsWebhookRoutes }  from './modules/notifications/routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -154,6 +155,7 @@ export async function buildApp() {
     wh.post('/payment-gateway', async (_req, reply) => {
       return reply.send({ received: true });
     });
+    await wh.register(notificationsWebhookRoutes);
   }, { prefix: '/webhooks' });
 
   // ── 404 Handler ───────────────────────────────────────────────────────────

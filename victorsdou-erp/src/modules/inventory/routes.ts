@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { setAuditContext } from '../../middleware/audit';
 import * as InventoryService from './service';
+import { alertLowStock } from '../../services/notifications';
 
 export async function inventoryRoutes(app: FastifyInstance) {
 
@@ -190,6 +191,23 @@ export async function inventoryRoutes(app: FastifyInstance) {
         notes:        body.notes,
         createdBy:    req.actor!.sub,
       });
+
+      // Fire-and-forget: check if this ingredient is now below its reorder threshold
+      InventoryService.getReorderAlerts().then((alerts: any[]) => {
+        const affected = alerts.filter((a: any) =>
+          (a.ingredientId ?? a.id) === body.ingredientId,
+        );
+        if (affected.length > 0) {
+          alertLowStock(
+            affected.map((a: any) => ({
+              name:           a.name ?? a.ingredient?.name ?? body.ingredientId,
+              currentQty:     Number(a.currentQty ?? a.totalQty ?? 0),
+              alertThreshold: Number(a.alertThreshold ?? 0),
+              baseUom:        a.baseUom ?? a.ingredient?.baseUom ?? '',
+            })),
+          );
+        }
+      }).catch(console.error);
     }
 
     return reply.code(201).send({ data: { success: true } });

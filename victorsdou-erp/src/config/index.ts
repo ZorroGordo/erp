@@ -46,6 +46,11 @@ const envSchema = z.object({
 
   // Email (Amazon SES)
   SES_FROM_EMAIL: z.string().email().default('noreply@victorsdou.pe'),
+  SES_INBOUND_BUCKET: z.string().default('victorsdou-docs'),
+
+  // Ops alerts (email + SMS)
+  OPS_ALERT_EMAIL: z.string().email().optional(),
+  OPS_ALERT_PHONE: z.string().optional(),   // E.164 format, e.g. +51999999999
 
   // WhatsApp
   WHATSAPP_API_URL: z.string().default('https://graph.facebook.com/v18.0'),

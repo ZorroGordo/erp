@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
+import { notifyPurchaseOrderCreated } from '../../services/notifications';
 
 export async function procurementRoutes(app: FastifyInstance) {
   app.get('/purchase-orders', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
@@ -40,6 +41,14 @@ export async function procurementRoutes(app: FastifyInstance) {
       },
       include: { lines: true, supplier: true },
     });
+
+    // Fire-and-forget: notify supplier + ops
+    notifyPurchaseOrderCreated({
+      poNumber: po.poNumber,
+      totalPen: po.totalPen,
+      supplier: { businessName: po.supplier.businessName, email: (po.supplier as any).email ?? null },
+    }).catch(console.error);
+
     return reply.code(201).send({ data: po });
   });
 
