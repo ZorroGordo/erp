@@ -63,4 +63,10 @@ export async function procurementRoutes(app: FastifyInstance) {
     const supplier = await prisma.supplier.create({ data: body });
     return reply.code(201).send({ data: supplier });
   });
+
+  app.patch('/suppliers/:id', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const supplier = await prisma.supplier.update({ where: { id }, data: req.body as never });
+    return reply.send({ data: supplier });
+  });
 }
