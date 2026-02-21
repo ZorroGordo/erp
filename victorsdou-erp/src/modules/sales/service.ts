@@ -73,7 +73,7 @@ export async function createOrder(input: {
   return prisma.salesOrder.create({
     data: {
       orderNumber, customerId: input.customerId, channel: input.channel as never,
-      status: 'DRAFT', subtotalPen: pricing.subtotalPen,
+      status: 'DRAFT' as never, subtotalPen: pricing.subtotalPen,
       igvPen: pricing.igvPen, totalPen: pricing.totalPen,
       deliveryAddressId: input.deliveryAddressId,
       deliveryDate: input.deliveryDate ? new Date(input.deliveryDate) : undefined,

@@ -4,7 +4,7 @@ import { prisma } from '../../lib/prisma';
 import * as AccountingService from './service';
 import { getPLStatementV2, getBalanceSheet, getCashFlow } from './service';
 import { createRequire } from 'module';
-const _require = createRequire(import.meta.url);
+const _require = createRequire(__filename);
 // pdf-parse v2 uses a class-based API (PDFParse class)
 const { PDFParse } = _require('pdf-parse') as {
   PDFParse: new (opts: { data: Uint8Array; password?: string }) => { getText(): Promise<{ text: string }> }
