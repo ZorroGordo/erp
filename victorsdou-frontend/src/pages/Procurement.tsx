@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Plus, ClipboardList } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 export default function Procurement() {
   const qc = useQueryClient();
@@ -78,7 +79,7 @@ export default function Procurement() {
                   <tr key={po.id} className="table-row-hover">
                     <td className="px-5 py-3 font-mono">{po.poNumber}</td>
                     <td className="px-5 py-3 font-medium">{po.supplier?.name}</td>
-                    <td className="px-5 py-3 text-right font-mono">S/ {Number(po.totalAmountPen ?? 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-right font-mono">S/ {fmtNum(po.totalAmountPen ?? 0)}</td>
                     <td className="px-5 py-3"><StatusBadge status={po.status} /></td>
                     <td className="px-5 py-3 text-center">{po.status === 'DRAFT' && <button onClick={() => approvePO.mutate(po.id)} className="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded">Aprobar</button>}</td>
                   </tr>

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useState, useRef, useEffect } from 'react';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocType      = 'FACTURA' | 'BOLETA';
@@ -579,10 +580,10 @@ export default function Invoices() {
                       {new Date(inv.issueDate).toLocaleDateString('es-PE')}
                     </td>
                     <td className="px-5 py-3 text-right font-mono text-xs text-gray-500">
-                      S/ {Number(inv.igvPen).toFixed(2)}
+                      S/ {fmtNum(inv.igvPen)}
                     </td>
                     <td className="px-5 py-3 text-right font-mono font-semibold text-gray-800">
-                      S/ {Number(inv.totalPen).toFixed(2)}
+                      S/ {fmtNum(inv.totalPen)}
                     </td>
                     <td className="px-5 py-3">
                       <StatusBadge status={inv.status} reason={inv.rejectionReason ?? undefined} />

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Plus, ShoppingCart, Check, X } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 export default function SalesOrders() {
   const qc = useQueryClient();
@@ -83,7 +84,7 @@ export default function SalesOrders() {
               <div key={i} className="flex gap-2 mb-2">
                 <select className="input" value={l.productId} onChange={e => setLines(ls => ls.map((x,j) => j===i ? {...x, productId: e.target.value} : x))}>
                   <option value="">Producto...</option>
-                  {products?.data?.map((p: any) => <option key={p.id} value={p.id}>{p.name} (S/ {Number(p.basePricePen).toFixed(2)})</option>)}
+                  {products?.data?.map((p: any) => <option key={p.id} value={p.id}>{p.name} (S/ {fmtNum(p.basePricePen)})</option>)}
                 </select>
                 <input type="number" className="input w-24" min={1} value={l.qty}
                   onChange={e => setLines(ls => ls.map((x,j) => j===i ? {...x, qty: parseInt(e.target.value)||1} : x))} />
@@ -127,7 +128,7 @@ export default function SalesOrders() {
                   <td className="px-5 py-3 font-mono text-gray-700">{o.orderNumber}</td>
                   <td className="px-5 py-3 font-medium">{o.customer?.businessName ?? o.customer?.fullName ?? '—'}</td>
                   <td className="px-5 py-3 text-gray-500">{o.channel}</td>
-                  <td className="px-5 py-3 text-right font-mono font-semibold">S/ {Number(o.totalAmountPen).toFixed(2)}</td>
+                  <td className="px-5 py-3 text-right font-mono font-semibold">S/ {fmtNum(o.totalAmountPen)}</td>
                   <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
                   <td className="px-5 py-3 text-center">
                     <div className="flex items-center justify-center gap-1">

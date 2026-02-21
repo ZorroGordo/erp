@@ -55,7 +55,7 @@ export default function Layout() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  const visibleNav = nav.filter(item => isEnabled(item.to));
+  const visibleNav = nav.filter(item => isEnabled(item.to, user?.roles));
 
   const handleLogout = async () => {
     await logout();

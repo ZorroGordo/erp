@@ -104,7 +104,7 @@ let AuthService = AuthService_1 = class AuthService {
         let payload;
         try {
             const pubKeyB64 = this.config.getOrThrow('JWT_PUBLIC_KEY');
-            const publicKey = Buffer.from(pubKeyB64, 'base64').toString('utf-8');
+            const publicKey = pubKeyB64.trim().startsWith('-----') ? pubKeyB64.trim() : Buffer.from(pubKeyB64, 'base64').toString('utf-8');
             payload = this.jwtService.verify(dto.refreshToken, {
                 publicKey,
                 algorithms: ['RS256'],
@@ -278,7 +278,7 @@ let AuthService = AuthService_1 = class AuthService {
     }
     async issueTokenPair(userId, email, type, family = (0, uuid_1.v4)()) {
         const privKeyB64 = this.config.getOrThrow('JWT_PRIVATE_KEY');
-        const privateKey = Buffer.from(privKeyB64, 'base64').toString('utf-8');
+        const privateKey = privKeyB64.trim().startsWith('-----') ? privKeyB64.trim() : Buffer.from(privKeyB64, 'base64').toString('utf-8');
         const accessExpiresIn = this.config.get('JWT_ACCESS_EXPIRES') ?? '15m';
         const refreshExpiresIn = this.config.get('JWT_REFRESH_EXPIRES') ?? '7d';
         const payload = { sub: userId, email, type };

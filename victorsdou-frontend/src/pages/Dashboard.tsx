@@ -1,41 +1,84 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import { fmtMoney, fmtInt } from '../lib/fmt';
 import {
-  Package, AlertTriangle, Factory, ShoppingCart,
-  TrendingUp, Clock, ChevronLeft, ChevronRight, DollarSign,
+  Package, AlertTriangle, Factory, ShoppingCart, TrendingUp, Clock,
+  ChevronLeft, ChevronRight, DollarSign, Cake, GripVertical, X, Plus,
+  LayoutGrid,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────
+type CardId = 'income' | 'kpis' | 'birthdays' | 'recentSales' | 'prodOrders';
+interface DashCard { id: CardId; visible: boolean; order: number; }
 
+const CARD_DEFS: { id: CardId; label: string }[] = [
+  { id: 'income',      label: 'Ingresos del mes' },
+  { id: 'kpis',        label: 'KPIs operativos' },
+  { id: 'birthdays',   label: 'Cumpleaños del mes' },
+  { id: 'recentSales', label: 'Últimos pedidos' },
+  { id: 'prodOrders',  label: 'Producción' },
+];
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function currentMonthStr() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
-
 function shiftMonth(m: string, delta: number) {
   const [y, mo] = m.split('-').map(Number);
   const d = new Date(y, mo - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-
 function monthLabel(m: string) {
   const [y, mo] = m.split('-').map(Number);
-  return new Date(y, mo - 1, 1)
-    .toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
+  return new Date(y, mo - 1, 1).toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
 }
 
-function fmt(n: number) {
-  return new Intl.NumberFormat('es-PE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n);
+// ── Per-user dashboard config ─────────────────────────────────────────────────
+function useDashConfig(userId: string) {
+  const key = `vos_dash_${userId}`;
+  const defaultConfig: DashCard[] = CARD_DEFS.map((c, i) => ({ id: c.id, visible: true, order: i }));
+
+  const [config, setConfig] = useState<DashCard[]>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const saved = JSON.parse(raw) as DashCard[];
+        const merged = CARD_DEFS.map(d => {
+          const s = saved.find(c => c.id === d.id);
+          return s ?? { id: d.id, visible: true, order: CARD_DEFS.indexOf(d) };
+        });
+        return merged.sort((a, b) => a.order - b.order);
+      }
+    } catch { /* ignore */ }
+    return defaultConfig;
+  });
+
+  const save = (next: DashCard[]) => {
+    const reindexed = next.map((c, i) => ({ ...c, order: i }));
+    setConfig(reindexed);
+    localStorage.setItem(key, JSON.stringify(reindexed));
+  };
+
+  const toggleVisible = (id: CardId) => save(config.map(c => c.id === id ? { ...c, visible: !c.visible } : c));
+  const reorder = (fromId: CardId, toId: CardId) => {
+    const arr = [...config];
+    const from = arr.findIndex(c => c.id === fromId);
+    const to   = arr.findIndex(c => c.id === toId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [item] = arr.splice(from, 1);
+    arr.splice(to, 0, item);
+    save(arr);
+  };
+  const reset = () => save(defaultConfig);
+
+  return { config, toggleVisible, reorder, reset };
 }
 
-// ── StatCard ─────────────────────────────────────────────────────────────────
-
+// ── StatCard ──────────────────────────────────────────────────────────────────
 function StatCard({ icon: Icon, label, value, sub, color, to }: any) {
   const content = (
     <div className={`card p-5 flex items-start gap-4 ${to ? 'card-interactive' : ''}`}>
@@ -53,33 +96,19 @@ function StatCard({ icon: Icon, label, value, sub, color, to }: any) {
 }
 
 // ── IncomeCard ────────────────────────────────────────────────────────────────
-
-function IncomeCard({
-  month,
-  customerType,
-}: {
-  month: string;
-  customerType: 'all' | 'B2B' | 'B2C';
-}) {
+function IncomeCard({ month, customerType }: { month: string; customerType: 'all' | 'B2B' | 'B2C' }) {
   const { data, isLoading } = useQuery({
     queryKey: ['invoice-summary', month, customerType],
     queryFn: () =>
-      api
-        .get(
-          `/v1/invoices/summary?month=${month}${
-            customerType !== 'all' ? `&customerType=${customerType}` : ''
-          }`,
-        )
+      api.get(`/v1/invoices/summary?month=${month}${customerType !== 'all' ? `&customerType=${customerType}` : ''}`)
         .then(r => r.data.data),
   });
-
-  const total    = data?.totalIncome         ?? 0;
-  const subtotal = data?.subtotal            ?? 0;
-  const igv      = data?.igv                 ?? 0;
-  const count    = data?.invoiceCount        ?? 0;
-  const factura  = data?.breakdown?.factura  ?? 0;
-  const boleta   = data?.breakdown?.boleta   ?? 0;
-
+  const total    = data?.totalIncome        ?? 0;
+  const subtotal = data?.subtotal           ?? 0;
+  const igv      = data?.igv                ?? 0;
+  const count    = data?.invoiceCount       ?? 0;
+  const factura  = data?.breakdown?.factura ?? 0;
+  const boleta   = data?.breakdown?.boleta  ?? 0;
   return (
     <div className="card p-5 flex items-start gap-4">
       <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-emerald-500">
@@ -87,69 +116,145 @@ function IncomeCard({
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm text-gray-500 leading-tight">Ingresos del mes</p>
-
-        {isLoading ? (
-          <p className="text-2xl font-bold text-gray-300 tabular-nums animate-pulse">S/ —</p>
-        ) : (
-          <p className="text-2xl font-bold text-gray-900 tabular-nums">S/ {fmt(total)}</p>
-        )}
-
+        {isLoading
+          ? <p className="text-2xl font-bold text-gray-300 tabular-nums animate-pulse">—</p>
+          : <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtMoney(total)}</p>
+        }
         <p className="text-xs text-gray-400 mt-1">
-          Sin IGV:&nbsp;<span className="font-medium text-gray-600">S/ {fmt(subtotal)}</span>
+          Sin IGV:&nbsp;<span className="font-medium text-gray-600">{fmtMoney(subtotal)}</span>
           &ensp;·&ensp;
-          IGV:&nbsp;<span className="font-medium text-gray-600">S/ {fmt(igv)}</span>
+          IGV:&nbsp;<span className="font-medium text-gray-600">{fmtMoney(igv)}</span>
         </p>
-
         {customerType === 'all' && (
           <div className="flex flex-wrap gap-2 mt-2">
-            <span className="text-xs bg-blue-50 text-blue-700 rounded px-2 py-0.5 font-medium">
-              Facturas&nbsp;S/ {fmt(factura)}
-            </span>
-            <span className="text-xs bg-purple-50 text-purple-700 rounded px-2 py-0.5 font-medium">
-              Boletas&nbsp;S/ {fmt(boleta)}
-            </span>
+            <span className="text-xs bg-blue-50 text-blue-700 rounded px-2 py-0.5 font-medium">Facturas&nbsp;{fmtMoney(factura)}</span>
+            <span className="text-xs bg-purple-50 text-purple-700 rounded px-2 py-0.5 font-medium">Boletas&nbsp;{fmtMoney(boleta)}</span>
           </div>
         )}
-
-        <p className="text-xs text-gray-400 mt-1.5">
-          {count} comprobante{count !== 1 ? 's' : ''} emitido{count !== 1 ? 's' : ''}
-        </p>
+        <p className="text-xs text-gray-400 mt-1.5">{count} comprobante{count !== 1 ? 's' : ''} emitido{count !== 1 ? 's' : ''}</p>
       </div>
     </div>
   );
 }
 
-// ── StatusBadge (shared) ──────────────────────────────────────────────────────
+// ── BirthdayCard ──────────────────────────────────────────────────────────────
+function BirthdayCard() {
+  const { data: empData } = useQuery({
+    queryKey: ['employees'],
+    queryFn: () => api.get('/v1/payroll/employees').then(r => r.data),
+  });
+  const employees: any[] = empData?.data ?? [];
+  const now          = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const today        = now.getDate();
 
+  const birthdays = employees
+    .filter(e => e.birthDate)
+    .map(e => { const bd = new Date(e.birthDate); return { ...e, bdMonth: bd.getMonth() + 1, bdDay: bd.getDate() }; })
+    .filter(e => e.bdMonth === currentMonth)
+    .sort((a, b) => a.bdDay - b.bdDay);
+
+  return (
+    <div className="card p-5 h-full">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+          <Cake size={16} className="text-pink-500" /> Cumpleaños del mes
+        </h2>
+        <span className="text-xs text-gray-400 capitalize">
+          {new Date().toLocaleDateString('es-PE', { month: 'long' })}
+        </span>
+      </div>
+      {birthdays.length === 0 ? (
+        <p className="text-sm text-gray-400 py-4 text-center">Sin cumpleaños este mes</p>
+      ) : (
+        <div className="space-y-2">
+          {birthdays.map(e => {
+            const isToday = e.bdDay === today;
+            return (
+              <div key={e.id} className={`flex items-center gap-3 py-2 px-3 rounded-lg ${isToday ? 'bg-pink-50 border border-pink-200' : 'bg-gray-50'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${isToday ? 'bg-pink-500 text-white' : 'bg-gray-200 text-gray-600'}`}>
+                  {e.fullName[0]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{e.fullName}</p>
+                  <p className="text-xs text-gray-400">{e.position}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  {isToday
+                    ? <span className="text-xs font-semibold text-pink-600">🎂 ¡Hoy!</span>
+                    : <span className="text-xs text-gray-500">{String(e.bdDay).padStart(2, '0')}/{String(currentMonth).padStart(2, '0')}</span>
+                  }
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── StatusBadge ───────────────────────────────────────────────────────────────
 export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    PENDING:     'bg-yellow-100 text-yellow-800',
-    CONFIRMED:   'bg-blue-100 text-blue-800',
-    IN_PROGRESS: 'bg-indigo-100 text-indigo-800',
-    COMPLETED:   'bg-green-100 text-green-800',
-    CANCELLED:   'bg-red-100 text-red-800',
-    DELIVERED:   'bg-emerald-100 text-emerald-800',
-    DRAFT:       'bg-gray-100 text-gray-600',
-    APPROVED:    'bg-cyan-100 text-cyan-800',
+    PENDING: 'bg-yellow-100 text-yellow-800', CONFIRMED: 'bg-blue-100 text-blue-800',
+    IN_PROGRESS: 'bg-indigo-100 text-indigo-800', COMPLETED: 'bg-green-100 text-green-800',
+    CANCELLED: 'bg-red-100 text-red-800', DELIVERED: 'bg-emerald-100 text-emerald-800',
+    DRAFT: 'bg-gray-100 text-gray-600', APPROVED: 'bg-cyan-100 text-cyan-800',
   };
+  return <span className={`badge ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>{status.replace(/_/g, ' ')}</span>;
+}
+
+// ── DraggableSection ──────────────────────────────────────────────────────────
+function DraggableSection({
+  id, editMode, onRemove, onDragStart, onDragOver, onDrop, isDragOver, children,
+}: {
+  id: CardId; editMode: boolean; onRemove: () => void;
+  onDragStart: () => void; onDragOver: (e: React.DragEvent) => void;
+  onDrop: () => void; isDragOver: boolean; children: React.ReactNode;
+}) {
   return (
-    <span className={`badge ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>
-      {status.replace(/_/g, ' ')}
-    </span>
+    <div
+      draggable={editMode}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragLeave={() => {}}
+      className={`relative transition-all ${editMode ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragOver ? 'ring-2 ring-brand-400 ring-offset-2 rounded-xl opacity-70' : ''}`}
+    >
+      {editMode && (
+        <>
+          <button
+            onClick={onRemove}
+            className="absolute -top-2 -right-2 z-20 w-6 h-6 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center shadow-md transition-colors"
+          >
+            <X size={12} />
+          </button>
+          <div className="absolute top-3 left-3 z-20 text-gray-400 pointer-events-none">
+            <GripVertical size={16} />
+          </div>
+          <div className="absolute inset-0 z-10 rounded-xl border-2 border-dashed border-brand-300 pointer-events-none" />
+        </>
+      )}
+      <div className={editMode ? 'opacity-90' : ''}>{children}</div>
+    </div>
   );
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
-
 export default function Dashboard() {
   const { user } = useAuth();
+  const userId   = user?.id ?? 'guest';
 
-  // ── Filters ───────────────────────────────────────────────────────────────
-  const [month, setMonth] = useState(currentMonthStr);
+  const { config, toggleVisible, reorder, reset } = useDashConfig(userId);
+  const [editMode, setEditMode] = useState(false);
+  const dragId    = useRef<CardId | null>(null);
+  const [dragOver, setDragOver] = useState<CardId | null>(null);
+
+  const [month, setMonth]               = useState(currentMonthStr);
   const [customerType, setCustomerType] = useState<'all' | 'B2B' | 'B2C'>('all');
   const isCurrent = month === currentMonthStr();
 
-  // ── Queries ───────────────────────────────────────────────────────────────
   const { data: alerts }     = useQuery({ queryKey: ['reorder-alerts'],    queryFn: () => api.get('/v1/inventory/reorder-alerts').then(r => r.data) });
   const { data: expiry }     = useQuery({ queryKey: ['expiry-alerts'],     queryFn: () => api.get('/v1/inventory/batches/expiry-alerts').then(r => r.data) });
   const { data: orders }     = useQuery({ queryKey: ['sales-orders'],      queryFn: () => api.get('/v1/sales-orders/').then(r => r.data) });
@@ -160,137 +265,183 @@ export default function Dashboard() {
   const inProgressProd = prodOrders?.data?.filter((o: any) => o.status === 'IN_PROGRESS')?.length ?? 0;
   const lowStock       = alerts?.data?.length ?? 0;
   const expiringSoon   = expiry?.data?.length ?? 0;
-  const ingredients    = stock?.data?.length ?? 0;
+  const ingredients    = stock?.data?.length  ?? 0;
+
+  const handleDragStart = (id: CardId) => { dragId.current = id; };
+  const handleDragOver  = (e: React.DragEvent, id: CardId) => { e.preventDefault(); setDragOver(id); };
+  const handleDrop      = (toId: CardId) => {
+    if (dragId.current && dragId.current !== toId) reorder(dragId.current, toId);
+    dragId.current = null;
+    setDragOver(null);
+  };
+
+  const renderCard = (card: DashCard) => {
+    const wrap = (id: CardId, children: React.ReactNode) => (
+      <DraggableSection key={id} id={id} editMode={editMode}
+        onRemove={() => toggleVisible(id)}
+        onDragStart={() => handleDragStart(id)}
+        onDragOver={e => handleDragOver(e, id)}
+        onDrop={() => handleDrop(id)}
+        isDragOver={dragOver === id}
+      >
+        {children}
+      </DraggableSection>
+    );
+
+    switch (card.id) {
+      case 'income':
+        return wrap('income', <IncomeCard month={month} customerType={customerType} />);
+
+      case 'kpis':
+        return wrap('kpis',
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+            <StatCard icon={ShoppingCart}  label="Pedidos pendientes"  value={pendingOrders}  sub="Confirmados + pendientes" color="bg-blue-500"   to="/sales" />
+            <StatCard icon={Factory}       label="Producción activa"   value={inProgressProd} sub="Órdenes en proceso"       color="bg-green-500"  to="/production" />
+            <StatCard icon={AlertTriangle} label="Reposición urgente"  value={lowStock}       sub="Ingredientes bajo mínimo" color="bg-orange-500" to="/inventory" />
+            <StatCard icon={Clock}         label="Por vencer pronto"   value={expiringSoon}   sub="Lotes próximos a vencer"  color="bg-red-500"    to="/inventory" />
+            <StatCard icon={Package}       label="Ingredientes activos" value={ingredients}   sub="En almacén principal"     color="bg-purple-500" to="/inventory" />
+            <StatCard icon={TrendingUp}    label="Módulos activos"     value="12"             sub="API 100% operativa"       color="bg-brand-600" />
+          </div>
+        );
+
+      case 'birthdays':
+        return wrap('birthdays', <BirthdayCard />);
+
+      case 'recentSales':
+        return wrap('recentSales',
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-gray-800">Últimos pedidos</h2>
+              <Link to="/sales" className="text-xs text-brand-600 hover:underline">Ver todos →</Link>
+            </div>
+            {orders?.data?.slice(0, 5).map((o: any) => (
+              <div key={o.id} className="flex items-center justify-between py-2 border-b border-brand-100 last:border-0">
+                <div>
+                  <p className="text-sm font-medium">{o.orderNumber}</p>
+                  <p className="text-xs text-gray-400">{o.channel} · {o.customer?.businessName ?? o.customer?.fullName}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold">{fmtMoney(o.totalAmountPen)}</p>
+                  <StatusBadge status={o.status} />
+                </div>
+              </div>
+            ))}
+            {!orders?.data?.length && <p className="text-sm text-gray-400 py-4 text-center">No hay pedidos aún</p>}
+          </div>
+        );
+
+      case 'prodOrders':
+        return wrap('prodOrders',
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-gray-800">Órdenes de producción</h2>
+              <Link to="/production" className="text-xs text-brand-600 hover:underline">Ver todas →</Link>
+            </div>
+            {prodOrders?.data?.slice(0, 5).map((o: any) => (
+              <div key={o.id} className="flex items-center justify-between py-2 border-b border-brand-100 last:border-0">
+                <div>
+                  <p className="text-sm font-medium">{o.batchCode}</p>
+                  <p className="text-xs text-gray-400">{o.recipe?.name}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold">{fmtInt(o.plannedQty)} uds</p>
+                  <StatusBadge status={o.status} />
+                </div>
+              </div>
+            ))}
+            {!prodOrders?.data?.length && <p className="text-sm text-gray-400 py-4 text-center">No hay órdenes aún</p>}
+          </div>
+        );
+
+      default: return null;
+    }
+  };
+
+  const topIds:    CardId[] = ['income', 'kpis'];
+  const bottomIds: CardId[] = ['birthdays', 'recentSales', 'prodOrders'];
+  const visibleCards  = config.filter(c => c.visible);
+  const hiddenCards   = config.filter(c => !c.visible);
+  const visibleTop    = visibleCards.filter(c => topIds.includes(c.id));
+  const visibleBottom = visibleCards.filter(c => bottomIds.includes(c.id));
 
   return (
     <div className="space-y-6">
-
-      {/* ── Header + filter bar ─────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Bienvenido, {user?.fullName?.split(' ')[0]} 👋
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-900">Bienvenido, {user?.fullName?.split(' ')[0]} 👋</h1>
           <p className="text-gray-500 mt-1">Resumen operativo de Victorsdou Bakery</p>
         </div>
-
-        {/* Filters */}
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
-
-          {/* ── Month picker ── */}
           <div className="flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg px-1.5 py-1 shadow-sm">
-            <button
-              onClick={() => setMonth(m => shiftMonth(m, -1))}
-              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
-              aria-label="Mes anterior"
-            >
+            <button onClick={() => setMonth(m => shiftMonth(m, -1))} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors" aria-label="Mes anterior">
               <ChevronLeft size={15} />
             </button>
-            <span className="text-sm font-medium text-gray-700 capitalize px-1 min-w-[136px] text-center select-none">
-              {monthLabel(month)}
-            </span>
-            <button
-              onClick={() => !isCurrent && setMonth(m => shiftMonth(m, 1))}
-              disabled={isCurrent}
-              className={`p-1 rounded transition-colors ${
-                isCurrent
-                  ? 'text-gray-200 cursor-default'
-                  : 'hover:bg-gray-100 text-gray-400 hover:text-gray-700'
-              }`}
-              aria-label="Mes siguiente"
-            >
+            <span className="text-sm font-medium text-gray-700 capitalize px-1 min-w-[136px] text-center select-none">{monthLabel(month)}</span>
+            <button onClick={() => !isCurrent && setMonth(m => shiftMonth(m, 1))} disabled={isCurrent}
+              className={`p-1 rounded transition-colors ${isCurrent ? 'text-gray-200 cursor-default' : 'hover:bg-gray-100 text-gray-400 hover:text-gray-700'}`} aria-label="Mes siguiente">
               <ChevronRight size={15} />
             </button>
           </div>
-
-          {/* ── Customer type toggle ── */}
           <div className="flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg p-1 shadow-sm">
             {(['all', 'B2B', 'B2C'] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setCustomerType(t)}
-                className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
-                  customerType === t
-                    ? 'bg-brand-600 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
-                }`}
-              >
+              <button key={t} onClick={() => setCustomerType(t)}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${customerType === t ? 'bg-brand-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
                 {t === 'all' ? 'Todos' : t}
               </button>
             ))}
           </div>
-
+          <button onClick={() => setEditMode(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all shadow-sm ${editMode ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-gray-200 hover:border-brand-300 hover:text-brand-600'}`}>
+            <LayoutGrid size={13} />
+            {editMode ? 'Listo' : 'Personalizar'}
+          </button>
         </div>
       </div>
 
-      {/* ── KPI grid ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-
-        {/* Income card — full width */}
-        <div className="col-span-2 lg:col-span-3">
-          <IncomeCard month={month} customerType={customerType} />
-        </div>
-
-        <StatCard icon={ShoppingCart} label="Pedidos pendientes" value={pendingOrders}
-          sub="Confirmados + pendientes" color="bg-blue-500" to="/sales" />
-        <StatCard icon={Factory} label="Producción activa" value={inProgressProd}
-          sub="Órdenes en proceso" color="bg-green-500" to="/production" />
-        <StatCard icon={AlertTriangle} label="Reposición urgente" value={lowStock}
-          sub="Ingredientes bajo mínimo" color="bg-orange-500" to="/inventory" />
-        <StatCard icon={Clock} label="Por vencer pronto" value={expiringSoon}
-          sub="Lotes próximos a vencer" color="bg-red-500" to="/inventory" />
-        <StatCard icon={Package} label="Ingredientes activos" value={ingredients}
-          sub="En almacén principal" color="bg-purple-500" to="/inventory" />
-        <StatCard icon={TrendingUp} label="Módulos activos" value="12"
-          sub="API 100% operativa" color="bg-brand-600" />
-      </div>
-
-      {/* ── Quick links ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* Recent sales */}
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-800">Últimos pedidos</h2>
-            <Link to="/sales" className="text-xs text-brand-600 hover:underline">Ver todos →</Link>
+      {/* Edit mode banner */}
+      {editMode && (
+        <div className="flex items-center justify-between bg-brand-50 border border-brand-200 rounded-xl px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-brand-700">
+            <GripVertical size={16} />
+            <span className="font-medium">Modo edición</span>
+            <span className="text-brand-500 hidden sm:inline">— Arrastra para reordenar · × para ocultar</span>
           </div>
-          {orders?.data?.slice(0, 5).map((o: any) => (
-            <div key={o.id} className="flex items-center justify-between py-2 border-b border-brand-100 last:border-0">
-              <div>
-                <p className="text-sm font-medium">{o.orderNumber}</p>
-                <p className="text-xs text-gray-400">{o.channel} · {o.customer?.businessName ?? o.customer?.fullName}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-semibold">S/ {Number(o.totalAmountPen).toFixed(2)}</p>
-                <StatusBadge status={o.status} />
-              </div>
-            </div>
-          ))}
-          {!orders?.data?.length && <p className="text-sm text-gray-400 py-4 text-center">No hay pedidos aún</p>}
+          <button onClick={reset} className="text-xs text-brand-500 hover:text-brand-700 underline">Restaurar</button>
         </div>
+      )}
 
-        {/* Production orders */}
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-800">Órdenes de producción</h2>
-            <Link to="/production" className="text-xs text-brand-600 hover:underline">Ver todas →</Link>
-          </div>
-          {prodOrders?.data?.slice(0, 5).map((o: any) => (
-            <div key={o.id} className="flex items-center justify-between py-2 border-b border-brand-100 last:border-0">
-              <div>
-                <p className="text-sm font-medium">{o.batchCode}</p>
-                <p className="text-xs text-gray-400">{o.recipe?.name}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-semibold">{o.plannedQty} uds</p>
-                <StatusBadge status={o.status} />
-              </div>
-            </div>
-          ))}
-          {!prodOrders?.data?.length && <p className="text-sm text-gray-400 py-4 text-center">No hay órdenes aún</p>}
-        </div>
-
+      {/* Top cards — full width */}
+      <div className="space-y-4">
+        {visibleTop.map(c => renderCard(c))}
       </div>
+
+      {/* Bottom cards — 2-col grid */}
+      {visibleBottom.length > 0 && (
+        <div className={visibleBottom.length === 1 ? 'space-y-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6'}>
+          {visibleBottom.map(c => renderCard(c))}
+        </div>
+      )}
+
+      {/* Restore hidden cards */}
+      {editMode && hiddenCards.length > 0 && (
+        <div className="card p-4 border-dashed border-2 border-gray-200 bg-gray-50/50">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+            <Plus size={12} /> Secciones ocultas — click para mostrar
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {hiddenCards.map(c => {
+              const def = CARD_DEFS.find(d => d.id === c.id);
+              return (
+                <button key={c.id} onClick={() => toggleVisible(c.id)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-sm text-gray-600 hover:border-brand-400 hover:text-brand-600 transition-colors">
+                  <Plus size={12} /> {def?.label ?? c.id}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

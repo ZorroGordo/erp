@@ -1260,6 +1260,7 @@ model Employee {
   cuspp           String?        // AFP code (CUSPP = Código Único de Sistema de Pensiones)
   contractType    ContractType   @default(INDEFINIDO)
   hireDate        DateTime       @default(now())
+  birthDate       DateTime?
   terminationDate DateTime?
   baseSalary      Decimal        @db.Decimal(12, 4)
   position        String

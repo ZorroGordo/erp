@@ -14,15 +14,15 @@ export declare class AuthService {
     refresh(dto: RefreshDto): Promise<AuthTokensDto>;
     createGuestSession(dto: GuestDto): Promise<GuestSessionDto>;
     validateGuestSession(token: string): Promise<{
+        id: string;
+        sessionToken: string;
         email: string | null;
         fullName: string | null;
         phone: string | null;
         docType: import(".prisma/client").$Enums.DocType | null;
         docNumber: string | null;
-        id: string;
-        createdAt: Date;
         expiresAt: Date;
-        sessionToken: string;
+        createdAt: Date;
     }>;
     verifyEmail(token: string): Promise<{
         message: string;

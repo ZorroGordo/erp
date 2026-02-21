@@ -9,6 +9,7 @@ import {
   Minus, Scale,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

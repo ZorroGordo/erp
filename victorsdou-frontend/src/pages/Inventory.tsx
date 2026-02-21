@@ -7,6 +7,7 @@ import {
   ShoppingCart, Bell,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DashUnit    = 'qty' | 'pct' | 'und';
@@ -523,7 +524,7 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
                         {new Date(r.createdAt).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' })}
                       </td>
                       <td className="px-4 py-3 text-right font-mono font-semibold text-green-700">
-                        +{Number(r.qtyIn).toFixed(2)} {item.baseUom}
+                        +{fmtNum(r.qtyIn)} {item.baseUom}
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-gray-500 text-xs">
                         S/ {Number(r.unitCostPen).toFixed(4)}
@@ -724,10 +725,10 @@ export default function Inventory() {
                         <td className="px-5 py-3 text-gray-500">{item.category}</td>
                         <td className="px-5 py-3 text-right font-mono">{item.available.toFixed(2)}</td>
                         <td className="px-5 py-3 text-right font-mono text-amber-600">
-                          {item.alertConfig?.alertThreshold ? Number(item.alertConfig.alertThreshold).toFixed(2) : <span className="text-gray-300">—</span>}
+                          {item.alertConfig?.alertThreshold ? fmtNum(item.alertConfig.alertThreshold) : <span className="text-gray-300">—</span>}
                         </td>
                         <td className="px-5 py-3 text-right font-mono text-red-600">
-                          {item.alertConfig?.minThreshold ? Number(item.alertConfig.minThreshold).toFixed(2) : <span className="text-gray-300">—</span>}
+                          {item.alertConfig?.minThreshold ? fmtNum(item.alertConfig.minThreshold) : <span className="text-gray-300">—</span>}
                         </td>
                         <td className="px-5 py-3 text-right font-mono text-gray-500">S/ {item.avgCostPen.toFixed(4)}</td>
                         <td className="px-5 py-3 text-gray-500">{item.baseUom}</td>

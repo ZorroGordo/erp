@@ -6,6 +6,7 @@ import {
   CheckCircle, DollarSign, Mail, X, AlertCircle, RefreshCw, Star
 } from "lucide-react";
 import toast from "react-hot-toast";
+import { fmtMoney } from '../lib/fmt';
 
 const AFP_OPTIONS   = ["AFP Integra", "Prima AFP", "Profuturo AFP", "Habitat AFP"];
 const CONTRACT_OPTS = [
@@ -23,7 +24,7 @@ const EMPTY_EMP_FORM = {
   cuspp: "", email: "", bankAccount: "", bankName: "",
 };
 
-function fmtS(n: any) { return "S/ " + Number(n ?? 0).toFixed(2); }
+const fmtS = fmtMoney;
 
 function statusBadge(s: string) {
   if (s === "PAID")      return <span className="badge bg-green-100 text-green-700 text-xs">Pagado</span>;

@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import { useState, useMemo } from 'react';
 import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -237,7 +238,7 @@ export default function Products() {
                       <td className="px-4 py-3 text-gray-400">{isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</td>
                       <td className="px-4 py-3 font-medium text-gray-900">{product.name}</td>
                       <td className="px-4 py-3 font-mono text-gray-500 text-xs">{product.sku}</td>
-                      <td className="px-4 py-3 text-right text-gray-700">S/ {Number(product.basePricePen).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right text-gray-700">S/ {fmtNum(product.basePricePen)}</td>
                       <td className="px-4 py-3 text-right text-gray-700">{costInfo ? 'S/ ' + costInfo.totalProductCost.toFixed(2) : '-'}</td>
                       <td className={'px-4 py-3 text-right font-medium ' + (costInfo ? (costInfo.grossMargin >= 0 ? 'text-green-600' : 'text-red-500') : 'text-gray-400')}>
                         {costInfo ? 'S/ ' + costInfo.grossMargin.toFixed(2) : '-'}
@@ -335,7 +336,7 @@ function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCo
                 {costLines.map((l: CostLine) => (
                   <tr key={l.id} className="hover:bg-indigo-50">
                     <td className="px-3 py-2 font-medium text-gray-800">{l.ingredient.name}</td>
-                    <td className="px-3 py-2 text-right text-gray-600">{Number(l.qtyRequired).toFixed(2)} {l.uom}</td>
+                    <td className="px-3 py-2 text-right text-gray-600">{fmtNum(l.qtyRequired)} {l.uom}</td>
                     <td className="px-3 py-2 text-right text-gray-500">{Number(l.wasteFactorPct).toFixed(1)}%</td>
                     <td className="px-3 py-2 text-right text-gray-600">{l.effectiveQtyStd.toFixed(4)} {l.stdUnit}</td>
                     <td className="px-3 py-2 text-right text-gray-600">S/ {l.avgCost.toFixed(3)}/{l.stdUnit}</td>
