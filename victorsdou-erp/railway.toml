@@ -1,0 +1,3 @@
+[deploy]
+startCommand = "node dist/server.js"
+preDeploy = ""
