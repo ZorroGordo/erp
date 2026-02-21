@@ -8,7 +8,7 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../../database/prisma.service';
-import type { Env } from '../../config/configuration';
+import type { Env } from '../../config/configuration'
 import type {
   RegisterDto, LoginDto, RefreshDto, GuestDto,
   ForgotPasswordDto, ResetPasswordDto,
@@ -84,7 +84,7 @@ export class AuthService {
     let payload: JwtPayload;
     try {
       const pubKeyB64 = this.config.getOrThrow('JWT_PUBLIC_KEY');
-      const publicKey = Buffer.from(pubKeyB64, 'base64').toString('utf-8');
+      const publicKey = pubKeyB64.trim().startsWith('-----') ? pubKeyB64.trim() : Buffer.from(pubKeyB64, 'base64').toString('utf-8');
       payload = this.jwtService.verify<JwtPayload>(dto.refreshToken, {
         publicKey,
         algorithms: ['RS256'],
@@ -303,7 +303,7 @@ export class AuthService {
     family = uuidv4(),
   ): Promise<AuthTokensDto> {
     const privKeyB64 = this.config.getOrThrow('JWT_PRIVATE_KEY');
-    const privateKey = Buffer.from(privKeyB64, 'base64').toString('utf-8');
+    const privateKey = privKeyB64.trim().startsWith('-----') ? privKeyB64.trim() : Buffer.from(privKeyB64, 'base64').toString('utf-8');
 
     const accessExpiresIn  = this.config.get('JWT_ACCESS_EXPIRES')  ?? '15m';
     const refreshExpiresIn = this.config.get('JWT_REFRESH_EXPIRES') ?? '7d';
