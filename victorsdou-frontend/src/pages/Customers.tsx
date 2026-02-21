@@ -1,6 +1,6 @@
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useState } from 'react';
 import {
   Plus, Users, Search, Building2, User, X, Loader2, AlertCircle,
   ChevronDown, ChevronRight, MapPin, Phone, Mail, Clock, Package,
@@ -470,10 +470,24 @@ export default function Customers() {
   const [lookupError, setLookupError]     = useState('');
   const [expandedId, setExpandedId]       = useState<string | null>(null);
   const [sucursalModal, setSucursalModal] = useState<{ customerId: string; sucursal?: any } | null>(null);
+  const [searchText, setSearchText]       = useState('');
+  const [typeFilter, setTypeFilter]       = useState<'B2B' | 'B2C' | ''>('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['customers'],
     queryFn: () => api.get('/v1/customers/').then(r => r.data),
+  });
+
+  const allCustomers: any[] = data?.data ?? [];
+  const filtered = allCustomers.filter((c: any) => {
+    if (typeFilter && c.type !== typeFilter) return false;
+    if (searchText) {
+      const q = searchText.toLowerCase();
+      const matchName = (c.displayName ?? '').toLowerCase().includes(q);
+      const matchDoc  = (c.docNumber  ?? '').toLowerCase().includes(q);
+      if (!matchName && !matchDoc) return false;
+    }
+    return true;
   });
 
   const create = useMutation({
@@ -789,10 +803,51 @@ export default function Customers() {
 
       {/* ── Customer table ── */}
       <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
-          <Users size={18} className="text-gray-400" />
-          <h2 className="font-semibold">Clientes registrados</h2>
-          <span className="ml-auto text-sm text-gray-400">{data?.data?.length ?? 0}</span>
+        <div className="px-5 py-4 border-b border-gray-100 space-y-3">
+          <div className="flex items-center gap-2">
+            <Users size={18} className="text-gray-400" />
+            <h2 className="font-semibold">Clientes registrados</h2>
+            <span className="ml-auto text-sm text-gray-400">
+              {filtered.length !== allCustomers.length
+                ? `${filtered.length} de ${allCustomers.length}`
+                : allCustomers.length}
+            </span>
+          </div>
+          {/* Search + type filter */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                className="input pl-8 py-1.5 text-sm"
+                placeholder="Buscar por nombre o RUC/DNI..."
+                value={searchText}
+                onChange={e => setSearchText(e.target.value)}
+              />
+              {searchText && (
+                <button
+                  onClick={() => setSearchText('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {(['', 'B2B', 'B2C'] as const).map(t => (
+                <button
+                  key={t || 'all'}
+                  onClick={() => setTypeFilter(t)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    typeFilter === t
+                      ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
+                      : 'bg-white text-gray-500 border-gray-200 hover:border-brand-300 hover:text-brand-700'
+                  }`}
+                >
+                  {t === '' ? 'Todos' : t === 'B2B' ? <><Building2 size={10} /> B2B</> : <><User size={10} /> B2C</>}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {isLoading ? (
@@ -814,7 +869,14 @@ export default function Customers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {data?.data?.map((c: any) => {
+                {filtered.length === 0 && !isLoading && (
+                  <tr>
+                    <td colSpan={9} className="px-5 py-8 text-center text-sm text-gray-400">
+                      {allCustomers.length === 0 ? 'Sin clientes aún' : 'No se encontraron clientes con esos filtros'}
+                    </td>
+                  </tr>
+                )}
+                {filtered.map((c: any) => {
                   const isExpanded = expandedId === c.id;
                   const sucursales  = (c.sucursales ?? []).filter((s: any) => s.isActive);
                   const addresses   = c.addresses ?? [];
@@ -823,7 +885,7 @@ export default function Customers() {
                   const isB2B = c.type === 'B2B';
 
                   return (
-                    <>
+                    <React.Fragment key={c.id}>
                       <tr
                         key={c.id}
                         className={`table-row-hover ${isB2B ? 'cursor-pointer' : ''} ${isExpanded ? 'bg-brand-50/40' : ''}`}
@@ -933,16 +995,12 @@ export default function Customers() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   );
                 })}
               </tbody>
             </table>
           </div>
-        )}
-
-        {!data?.data?.length && !isLoading && (
-          <p className="text-center text-gray-400 py-8">Sin clientes aún</p>
         )}
       </div>
 
