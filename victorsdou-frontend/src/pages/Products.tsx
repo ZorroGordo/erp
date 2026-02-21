@@ -10,23 +10,24 @@ interface Ingredient { id: string; name: string; sku: string; baseUom: string; a
 interface BOMLine { id: string; ingredientId: string; ingredient: Ingredient; qtyRequired: string; uom: string; wasteFactorPct: string; notes: string | null; }
 interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; bomLines: BOMLine[]; }
 interface Product { id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { name: string }; }
+interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: number; stdUnit: string; avgCost: number; lineCost: number; }
 
 // ── Cost helpers ───────────────────────────────────────────────────────────
+// avgCostPen is ALWAYS stored as S/ per kg (for weight) or S/ per litre (for volume).
+// We must convert any qty to kg or litre before multiplying.
 
-function convertQtyToBaseUom(qty: number, fromUom: string, toBaseUom: string): number {
-  const from = (fromUom ?? '').toLowerCase();
-  const to = (toBaseUom ?? '').toLowerCase();
-  if (from === to) return qty;
-  const grams: Record<string, number> = { g: 1, kg: 1000, mg: 0.001 };
-  const mls: Record<string, number> = { ml: 1, litre: 1000, liter: 1000, l: 1000 };
-  if (grams[from] !== undefined && grams[to] !== undefined) return qty * grams[from] / grams[to];
-  if (mls[from] !== undefined && mls[to] !== undefined) return qty * mls[from] / mls[to];
-  return qty;
+function convertQtyToStdUnit(qty: number, uom: string): { value: number; unit: string } {
+  const u = (uom ?? '').toLowerCase();
+  const gramToKg: Record<string, number> = { mg: 0.000001, g: 0.001, kg: 1 };
+  const mlToLitre: Record<string, number> = { ml: 0.001, cl: 0.01, dl: 0.1, l: 1, litre: 1, liter: 1 };
+  if (gramToKg[u] !== undefined) return { value: qty * gramToKg[u], unit: 'kg' };
+  if (mlToLitre[u] !== undefined) return { value: qty * mlToLitre[u], unit: 'L' };
+  return { value: qty, unit: uom };
 }
 
 function qtyToGrams(qty: number, uom: string): number {
   const u = (uom ?? '').toLowerCase();
-  const factors: Record<string, number> = { g: 1, kg: 1000, mg: 0.001 };
+  const factors: Record<string, number> = { mg: 0.001, g: 1, kg: 1000 };
   return factors[u] !== undefined ? qty * factors[u] : 0;
 }
 
@@ -35,10 +36,10 @@ function computeCosts(recipe: Recipe | null, overheadRate: number) {
   const yieldQty = Number(recipe.yieldQty) || 1;
   const costLines: CostLine[] = recipe.bomLines.map(l => {
     const effectiveQty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100);
-    const effectiveQtyInBaseUom = convertQtyToBaseUom(effectiveQty, l.uom, l.ingredient.baseUom);
+    const { value: effectiveQtyStd, unit: stdUnit } = convertQtyToStdUnit(effectiveQty, l.uom);
     const avgCost = Number(l.ingredient.avgCostPen);
-    const lineCost = effectiveQtyInBaseUom * avgCost;
-    return { ...l, effectiveQty, effectiveQtyInBaseUom, avgCost, lineCost };
+    const lineCost = effectiveQtyStd * avgCost;
+    return { ...l, effectiveQty, effectiveQtyStd, stdUnit, avgCost, lineCost };
   });
   const totalRawCost = costLines.reduce((s, l) => s + l.lineCost, 0);
   const effectiveUnitCost = totalRawCost / yieldQty;
@@ -52,8 +53,6 @@ function computeCosts(recipe: Recipe | null, overheadRate: number) {
   const doughWeightG = totalWeightG / yieldQty;
   return { costLines, totalRawCost, effectiveUnitCost, overheadCost, totalProductCost, doughWeightG };
 }
-
-interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyInBaseUom: number; avgCost: number; lineCost: number; }
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -141,7 +140,6 @@ export default function Products() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <ShoppingBag className="w-7 h-7 text-indigo-600" />
@@ -152,7 +150,6 @@ export default function Products() {
         </button>
       </div>
 
-      {/* Overhead Rate Banner */}
       <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
         <Settings2 className="w-4 h-4 text-amber-600 shrink-0" />
         <span className="text-amber-800 font-medium">Tasa de gastos generales:</span>
@@ -176,7 +173,6 @@ export default function Products() {
         <span className="text-amber-600 text-xs ml-1">(mano de obra, servicios, alquiler, depreciacion de equipos)</span>
       </div>
 
-      {/* Create Product Form */}
       {showCreate && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
           <h2 className="font-semibold text-gray-800">Nuevo producto</h2>
@@ -211,7 +207,6 @@ export default function Products() {
         </div>
       )}
 
-      {/* Products Table */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
         {isLoading ? (
           <div className="p-8 text-center text-gray-400">Cargando productos...</div>
@@ -331,8 +326,8 @@ function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCo
                   <th className="text-left px-3 py-2">Ingrediente</th>
                   <th className="text-right px-3 py-2">Qty requerida</th>
                   <th className="text-right px-3 py-2">Desperdicio</th>
-                  <th className="text-right px-3 py-2">Qty efectiva (base)</th>
-                  <th className="text-right px-3 py-2">Costo / base UOM</th>
+                  <th className="text-right px-3 py-2">Qty efectiva (std)</th>
+                  <th className="text-right px-3 py-2">Costo / std unit</th>
                   <th className="text-right px-3 py-2">Costo linea</th>
                 </tr>
               </thead>
@@ -342,8 +337,8 @@ function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCo
                     <td className="px-3 py-2 font-medium text-gray-800">{l.ingredient.name}</td>
                     <td className="px-3 py-2 text-right text-gray-600">{Number(l.qtyRequired).toFixed(2)} {l.uom}</td>
                     <td className="px-3 py-2 text-right text-gray-500">{Number(l.wasteFactorPct).toFixed(1)}%</td>
-                    <td className="px-3 py-2 text-right text-gray-600">{l.effectiveQtyInBaseUom.toFixed(4)} {l.ingredient.baseUom}</td>
-                    <td className="px-3 py-2 text-right text-gray-600">S/ {l.avgCost.toFixed(3)}/{l.ingredient.baseUom}</td>
+                    <td className="px-3 py-2 text-right text-gray-600">{l.effectiveQtyStd.toFixed(4)} {l.stdUnit}</td>
+                    <td className="px-3 py-2 text-right text-gray-600">S/ {l.avgCost.toFixed(3)}/{l.stdUnit}</td>
                     <td className="px-3 py-2 text-right font-medium text-gray-800">S/ {l.lineCost.toFixed(4)}</td>
                   </tr>
                 ))}
@@ -383,4 +378,4 @@ function CostCard({ label, value, sub, color }: { label: string; value: string; 
       {sub && <p className="text-xs opacity-60">{sub}</p>}
     </div>
   );
-}
+                   }
