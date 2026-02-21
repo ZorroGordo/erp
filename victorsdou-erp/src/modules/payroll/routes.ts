@@ -397,7 +397,7 @@ export async function payrollRoutes(app: FastifyInstance) {
         ...(body.netSalary  !== undefined ? { netSalary:  body.netSalary }  : {}),
         ...(body.additions  !== undefined ? { additions:  body.additions }  : {}),
         ...(body.deductions !== undefined ? { deductions: body.deductions } : {}),
-        status: existing.status === 'PAID' ? 'PAID' : 'DRAFT', // reset to draft on edit
+        status: 'DRAFT' as const, // reset to draft on edit (PAID payslips blocked above)
       },
     });
     return reply.send({ data: payslip });
