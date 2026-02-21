@@ -16,7 +16,7 @@ export async function payrollRoutes(app: FastifyInstance) {
 
   app.patch('/employees/:id', { preHandler: [requireAnyOf('FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = req.body as { isActive?: boolean; baseSalary?: number; position?: string; department?: string; contractType?: string };
+    const body = req.body as never;
     const employee = await prisma.employee.update({ where: { id }, data: body });
     return reply.send({ data: employee });
   });
