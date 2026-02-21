@@ -20,6 +20,7 @@ const envSchema = z.object({
   S3_BUCKET:             z.string().default('victorsdou-invoices'),
   SES_FROM_EMAIL:        z.string().email(),
   INTERNAL_API_KEY:      z.string(),
+  TURNSTILE_SECRET_KEY:  z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

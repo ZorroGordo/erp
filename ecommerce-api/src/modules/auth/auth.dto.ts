@@ -8,14 +8,16 @@ export const RegisterSchema = z.object({
   phone:    z.string().optional(),
   docType:  z.enum(['DNI', 'RUC', 'CE', 'PASAPORTE']).optional(),
   docNumber:z.string().optional(),
-  type:     z.enum(['B2C', 'B2B']).default('B2C'),
+  type:            z.enum(['B2C', 'B2B']).default('B2C'),
+  cfTurnstileToken: z.string().optional(),
 });
 export type RegisterDto = z.infer<typeof RegisterSchema>;
 
 // ─── Login ─────────────────────────────────────────────────────────────────
 export const LoginSchema = z.object({
   email:    z.string().email(),
-  password: z.string().min(1),
+  password:        z.string().min(1),
+  cfTurnstileToken: z.string().optional(),
 });
 export type LoginDto = z.infer<typeof LoginSchema>;
 

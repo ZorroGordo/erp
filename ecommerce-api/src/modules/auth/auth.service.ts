@@ -29,6 +29,7 @@ export class AuthService {
   // ─── Register ─────────────────────────────────────────────────────────────
 
   async register(dto: RegisterDto): Promise<AuthTokensDto> {
+    await this.verifyTurnstile(dto.cfTurnstileToken);
     const exists = await this.prisma.webUser.findUnique({ where: { email: dto.email } });
     if (exists) throw new ConflictException('Este email ya está registrado');
 
@@ -56,6 +57,7 @@ export class AuthService {
   // ─── Login ────────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto): Promise<AuthTokensDto> {
+    await this.verifyTurnstile(dto.cfTurnstileToken);
     const user = await this.prisma.webUser.findUnique({
       where: { email: dto.email },
       select: { id: true, email: true, passwordHash: true, type: true, isActive: true },
@@ -278,6 +280,21 @@ export class AuthService {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
+
+
+  // Turnstile verification (skipped if TURNSTILE_SECRET_KEY not set)
+  private async verifyTurnstile(token?: string): Promise<void> {
+    const secret = process.env.TURNSTILE_SECRET_KEY;
+    if (!secret || !token) return;
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret, response: token }),
+    });
+    const data: any = await res.json();
+    if (!data.success) {
+      throw Object.assign(new Error("Verificacion de seguridad fallida."), { statusCode: 400, code: "TURNSTILE_FAILED" });
+    }
+  }
 
   private async issueTokenPair(
     userId: string,

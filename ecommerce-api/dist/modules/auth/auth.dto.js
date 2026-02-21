@@ -10,10 +10,12 @@ exports.RegisterSchema = zod_1.z.object({
     docType: zod_1.z.enum(['DNI', 'RUC', 'CE', 'PASAPORTE']).optional(),
     docNumber: zod_1.z.string().optional(),
     type: zod_1.z.enum(['B2C', 'B2B']).default('B2C'),
+    cfTurnstileToken: zod_1.z.string().optional(),
 });
 exports.LoginSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(1),
+    cfTurnstileToken: zod_1.z.string().optional(),
 });
 exports.RefreshSchema = zod_1.z.object({
     refreshToken: zod_1.z.string().min(1),

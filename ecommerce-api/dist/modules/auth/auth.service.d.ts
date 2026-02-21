@@ -66,6 +66,7 @@ export declare class AuthService {
         } | undefined;
     }>;
     logout(refreshToken: string): Promise<void>;
+    private verifyTurnstile;
     private issueTokenPair;
     private hashToken;
     private parseDuration;

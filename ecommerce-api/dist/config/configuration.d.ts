@@ -23,6 +23,7 @@ declare const envSchema: z.ZodObject<{
     S3_BUCKET: z.ZodDefault<z.ZodString>;
     SES_FROM_EMAIL: z.ZodString;
     INTERNAL_API_KEY: z.ZodString;
+    TURNSTILE_SECRET_KEY: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type Env = z.infer<typeof envSchema>;
 export declare const configuration: () => Env;

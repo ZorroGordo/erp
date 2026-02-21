@@ -22,6 +22,7 @@ const envSchema = zod_1.z.object({
     S3_BUCKET: zod_1.z.string().default('victorsdou-invoices'),
     SES_FROM_EMAIL: zod_1.z.string().email(),
     INTERNAL_API_KEY: zod_1.z.string(),
+    TURNSTILE_SECRET_KEY: zod_1.z.string().optional(),
 });
 const configuration = () => {
     const result = envSchema.safeParse(process.env);

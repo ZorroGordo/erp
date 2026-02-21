@@ -9,10 +9,11 @@ async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter({ logger: false }));
     app.setGlobalPrefix('api');
     app.useGlobalFilters(new all_exceptions_filter_1.AllExceptionsFilter());
+    const allowedOrigins = process.env.CORS_ORIGINS
+        ? process.env.CORS_ORIGINS.split(',')
+        : ['https://victorsdou.pe', 'https://www.victorsdou.pe', 'https://victorsdou.com', 'https://www.victorsdou.com', 'https://erp-rpjk.vercel.app'];
     app.enableCors({
-        origin: process.env.NODE_ENV === 'production'
-            ? ['https://victorsdou.com', 'https://www.victorsdou.com']
-            : true,
+        origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
         credentials: true,
     });
     const port = process.env.PORT ?? 4000;

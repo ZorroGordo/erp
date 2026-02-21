@@ -15,11 +15,13 @@ export declare const RegisterSchema: z.ZodObject<{
         B2C: "B2C";
         B2B: "B2B";
     }>>;
+    cfTurnstileToken: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type RegisterDto = z.infer<typeof RegisterSchema>;
 export declare const LoginSchema: z.ZodObject<{
     email: z.ZodString;
     password: z.ZodString;
+    cfTurnstileToken: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type LoginDto = z.infer<typeof LoginSchema>;
 export declare const RefreshSchema: z.ZodObject<{
