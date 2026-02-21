@@ -14,6 +14,13 @@ export async function payrollRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: employee });
   });
 
+  app.patch('/employees/:id', { preHandler: [requireAnyOf('FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { isActive?: boolean; baseSalary?: number; position?: string; department?: string; contractType?: string };
+    const employee = await prisma.employee.update({ where: { id }, data: body });
+    return reply.send({ data: employee });
+  });
+
   app.post('/periods/:id/process', { preHandler: [requireAnyOf('FINANCE_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const employees = await prisma.employee.findMany({ where: { isActive: true } });
