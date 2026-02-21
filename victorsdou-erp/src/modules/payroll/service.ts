@@ -68,7 +68,12 @@ function calcRxH(employeeId: string, gross: number): PayrollCalculation {
   };
 }
 
-export async function calculatePayslip(employeeId: string, periodId: string): Promise<PayrollCalculation> {
+export async function calculatePayslip(
+  employeeId: string,
+  periodId: string,
+  manualBonuses = 0,
+  manualDeductions = 0,
+): Promise<PayrollCalculation> {
   const employee = await prisma.employee.findUniqueOrThrow({ where: { id: employeeId } });
 
   // ── Fetch pay period to get correct date range ──────────────────────────────

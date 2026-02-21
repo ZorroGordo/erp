@@ -380,10 +380,12 @@ export async function payrollRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
-      notes?:     string;
-      netSalary?: number;  // manual override
-      additions?: Record<string, number>;
-      deductions?: Record<string, number>;
+      notes?:            string;
+      netSalary?:        number;
+      additions?:        Record<string, number>;
+      deductions?:       Record<string, number>;
+      manualBonuses?:    number;
+      manualDeductions?: number;
     };
 
     const existing = await prisma.payslip.findUnique({ where: { id } });
@@ -393,10 +395,12 @@ export async function payrollRoutes(app: FastifyInstance) {
     const payslip = await prisma.payslip.update({
       where: { id },
       data: {
-        ...(body.notes      !== undefined ? { notes:      body.notes }      : {}),
-        ...(body.netSalary  !== undefined ? { netSalary:  body.netSalary }  : {}),
-        ...(body.additions  !== undefined ? { additions:  body.additions }  : {}),
-        ...(body.deductions !== undefined ? { deductions: body.deductions } : {}),
+        ...(body.notes            !== undefined ? { notes:            body.notes }            : {}),
+        ...(body.netSalary        !== undefined ? { netSalary:        body.netSalary }        : {}),
+        ...(body.additions        !== undefined ? { additions:        body.additions }        : {}),
+        ...(body.deductions       !== undefined ? { deductions:       body.deductions }       : {}),
+        ...(body.manualBonuses    !== undefined ? { manualBonuses:    body.manualBonuses }    : {}),
+        ...(body.manualDeductions !== undefined ? { manualDeductions: body.manualDeductions } : {}),
         status: 'DRAFT' as const, // reset to draft on edit (PAID payslips blocked above)
       },
     });

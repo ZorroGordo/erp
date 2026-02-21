@@ -613,6 +613,7 @@ function PermisosTab() {
   );
 }
 
+
 // ── Main Settings page ────────────────────────────────────────────────────────
 type Tab = 'empresa' | 'usuarios' | 'modulos' | 'permisos';
 
@@ -623,6 +624,7 @@ export default function Settings() {
     { id: 'empresa',  label: 'Empresa',   icon: Building2 },
     { id: 'usuarios', label: 'Usuarios',  icon: Users },
     { id: 'modulos',  label: 'Módulos',   icon: LayoutGrid },
+    { id: 'permisos', label: 'Permisos',  icon: Shield },
     { id: 'permisos', label: 'Permisos',  icon: Shield },
   ];
 
@@ -650,6 +652,7 @@ export default function Settings() {
       {tab === 'empresa'  && <EmpresaTab />}
       {tab === 'usuarios' && <UsuariosTab />}
       {tab === 'modulos'  && <ModulosTab />}
+      {tab === 'permisos' && <PermisosTab />}
       {tab === 'permisos' && <PermisosTab />}
     </div>
   );

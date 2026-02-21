@@ -1344,7 +1344,9 @@ model LeaveRecord {
   endDate     DateTime
   daysTaken   Int
   approvedBy  String?
-  notes       String?
+  notes           String?
+  manualBonuses   Decimal  @default(0)
+  manualDeductions Decimal  @default(0)
   createdAt   DateTime @default(now())
 
   @@map("leave_records")
@@ -1449,7 +1451,9 @@ model ProductionPlanSuggestion {
   generatedAt DateTime             @default(now())
   confirmedAt DateTime?
   confirmedBy String?
-  notes       String?
+  notes           String?
+  manualBonuses   Decimal  @default(0)
+  manualDeductions Decimal  @default(0)
 
   lines                 ProductionPlanLine[]
   purchaseRecommendations PurchaseRecommendation[]
