@@ -196,6 +196,11 @@ enum PensionSystem {
   ONP
 }
 
+enum EmploymentType {
+  PLANILLA   // On payroll — ESSALUD, CTS, vacations, gratificación apply
+  RXH        // Recibo por Honorarios — 8% IR retention only (if > S/1500/month)
+}
+
 enum PayPeriodType {
   MONTHLY
   QUINCENA
@@ -206,6 +211,12 @@ enum PayPeriodStatus {
   PROCESSED
   PAID
   CLOSED
+}
+
+enum PayslipStatus {
+  DRAFT
+  CONFIRMED
+  PAID
 }
 
 enum DeliveryRouteStatus {
@@ -1243,23 +1254,26 @@ model DeliveryIncident {
 // ══════════════════════════════════════════════════════════════
 
 model Employee {
-  id             String        @id @default(uuid())
-  fullName       String
-  dni            String        @unique
-  cuspp          String?       // AFP code
-  contractType   ContractType
-  hireDate       DateTime
+  id              String         @id @default(uuid())
+  fullName        String
+  dni             String         @unique
+  cuspp           String?        // AFP code (CUSPP = Código Único de Sistema de Pensiones)
+  contractType    ContractType   @default(INDEFINIDO)
+  hireDate        DateTime       @default(now())
   terminationDate DateTime?
-  baseSalary     Decimal       @db.Decimal(12, 4)
-  position       String
-  department     String?
-  pensionSystem  PensionSystem
-  afpId          String?       // AFP institution ID
-  isActive       Boolean       @default(true)
-  bankAccount    String?
-  bankName       String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  baseSalary      Decimal        @db.Decimal(12, 4)
+  position        String
+  department      String?
+  employmentType  EmploymentType @default(PLANILLA)
+  pensionSystem   PensionSystem  @default(AFP)
+  afpId           String?        // AFP institution ID (legacy)
+  afpName         String?        // AFP name: "AFP Integra" | "Prima AFP" | "Profuturo AFP" | "Habitat AFP"
+  email           String?        // for payslip delivery
+  isActive        Boolean        @default(true)
+  bankAccount     String?
+  bankName        String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   payslips        Payslip[]
   leaveRecords    LeaveRecord[]
@@ -1270,16 +1284,18 @@ model Employee {
 }
 
 model PayPeriod {
-  id         String          @id @default(uuid())
-  periodType PayPeriodType
-  year       Int
-  month      Int
-  fortnight  Int?            // 1 or 2 for QUINCENA
-  status     PayPeriodStatus @default(OPEN)
+  id          String          @id @default(uuid())
+  periodType  PayPeriodType
+  year        Int
+  month       Int
+  fortnight   Int?            // 1 or 2 for QUINCENA
+  status      PayPeriodStatus @default(OPEN)
   processedAt DateTime?
   processedBy String?
-  closedAt   DateTime?
-  closedBy   String?
+  paidAt      DateTime?
+  paidBy      String?
+  closedAt    DateTime?
+  closedBy    String?
 
   payslips Payslip[]
 
@@ -1288,22 +1304,31 @@ model PayPeriod {
 }
 
 model Payslip {
-  id                 String     @id @default(uuid())
+  id                 String        @id @default(uuid())
   employeeId         String
-  employee           Employee   @relation(fields: [employeeId], references: [id])
+  employee           Employee      @relation(fields: [employeeId], references: [id])
   periodId           String
-  period             PayPeriod  @relation(fields: [periodId], references: [id])
-  grossSalary        Decimal    @db.Decimal(12, 4)
-  additions          Json       // { overtime: X, bonus: Y, ... }
-  deductions         Json       // { afp: X, onp: Y, igv5ta: Z, ... }
-  netSalary          Decimal    @db.Decimal(12, 4)
-  igv5taWithheld     Decimal    @default(0) @db.Decimal(12, 4)
-  essaludEmployer    Decimal    @db.Decimal(12, 4)
-  ctsProvision       Decimal    @db.Decimal(12, 4)
-  vacationProvision  Decimal    @db.Decimal(12, 4)
-  employerTotalCost  Decimal    @db.Decimal(12, 4)
+  period             PayPeriod     @relation(fields: [periodId], references: [id])
+  grossSalary        Decimal       @db.Decimal(12, 4)
+  additions          Json          // { overtime25: X, overtime35: Y, holidayPay: Z, bonuses: 0 }
+  deductions         Json          // { afpOrOnp: X, igv5taCategoria: Y, irRxH: Z, otherDeductions: 0 }
+  netSalary          Decimal       @db.Decimal(12, 4)
+  igv5taWithheld     Decimal       @default(0) @db.Decimal(12, 4)
+  essaludEmployer    Decimal       @default(0) @db.Decimal(12, 4)
+  ctsProvision       Decimal       @default(0) @db.Decimal(12, 4)
+  vacationProvision  Decimal       @default(0) @db.Decimal(12, 4)
+  gratificacionProv  Decimal       @default(0) @db.Decimal(12, 4)
+  employerTotalCost  Decimal       @db.Decimal(12, 4)
+  notes              String?       // manual adjustment notes
+  status             PayslipStatus @default(DRAFT)
+  confirmedAt        DateTime?
+  confirmedBy        String?
+  paidAt             DateTime?
+  paidBy             String?
+  emailSentAt        DateTime?
   journalEntryId     String?
-  generatedAt        DateTime   @default(now())
+  generatedAt        DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   @@unique([employeeId, periodId])
   @@map("payslips")
@@ -1331,8 +1356,11 @@ model OvertimeRecord {
   date         DateTime
   hoursWorked  Decimal  @db.Decimal(5, 2)
   regularHours Decimal  @db.Decimal(5, 2)
-  overtime25   Decimal  @default(0) @db.Decimal(5, 2)
-  overtime35   Decimal  @default(0) @db.Decimal(5, 2)
+  overtime25   Decimal  @default(0) @db.Decimal(5, 2)  // hours at 25% surcharge
+  overtime35   Decimal  @default(0) @db.Decimal(5, 2)  // hours at 35% surcharge
+  isHoliday    Boolean  @default(false)                 // holiday work = 100% surcharge (double pay)
+  holidayHours Decimal  @default(0) @db.Decimal(5, 2)  // hours worked on holiday
+  notes        String?
   approvedBy   String?
   createdAt    DateTime @default(now())
 

@@ -148,24 +148,26 @@ export interface PayrollCalculation {
   employeeId: string;
   grossSalary: number;
   additions: {
-    overtime25: number;
-    overtime35: number;
-    bonuses: number;
+    overtime25:  number;
+    overtime35:  number;
+    holidayPay:  number;  // 100% surcharge for holiday work
+    bonuses:     number;
   };
   deductions: {
-    afpOrOnp: number;
-    afpCommission: number;
-    afpInsurance: number;
+    afpOrOnp:        number;
+    afpCommission:   number;
+    afpInsurance:    number;
     igv5taCategoria: number;
+    irRxH:           number;  // 8% IR retention for RxH contracts
     otherDeductions: number;
   };
   employerContributions: {
     essalud: number;
-    sctr: number;
+    sctr:    number;
   };
   provisions: {
-    cts: number;
-    vacaciones: number;
+    cts:           number;
+    vacaciones:    number;
     gratificacion: number;
   };
   netSalary: number;
