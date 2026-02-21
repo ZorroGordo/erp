@@ -858,7 +858,7 @@ export default function Customers() {
               <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-5 py-3 text-left w-8"></th>
-                  <th className="px-5 py-3 text-left">Nombre / Razón Social</th>
+                  <th className="px-5 py-3 text-left">Razón Social</th>
                   <th className="px-5 py-3 text-left">Documento</th>
                   <th className="px-5 py-3 text-left">Tipo</th>
                   <th className="px-5 py-3 text-left">Categoría</th>
