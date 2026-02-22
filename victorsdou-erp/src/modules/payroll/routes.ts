@@ -443,6 +443,23 @@ export async function payrollRoutes(app: FastifyInstance) {
     return reply.send({ data: payslip });
   });
 
+  // ── POST /v1/payroll/payslips/:id/unconfirm ───────────────────────────────
+  app.post('/payslips/:id/unconfirm', {
+    preHandler: [requireAnyOf('FINANCE_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await prisma.payslip.findUnique({ where: { id } });
+    if (!existing) return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (existing.status === 'PAID') return reply.code(400).send({ error: 'Cannot revert a PAID payslip' });
+    if (existing.status === 'DRAFT') return reply.code(400).send({ error: 'Already in DRAFT' });
+
+    const payslip = await prisma.payslip.update({
+      where: { id },
+      data: { status: 'DRAFT', confirmedAt: null, confirmedBy: null },
+    });
+    return reply.send({ data: payslip });
+  });
+
   // ── POST /v1/payroll/payslips/:id/pay ─────────────────────────────────────
   // Mark payslip as paid and send boleta email to employee
   app.post('/payslips/:id/pay', {

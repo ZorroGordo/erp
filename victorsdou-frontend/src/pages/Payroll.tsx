@@ -3,7 +3,8 @@ import { api } from "../lib/api";
 import { useState } from "react";
 import {
   Plus, UserCheck, Edit2, Clock, Calendar, ChevronLeft, ChevronRight,
-  CheckCircle, DollarSign, Mail, X, AlertCircle, RefreshCw, Star, Pencil, Trash2, Save, Check
+  CheckCircle, DollarSign, Mail, X, AlertCircle, RefreshCw, Star, Pencil, Trash2, Save, Check,
+  RotateCcw
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { fmtMoney } from '../lib/fmt';
@@ -297,10 +298,10 @@ function PayslipRow({ ps, onConfirm, onPay, onClick }: { ps: any; onConfirm: () 
 
 // ── PayslipDetailModal ────────────────────────────────────────────────────────
 function PayslipDetailModal({
-  ps, period, onClose, onConfirm, onPay, onRecalculated,
+  ps, period, onClose, onConfirm, onUnconfirm, onPay, onRecalculated,
 }: {
   ps: any; period: any;
-  onClose: () => void; onConfirm: () => void; onPay: () => void; onRecalculated: () => void;
+  onClose: () => void; onConfirm: () => void; onUnconfirm: () => void; onPay: () => void; onRecalculated: () => void;
 }) {
   const qc  = useQueryClient();
   const ded = ps.deductions as any ?? {};
@@ -570,11 +571,14 @@ function PayslipDetailModal({
               <CheckCircle size={14} /> Confirmar boleta
             </button>
           )}
-          {ps.status === "CONFIRMED" && (
+          {ps.status === "CONFIRMED" && (<>
+            <button onClick={onUnconfirm} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
+              <RotateCcw size={14} /> Revertir a borrador
+            </button>
             <button onClick={onPay} className="btn-secondary flex items-center gap-1.5 text-sm text-green-600 border-green-200 hover:bg-green-50">
               <DollarSign size={14} /> Pagar{ps.employee?.email && <Mail size={12} />}
             </button>
-          )}
+          </>)}
           {ps.status === "PAID" && (
             <span className="text-sm text-green-600 flex items-center gap-1.5 font-medium">
               <CheckCircle size={14} /> Pagado{ps.emailSentAt ? " · Email enviado" : ""}
@@ -618,8 +622,23 @@ function MonthView({ year, month, periods }: { year: number; month: number; peri
 
   const confirm = useMutation({
     mutationFn: (id: string) => api.post("/v1/payroll/payslips/" + id + "/confirm", {}),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["payslips", period?.id] }); toast.success("Boleta confirmada"); },
-    onError:   (e: any) => toast.error(e.response?.data?.message ?? "Error"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payslips", period?.id] });
+      // Refresh modal data
+      setSelectedPayslip((cur: any) => cur ? { ...cur, status: "CONFIRMED", confirmedAt: new Date().toISOString() } : null);
+      toast.success("Boleta confirmada");
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? "Error"),
+  });
+
+  const unconfirm = useMutation({
+    mutationFn: (id: string) => api.post("/v1/payroll/payslips/" + id + "/unconfirm", {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payslips", period?.id] });
+      setSelectedPayslip((cur: any) => cur ? { ...cur, status: "DRAFT", confirmedAt: null } : null);
+      toast.success("Boleta revertida a borrador");
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? "Error"),
   });
 
   const pay = useMutation({
@@ -737,6 +756,20 @@ function MonthView({ year, month, periods }: { year: number; month: number; peri
           </div>
         )}
       </div>
+    {selectedPayslip && (
+      <PayslipDetailModal
+        ps={selectedPayslip}
+        period={{ year, month }}
+        onClose={() => setSelectedPayslip(null)}
+        onConfirm={() => confirm.mutate(selectedPayslip.id)}
+        onUnconfirm={() => unconfirm.mutate(selectedPayslip.id)}
+        onPay={() => pay.mutate(selectedPayslip.id)}
+        onRecalculated={() => {
+          qc.invalidateQueries({ queryKey: ["payslips", period?.id] });
+          setSelectedPayslip(null);
+        }}
+      />
+    )}
     </div>
   );
 }
