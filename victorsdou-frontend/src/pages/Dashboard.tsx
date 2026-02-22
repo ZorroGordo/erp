@@ -478,6 +478,7 @@ export default function Dashboard() {
   const [customerType, setCustomerType] = useState<'all' | 'B2B' | 'B2C'>('all');
   const isCurrent = month === currentMonthStr();
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [widgetPopupOpen, setWidgetPopupOpen] = useState(false);
 
   const { data: alerts }     = useQuery({ queryKey: ['reorder-alerts'],    queryFn: () => api.get('/v1/inventory/reorder-alerts').then(r => r.data) });
   const { data: expiry }     = useQuery({ queryKey: ['expiry-alerts'],     queryFn: () => api.get('/v1/inventory/batches/expiry-alerts').then(r => r.data) });
@@ -601,7 +602,10 @@ export default function Dashboard() {
   const visibleBottom = visibleCards.filter(c => bottomIds.includes(c.id));
 
   // Close date picker when clicking outside
-  const handleOutsideClick = () => { if (datePickerOpen) setDatePickerOpen(false); };
+  const handleOutsideClick = () => {
+    if (datePickerOpen) setDatePickerOpen(false);
+    if (widgetPopupOpen) setWidgetPopupOpen(false);
+  };
 
   return (
     <div className="space-y-6" onClick={handleOutsideClick}>
@@ -671,10 +675,48 @@ export default function Dashboard() {
             ))}
           </div>
           {!editMode && (
-            <button onClick={() => setEditMode(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border bg-white text-brand-600 border-brand-200 hover:bg-brand-50 hover:border-brand-400 transition-all shadow-sm">
-              <Plus size={13} /> Agregar widget
-            </button>
+            <div className="relative">
+              <button
+                onClick={e => { e.stopPropagation(); setWidgetPopupOpen(v => !v); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border bg-white text-brand-600 border-brand-200 hover:bg-brand-50 hover:border-brand-400 transition-all shadow-sm"
+              >
+                <Plus size={13} /> Agregar widget
+              </button>
+              {widgetPopupOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1.5 z-50 bg-white border border-gray-200 rounded-xl shadow-xl min-w-[230px] overflow-hidden"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <p className="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wide">Widgets del dashboard</p>
+                  <div className="py-1">
+                    {CARD_DEFS.map(def => {
+                      const card = config.find(c => c.id === def.id);
+                      const isVisible = card?.visible ?? false;
+                      return (
+                        <button key={def.id}
+                          onClick={() => { if (!isVisible) toggleVisible(def.id); setWidgetPopupOpen(false); }}
+                          className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-sm transition-colors ${isVisible ? 'cursor-default' : 'hover:bg-brand-50 cursor-pointer'}`}
+                        >
+                          <span className={isVisible ? 'text-gray-300' : 'text-gray-700'}>{def.label}</span>
+                          {isVisible
+                            ? <span className="text-xs text-gray-300 font-medium flex-shrink-0">Activo</span>
+                            : <Plus size={13} className="text-brand-500 flex-shrink-0" />
+                          }
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="border-t border-gray-100 px-3 py-2">
+                    <button
+                      onClick={() => { setEditMode(true); setWidgetPopupOpen(false); }}
+                      className="text-xs text-gray-400 hover:text-brand-600 flex items-center gap-1.5 transition-colors py-0.5"
+                    >
+                      <LayoutGrid size={11} /> Personalizar orden y visibilidad
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           <button onClick={() => setEditMode(v => !v)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all shadow-sm ${editMode ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-gray-200 hover:border-brand-300 hover:text-brand-600'}`}>

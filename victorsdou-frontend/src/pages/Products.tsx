@@ -1,9 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState, useMemo } from 'react';
-import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2 } from 'lucide-react';
+import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fmtMoney, fmtNum } from '../lib/fmt';
+import { fmtNum } from '../lib/fmt';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +57,174 @@ function computeCosts(recipe: Recipe | null, overheadRate: number) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
+// ── Recipe Editor Modal ────────────────────────────────────────────────────────
+
+interface BOMLineEdit { tempId: string; ingredientId: string; ingredientName: string; qtyRequired: string; uom: string; wasteFactorPct: string; }
+
+function RecipeEditorModal({ product, recipe, onClose }: { product: Product; recipe: Recipe | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [yieldQty, setYieldQty] = useState(recipe ? String(recipe.yieldQty) : '1');
+  const [yieldUom, setYieldUom] = useState(recipe ? recipe.yieldUom : 'unidades');
+  const [lines, setLines] = useState<BOMLineEdit[]>(() =>
+    (recipe?.bomLines ?? []).map(l => ({
+      tempId: l.id,
+      ingredientId: l.ingredientId,
+      ingredientName: l.ingredient.name,
+      qtyRequired: String(l.qtyRequired),
+      uom: l.uom,
+      wasteFactorPct: String(l.wasteFactorPct),
+    }))
+  );
+  const [ingSearch, setIngSearch] = useState('');
+  const [ingOpen, setIngOpen] = useState(false);
+
+  const { data: ingsData } = useQuery<{ data: Ingredient[] }>({
+    queryKey: ['ingredients-all'],
+    queryFn: () => api.get('/v1/inventory/ingredients').then(r => r.data),
+    staleTime: 60_000,
+  });
+
+  const filteredIngs = (ingsData?.data ?? []).filter(i =>
+    !ingSearch || i.name.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
+  ).slice(0, 8);
+
+  const addIngredient = (ing: Ingredient) => {
+    setLines(ls => [...ls, { tempId: crypto.randomUUID(), ingredientId: ing.id, ingredientName: ing.name, qtyRequired: '1', uom: ing.baseUom, wasteFactorPct: '0' }]);
+    setIngSearch(''); setIngOpen(false);
+  };
+
+  const updateLine = (tempId: string, field: keyof BOMLineEdit, val: string) =>
+    setLines(ls => ls.map(l => l.tempId === tempId ? { ...l, [field]: val } : l));
+
+  const removeLine = (tempId: string) => setLines(ls => ls.filter(l => l.tempId !== tempId));
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      let recipeId = recipe?.id;
+      // Create recipe if none exists
+      if (!recipeId) {
+        const r = await api.post('/v1/production/recipes', { productId: product.id, yieldQty: parseFloat(yieldQty) || 1, yieldUom });
+        recipeId = r.data.data.id;
+      }
+      await api.put(`/v1/production/recipes/${recipeId}/bom`, {
+        yieldQty: parseFloat(yieldQty) || 1,
+        yieldUom,
+        lines: lines.map(l => ({ ingredientId: l.ingredientId, qtyRequired: parseFloat(l.qtyRequired) || 0, uom: l.uom, wasteFactorPct: parseFloat(l.wasteFactorPct) || 0 })),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['recipe'] });
+      qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
+      toast.success('Receta guardada');
+      onClose();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Error al guardar receta'),
+  });
+
+  const UOM_OPTIONS = ['g', 'kg', 'ml', 'l', 'unidades', 'cl', 'dl', 'tsp', 'tbsp'];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center"><FlaskConical size={15} className="text-white" /></div>
+            <div>
+              <h2 className="font-bold text-gray-900">Editar receta</h2>
+              <p className="text-xs text-gray-400">{product.name} {recipe && `· v${recipe.version}`}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {/* Yield */}
+          <div className="flex gap-3 items-end">
+            <div className="flex-1">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rinde (cantidad)</label>
+              <input type="number" min={0.01} step={0.01} className="input w-full" value={yieldQty} onChange={e => setYieldQty(e.target.value)} />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unidad de medida</label>
+              <select className="input w-full" value={yieldUom} onChange={e => setYieldUom(e.target.value)}>
+                {['unidades', 'g', 'kg', 'l', 'ml', 'porciones'].map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Ingredient search */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Agregar ingrediente</label>
+            <div className="relative">
+              <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-indigo-300">
+                <Search size={14} className="text-gray-400 flex-shrink-0" />
+                <input className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
+                  placeholder="Buscar ingrediente del inventario…"
+                  value={ingSearch} onChange={e => { setIngSearch(e.target.value); setIngOpen(true); }}
+                  onFocus={() => setIngOpen(true)} />
+                {ingSearch && <button onClick={() => { setIngSearch(''); setIngOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
+              </div>
+              {ingOpen && filteredIngs.length > 0 && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-hidden">
+                  {filteredIngs.map(ing => (
+                    <button key={ing.id} className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors"
+                      onClick={() => addIngredient(ing)}>
+                      <span className="flex-1 text-sm font-medium text-gray-800 truncate">{ing.name}</span>
+                      <span className="text-xs text-gray-400 font-mono">{ing.baseUom}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* BOM lines */}
+          {lines.length > 0 && (
+            <div className="border border-indigo-200 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 bg-indigo-50 text-xs font-semibold text-indigo-600 uppercase tracking-wide">
+                <span>Ingrediente</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
+              </div>
+              {lines.map(l => (
+                <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
+                  <span className="text-sm text-gray-800 truncate">{l.ingredientName}</span>
+                  <input type="number" min={0.001} step={0.001} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                    value={l.qtyRequired} onChange={e => updateLine(l.tempId, 'qtyRequired', e.target.value)} />
+                  <select className="text-xs border border-gray-200 rounded px-1 py-1 w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                    value={l.uom} onChange={e => updateLine(l.tempId, 'uom', e.target.value)}>
+                    {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <input type="number" min={0} max={99} step={0.5} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                    value={l.wasteFactorPct} onChange={e => updateLine(l.tempId, 'wasteFactorPct', e.target.value)} />
+                  <button onClick={() => removeLine(l.tempId)} className="text-gray-300 hover:text-red-400 flex items-center justify-center transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {lines.length === 0 && (
+            <p className="text-sm text-gray-400 italic text-center py-4">Sin ingredientes. Busca y agrega ingredientes arriba.</p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-xl transition-all">Cancelar</button>
+          <button
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all"
+          >
+            {saveMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            Guardar receta
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -64,6 +232,7 @@ export default function Products() {
   const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '' });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', isActive: true });
+  const [editingRecipe, setEditingRecipe] = useState<{ product: Product; recipe: Recipe | null } | null>(null);
   const [overheadRate, setOverheadRate] = useState(0.47);
   const [editingOverhead, setEditingOverhead] = useState(false);
   const [overheadInput, setOverheadInput] = useState('47');
@@ -226,6 +395,14 @@ export default function Products() {
         </div>
       </div>
     )}
+    {/* ── Edit Recipe Modal ── */}
+    {editingRecipe && (
+      <RecipeEditorModal
+        product={editingRecipe.product}
+        recipe={editingRecipe.recipe}
+        onClose={() => setEditingRecipe(null)}
+      />
+    )}
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -360,6 +537,7 @@ export default function Products() {
                             doughWeightG={doughWeightG}
                             basePrice={basePrice}
                             grossMargin={grossMargin}
+                            onEdit={() => setEditingRecipe({ product, recipe: activeRecipe })}
                           />
                         </td>
                       </tr>
@@ -390,18 +568,25 @@ interface RecipePanelProps {
   doughWeightG: number;
   basePrice: number;
   grossMargin: number;
+  onEdit: () => void;
 }
 
-function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCost, overheadRate, totalProductCost, doughWeightG, basePrice, grossMargin }: RecipePanelProps) {
+function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCost, overheadRate, totalProductCost, doughWeightG, basePrice, grossMargin, onEdit }: RecipePanelProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-indigo-700 font-semibold">
         <FlaskConical className="w-4 h-4" />
         <span>Receta activa - {product.name}</span>
         {recipe && <span className="text-xs font-normal text-indigo-400 ml-1">v{recipe.version} - Rinde {recipe.yieldQty} {recipe.yieldUom}</span>}
+        <button
+          onClick={onEdit}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+        >
+          <Pencil size={11} /> {recipe ? 'Editar receta' : 'Crear receta'}
+        </button>
       </div>
       {!recipe ? (
-        <p className="text-sm text-gray-400 italic">Sin receta activa para este producto.</p>
+        <p className="text-sm text-gray-400 italic">Sin receta activa. Crea una con el botón de arriba.</p>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

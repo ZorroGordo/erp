@@ -135,7 +135,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
 
   const { data: productsData } = useQuery<{ data: any[] }>({
     queryKey: ['products-catalog'],
-    queryFn:  () => api.get('/v1/products/').then(r => r.data),
+    queryFn:  () => api.get('/v1/products').then(r => r.data),
     staleTime: 60_000,
   });
 
@@ -150,7 +150,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   function addProductLine(product: any) {
-    setLines(ls => [...ls, { description: product.name, qty: 1, unitPrice: product.basePricePen ?? 0, igvRate: 0.18 }]);
+    setLines(ls => [...ls, { description: product.name, qty: 1, unitPrice: parseFloat(product.basePricePen ?? '0') || 0, igvRate: 0.18 }]);
     setProductSearch('');
     setProductDropdownOpen(false);
   }

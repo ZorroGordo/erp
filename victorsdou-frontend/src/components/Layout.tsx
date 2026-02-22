@@ -142,7 +142,7 @@ export default function Layout() {
                       )}
                     </span>
                   )}
-                  {!sidebarOpen && (
+                  {!sidebarOpen && !sidebarHover && (
                     <div className="absolute left-16 bg-brand-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
                       {label}{badge > 0 ? ` (${badge} email)` : ''}
                     </div>
@@ -168,7 +168,7 @@ export default function Layout() {
               >
                 <Icon size={18} className="flex-shrink-0" />
                 {(sidebarOpen || sidebarHover) && <span>{label}</span>}
-                {!sidebarOpen && (
+                {!sidebarOpen && !sidebarHover && (
                   <div className="absolute left-16 bg-brand-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
                     {label}
                   </div>
@@ -194,9 +194,14 @@ export default function Layout() {
               </button>
             </div>
           ) : (
-            <button onClick={handleLogout} className="text-brand-300 hover:text-white p-1 mx-auto block">
-              <LogOut size={16} />
-            </button>
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                {user?.fullName?.[0] ?? 'V'}
+              </div>
+              <button onClick={handleLogout} className="text-brand-300 hover:text-white transition-colors">
+                <LogOut size={14} />
+              </button>
+            </div>
           )}
         </div>
       </aside>
