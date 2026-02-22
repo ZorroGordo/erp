@@ -118,7 +118,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   const [entityName,  setEntityName]  = useState('');
   const [entityEmail, setEntityEmail] = useState('');
   const [entityAddr,  setEntityAddr]  = useState('');
-  // For BOLETA: choose between searching existing or entering new
+  // For both FACTURA and BOLETA: choose between searching existing or entering new
   const [clientMode, setClientMode]   = useState<'search' | 'new'>('search');
   // Lookup state (for the RUC auto-fill button)
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -190,6 +190,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
       ? (entityDocNo.trim().length === 11 && entityName.trim().length > 0)   // Factura: RUC + name required
       : true   // Boleta: entity entirely optional
   );
+  // Also need Building2 for the entity chip icon above
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -235,130 +236,63 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 {isFactura ? 'Cliente · Empresa (RUC requerido)' : 'Receptor (opcional)'}
               </label>
-              {!isFactura && (
-                <div className="flex gap-1.5">
-                  {(['search', 'new'] as const).map(m => (
-                    <button key={m} onClick={() => { setClientMode(m); clearEntity(); }}
-                      className={`text-xs px-3 py-1 rounded-lg font-medium transition-all ${clientMode === m ? 'bg-brand-600 text-white' : 'text-brand-600 hover:bg-brand-100'}`}>
-                      {m === 'search' ? '🔍 Existente' : '➕ Nuevo'}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="flex gap-1.5">
+                {(['search', 'new'] as const).map(m => (
+                  <button key={m} onClick={() => { setClientMode(m); clearEntity(); }}
+                    className={`text-xs px-3 py-1 rounded-lg font-medium transition-all ${clientMode === m ? 'bg-brand-600 text-white' : 'text-brand-600 hover:bg-brand-100'}`}>
+                    {m === 'search' ? '🔍 Cliente existente' : (isFactura ? '📋 Ingresar RUC' : '➕ Nuevo')}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* FACTURA: direct RUC entry with optional SUNAT lookup */}
-            {isFactura && (
-              <div className="space-y-3">
-                {/* RUC row */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    RUC <span className="text-red-500">*</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      className="flex-1 border border-brand-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-300 font-mono"
-                      placeholder="20xxxxxxxxx (11 dígitos)"
-                      value={entityDocNo}
-                      maxLength={11}
-                      onChange={e => {
-                        const v = e.target.value.replace(/\D/g, '');
-                        setEntityDocNo(v);
-                        setEntityId('');
-                        setLookupMsg(null);
-                      }}
-                      onKeyDown={e => e.key === 'Enter' && entityDocNo.length === 11 && runRucLookup()}
-                    />
-                    <button
-                      type="button"
-                      onClick={runRucLookup}
-                      disabled={lookupLoading || entityDocNo.trim().length !== 11}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors"
-                    >
-                      {lookupLoading ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-                      Buscar en SUNAT
-                    </button>
-                  </div>
-                  {lookupMsg && (
-                    <p className={`text-xs mt-1 px-2 py-1.5 rounded-lg ${lookupMsg.type === 'ok' ? 'text-green-700 bg-green-50' : 'text-amber-700 bg-amber-50'}`}>
-                      {lookupMsg.text}
-                    </p>
-                  )}
+            {/* Selected customer chip */}
+            {(entityDocNo || entityName) && (
+              <div className="bg-white rounded-xl border border-brand-200 px-4 py-3 flex items-center gap-3">
+                <span className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center text-brand-700 flex-shrink-0">
+                  {isFactura ? <Building2 size={15} /> : <User size={15} />}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm text-gray-900 truncate">{entityName || '—'}</p>
+                  <p className="text-xs text-gray-400 font-mono">{entityDocNo}</p>
+                  {entityEmail && <p className="text-xs text-gray-400">{entityEmail}</p>}
                 </div>
-
-                {/* Razón social */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Razón social <span className="text-red-500">*</span>
-                    <span className="ml-1 font-normal text-gray-400">(se llena automáticamente con la búsqueda)</span>
-                  </label>
-                  <input
-                    className="input w-full"
-                    placeholder="Nombre de la empresa"
-                    value={entityName}
-                    onChange={e => setEntityName(e.target.value)}
-                  />
-                </div>
-
-                {/* Email */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Email del cliente
-                    <span className="ml-1 font-normal text-gray-400">(opcional — Factpro enviará el PDF aquí)</span>
-                  </label>
-                  <input
-                    className="input w-full"
-                    type="email"
-                    placeholder="facturacion@empresa.com"
-                    value={entityEmail}
-                    onChange={e => setEntityEmail(e.target.value)}
-                  />
-                </div>
+                <button onClick={clearEntity} className="text-gray-300 hover:text-red-400 transition-colors"><X size={15} /></button>
               </div>
             )}
 
-            {/* BOLETA search mode: pick from existing customers */}
-            {!isFactura && clientMode === 'search' && (
+            {/* Search mode: pick from existing customers */}
+            {clientMode === 'search' && !entityDocNo && !entityName && (
               <>
                 <CustomerSearch onSelect={c => {
                   if (c) { setEntityId(c.id); setEntityDocNo(c.docNumber); setEntityName(c.displayName); setEntityEmail(c.email ?? ''); }
                   else   { clearEntity(); }
                 }} />
-                {(entityDocNo || entityName) && (
-                  <div className="bg-white rounded-xl border border-brand-200 px-4 py-3 flex items-center gap-3">
-                    <span className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center text-brand-700 flex-shrink-0">
-                      <User size={15} />
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm text-gray-900 truncate">{entityName}</p>
-                      <p className="text-xs text-gray-400 font-mono">{entityDocNo}</p>
-                    </div>
-                    <button onClick={clearEntity} className="text-gray-300 hover:text-red-400 transition-colors"><X size={15} /></button>
-                  </div>
-                )}
-                {!entityDocNo && <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>}
+                {!isFactura && <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>}
+                {isFactura && <p className="text-xs text-amber-600 italic flex items-center gap-1"><Building2 size={12} /> Selecciona un cliente con RUC registrado.</p>}
               </>
             )}
 
-            {/* BOLETA new client mode: free-form entry */}
-            {!isFactura && clientMode === 'new' && (
+            {/* Manual / new mode: RUC entry + SUNAT lookup */}
+            {clientMode === 'new' && !entityDocNo && !entityName && (
               <div className="space-y-3">
                 <div className="flex gap-2">
                   <input
                     className="flex-1 border border-brand-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-300 font-mono"
-                    placeholder="DNI (8 dig.) o RUC (11 dig.) — opcional"
+                    placeholder={isFactura ? '20xxxxxxxxx — RUC (11 dígitos)' : 'DNI (8 dig.) o RUC (11 dig.) — opcional'}
                     value={entityDocNo}
                     maxLength={11}
-                    onChange={e => { setEntityDocNo(e.target.value.replace(/\D/g, '')); setLookupMsg(null); }}
+                    onChange={e => { const v = e.target.value.replace(/\D/g, ''); setEntityDocNo(v); setEntityId(''); setLookupMsg(null); }}
+                    onKeyDown={e => e.key === 'Enter' && [8,11].includes(entityDocNo.length) && runRucLookup()}
                   />
                   <button
                     type="button"
                     onClick={runRucLookup}
                     disabled={lookupLoading || ![8, 11].includes(entityDocNo.trim().length)}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors"
+                    className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors"
                   >
                     {lookupLoading ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-                    Buscar
+                    Buscar en SUNAT
                   </button>
                 </div>
                 {lookupMsg && (
@@ -368,18 +302,23 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
                 )}
                 <input
                   className="input w-full"
-                  placeholder="Nombre del cliente (opcional para boleta anónima)"
+                  placeholder={isFactura ? 'Razón social *' : 'Nombre del cliente (opcional para boleta anónima)'}
                   value={entityName}
                   onChange={e => setEntityName(e.target.value)}
                 />
                 <input
                   className="input w-full"
                   type="email"
-                  placeholder="Email (opcional)"
+                  placeholder="Email (opcional — Factpro enviará el PDF aquí)"
                   value={entityEmail}
                   onChange={e => setEntityEmail(e.target.value)}
                 />
               </div>
+            )}
+
+            {/* Boleta anónima hint */}
+            {!isFactura && !entityDocNo && !entityName && clientMode === 'new' && !entityName && (
+              <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>
             )}
           </div>
 

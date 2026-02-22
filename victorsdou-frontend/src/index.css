@@ -41,7 +41,19 @@
     @apply hover:bg-brand-50 transition-colors duration-150;
   }
   /* UI Pro Max: overflow-x-auto wrapper for all data tables */
+  /* CSS scroll-shadow technique: shows depth cue when content overflows horizontally */
   .table-container {
-    @apply w-full overflow-x-auto;
+    @apply w-full;
+    overflow-x: auto;
+    /* Left/right scroll-shadow via background-attachment: local/scroll trick */
+    background:
+      linear-gradient(to right, white 20%, rgba(255,255,255,0)) left center,
+      linear-gradient(to right, rgba(0,0,0,0.06), rgba(0,0,0,0) 16px) left center,
+      linear-gradient(to left,  white 20%, rgba(255,255,255,0)) right center,
+      linear-gradient(to left,  rgba(0,0,0,0.06), rgba(0,0,0,0) 16px) right center;
+    background-repeat: no-repeat;
+    background-color: white;
+    background-size: 40px 100%, 16px 100%, 40px 100%, 16px 100%;
+    background-attachment: local, scroll, local, scroll;
   }
 }

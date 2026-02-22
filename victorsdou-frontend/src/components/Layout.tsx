@@ -41,6 +41,13 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [emailPendientes, setEmailPendientes] = useState(0);
 
+  // Auto-collapse sidebar when navigating into any module (except dashboard)
+  useEffect(() => {
+    if (location.pathname !== '/dashboard' && location.pathname !== '/') {
+      setSidebarOpen(false);
+    }
+  }, [location.pathname]);
+
   // Poll comprobantes email-pending count every 60 s
   useEffect(() => {
     let cancelled = false;

@@ -223,6 +223,34 @@ export default function Comprobantes() {
   const [rucLoading,       setRucLoading]       = useState(false);
   const [rucResult,        setRucResult]        = useState<{ ruc: string; nombre: string } | null>(null);
 
+  // ── Proveedor state ───────────────────────────────────────────────────
+  const [proveedorMode,    setProveedorMode]    = useState<'existing' | 'ruc' | null>(null);
+  const [proveedorSearch,  setProveedorSearch]  = useState('');
+  const [proveedorOptions, setProveedorOptions] = useState<any[]>([]);
+  const [selectedProveedor,setSelectedProveedor]= useState<{ id: string | null; displayName: string; ruc?: string } | null>(null);
+  const [provRucSearch,    setProvRucSearch]    = useState('');
+  const [provRucLoading,   setProvRucLoading]   = useState(false);
+  const [provRucResult,    setProvRucResult]    = useState<{ ruc: string; nombre: string } | null>(null);
+
+  // ── Mass Upload Modal ─────────────────────────────────────────────────
+  const [massUploadModal,  setMassUploadModal]  = useState(false);
+  const [massFiles,        setMassFiles]        = useState<PendingFile[]>([]);
+  const [massUploading,    setMassUploading]    = useState(false);
+  const [massDragActive,   setMassDragActive]   = useState(false);
+  const massFileRef = useRef<HTMLInputElement>(null);
+
+  // Proveedor search typeahead
+  useEffect(() => {
+    if (proveedorSearch.length < 2) { setProveedorOptions([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/v1/customers/', { params: { search: proveedorSearch, limit: 8 } });
+        setProveedorOptions((res.data.data ?? []).map((c: any) => ({ id: c.id, displayName: c.displayName ?? c.businessName, ruc: c.docNumber ?? c.ruc })));
+      } catch { setProveedorOptions([]); }
+    }, 280);
+    return () => clearTimeout(t);
+  }, [proveedorSearch]);
+
   // ── Line items state ──────────────────────────────────────────────────
   interface LineItem { id: string; productId: string | null; productName: string; sku: string; qty: number; unitPrice: number; discountPct: number; taxClass: string; }
   const [lineItems,          setLineItems]          = useState<LineItem[]>([]);
@@ -439,6 +467,8 @@ export default function Comprobantes() {
     setPendingFiles([]); setPoOptions([]);
     setNewCustomerMode(null); setCustomerSearch(''); setCustomerOptions([]); setSelectedCustomer(null);
     setRucSearch(''); setRucResult(null);
+    setProveedorMode(null); setProveedorSearch(''); setProveedorOptions([]); setSelectedProveedor(null);
+    setProvRucSearch(''); setProvRucResult(null);
     setLineItems([]); setProductSearch(''); setProductOptions([]); setMasterDiscountPct(0);
   };
 
@@ -555,10 +585,16 @@ export default function Comprobantes() {
             Registro de documentos sustento — facturas, boletas, OC, guías y más
           </p>
         </div>
-        <button className="btn-primary flex items-center gap-2" onClick={() => setNewModal(true)}>
-          <Plus size={16} />
-          Nuevo comprobante
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary flex items-center gap-2" onClick={() => setMassUploadModal(true)}>
+            <Upload size={16} />
+            Subir masivo
+          </button>
+          <button className="btn-primary flex items-center gap-2" onClick={() => setNewModal(true)}>
+            <Plus size={16} />
+            Nuevo comprobante
+          </button>
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -1013,6 +1049,86 @@ export default function Comprobantes() {
                             <button type="button" className="btn-primary text-xs py-1 px-2.5 flex-shrink-0" onClick={() => {
                               setSelectedCustomer({ id: null, displayName: rucResult!.nombre, ruc: rucResult!.ruc });
                               setRucResult(null); setRucSearch('');
+                            }}>Usar</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Proveedor selector */}
+              <div>
+                <label className="text-xs font-medium text-gray-700 block mb-2 flex items-center gap-1">
+                  <Truck size={11} /> Proveedor / Emisor (opcional)
+                </label>
+                {selectedProveedor ? (
+                  <div className="flex items-center gap-2 p-2.5 bg-orange-50 border border-orange-200 rounded-lg">
+                    <Truck size={14} className="text-orange-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0 text-sm">
+                      <span className="font-medium text-orange-700">{selectedProveedor.displayName}</span>
+                      {selectedProveedor.ruc && <span className="text-orange-500 ml-2 text-xs font-mono">RUC {selectedProveedor.ruc}</span>}
+                    </div>
+                    <button type="button" onClick={() => { setSelectedProveedor(null); setProveedorMode(null); }} className="text-orange-400 hover:text-orange-600"><X size={14} /></button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setProveedorMode(m => m === 'existing' ? null : 'existing')}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${proveedorMode === 'existing' ? 'bg-orange-50 border-orange-300 text-orange-700' : 'border-gray-200 text-gray-600 hover:border-orange-300'}`}>
+                        Proveedor existente
+                      </button>
+                      <button type="button" onClick={() => setProveedorMode(m => m === 'ruc' ? null : 'ruc')}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${proveedorMode === 'ruc' ? 'bg-orange-50 border-orange-300 text-orange-700' : 'border-gray-200 text-gray-600 hover:border-orange-300'}`}>
+                        Nuevo por RUC
+                      </button>
+                    </div>
+                    {proveedorMode === 'existing' && (
+                      <div className="relative">
+                        <input className="input w-full" placeholder="Buscar por nombre de proveedor…"
+                          value={proveedorSearch} onChange={e => setProveedorSearch(e.target.value)} />
+                        {proveedorOptions.length > 0 && (
+                          <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-auto">
+                            {proveedorOptions.map((p: any) => (
+                              <button key={p.id} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2"
+                                onClick={() => { setSelectedProveedor({ id: p.id, displayName: p.displayName, ruc: p.ruc }); setProveedorSearch(''); setProveedorOptions([]); }}>
+                                <Truck size={12} className="text-gray-400 flex-shrink-0" />
+                                <span className="font-medium truncate">{p.displayName}</span>
+                                {p.ruc && <span className="text-gray-400 text-xs font-mono flex-shrink-0">{p.ruc}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {proveedorMode === 'ruc' && (
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <input className="input flex-1" placeholder="RUC del proveedor (11 dígitos)" maxLength={11}
+                            value={provRucSearch} onChange={e => setProvRucSearch(e.target.value.replace(/\D/g, ''))} />
+                          <button type="button" className="btn-secondary text-xs px-3 flex items-center gap-1" disabled={provRucSearch.length !== 11 || provRucLoading}
+                            onClick={async () => {
+                              setProvRucLoading(true);
+                              try {
+                                const res = await api.get(`/v1/lookup/ruc?n=${provRucSearch}`);
+                                const d = res.data.data;
+                                setProvRucResult({ ruc: provRucSearch, nombre: d.razonSocial ?? d.nombre ?? provRucSearch });
+                              } catch { toast.error('RUC no encontrado'); } finally { setProvRucLoading(false); }
+                            }}>
+                            {provRucLoading ? <Loader2 size={12} className="animate-spin" /> : 'Buscar'}
+                          </button>
+                        </div>
+                        {provRucResult && (
+                          <div className="flex items-center gap-2 p-2.5 bg-orange-50 border border-orange-200 rounded-lg text-sm">
+                            <Truck size={14} className="text-orange-600 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <span className="font-medium text-orange-700 truncate block">{provRucResult.nombre}</span>
+                              <span className="text-orange-500 text-xs font-mono">RUC {provRucResult.ruc}</span>
+                            </div>
+                            <button type="button" className="btn-primary text-xs py-1 px-2.5 flex-shrink-0" onClick={() => {
+                              setSelectedProveedor({ id: null, displayName: provRucResult!.nombre, ruc: provRucResult!.ruc });
+                              setProvRucResult(null); setProvRucSearch('');
                             }}>Usar</button>
                           </div>
                         )}
