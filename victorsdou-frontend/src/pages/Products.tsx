@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState, useMemo } from 'react';
-import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2 } from 'lucide-react';
+import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 
@@ -62,6 +62,8 @@ export default function Products() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '' });
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', isActive: true });
   const [overheadRate, setOverheadRate] = useState(0.47);
   const [editingOverhead, setEditingOverhead] = useState(false);
   const [overheadInput, setOverheadInput] = useState('47');
@@ -125,6 +127,29 @@ export default function Products() {
     onError: () => toast.error('Error al eliminar producto'),
   });
 
+  const patchProduct = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: typeof editForm }) =>
+      api.patch('/v1/products/' + id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
+      toast.success('Producto actualizado');
+      setEditingProduct(null);
+    },
+    onError: () => toast.error('Error al actualizar producto'),
+  });
+
+  function openEdit(p: Product) {
+    setEditForm({
+      name: p.name,
+      sku: p.sku,
+      basePricePen: p.basePricePen,
+      categoryId: p.category ? (categories.find((c: any) => c.name === p.category?.name)?.id ?? '') : '',
+      isActive: p.isActive,
+    });
+    setEditingProduct(p);
+  }
+
   const products: Product[] = productsData?.data ?? [];
   const categories = categoriesData?.data ?? [];
   const activeRecipe: Recipe | null = recipeData?.data?.[0] ?? null;
@@ -140,6 +165,67 @@ export default function Products() {
   };
 
   return (
+    <>
+    {/* ── Edit Product Modal ── */}
+    {editingProduct && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center">
+                <Pencil size={15} className="text-white" />
+              </div>
+              <h2 className="font-bold text-gray-900">Editar producto</h2>
+            </div>
+            <button onClick={() => setEditingProduct(null)} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Nombre *</label>
+              <input className="input w-full" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} placeholder="Nombre del producto" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">SKU *</label>
+                <input className="input w-full font-mono" value={editForm.sku} onChange={e => setEditForm(f => ({ ...f, sku: e.target.value }))} placeholder="SKU-001" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Precio base (S/)</label>
+                <input type="number" min={0} step={0.01} className="input w-full" value={editForm.basePricePen} onChange={e => setEditForm(f => ({ ...f, basePricePen: e.target.value }))} placeholder="0.00" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Categoría</label>
+              <select className="input w-full" value={editForm.categoryId} onChange={e => setEditForm(f => ({ ...f, categoryId: e.target.value }))}>
+                <option value="">Sin categoría</option>
+                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</label>
+              <button
+                type="button"
+                onClick={() => setEditForm(f => ({ ...f, isActive: !f.isActive }))}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium border transition-all ${editForm.isActive ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+              >
+                {editForm.isActive ? <><CheckCircle2 size={12} /> Activo</> : <><Archive size={12} /> Inactivo</>}
+              </button>
+            </div>
+          </div>
+          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
+            <button onClick={() => setEditingProduct(null)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-xl transition-all">Cancelar</button>
+            <button
+              onClick={() => patchProduct.mutate({ id: editingProduct.id, data: editForm })}
+              disabled={!editForm.name || !editForm.sku || patchProduct.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all"
+            >
+              {patchProduct.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              Guardar cambios
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -250,9 +336,14 @@ export default function Products() {
                           : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs"><Archive className="w-3 h-3" /> Inactivo</span>}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button onClick={e => { e.stopPropagation(); if (confirm('Eliminar producto?')) deleteProduct.mutate(product.id); }} className="text-gray-400 hover:text-red-500 p-1 rounded">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={e => { e.stopPropagation(); openEdit(product); }} className="text-gray-400 hover:text-brand-600 p-1 rounded" title="Editar">
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); if (confirm('Eliminar producto?')) deleteProduct.mutate(product.id); }} className="text-gray-400 hover:text-red-500 p-1 rounded" title="Eliminar">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                     {isExpanded && (
@@ -282,6 +373,7 @@ export default function Products() {
         <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100">{products.length} items</div>
       </div>
     </div>
+    </>
   );
 }
 

@@ -39,6 +39,7 @@ export default function Layout() {
   const location = useLocation();
   const canGoBack = location.key !== 'default';
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarHover, setSidebarHover] = useState(false);
   const [emailPendientes, setEmailPendientes] = useState(0);
 
   // Auto-collapse sidebar when navigating into any module (except dashboard)
@@ -73,9 +74,13 @@ export default function Layout() {
   return (
     <div className="flex h-screen overflow-hidden bg-brand-50">
       {/* Sidebar — dark forest green */}
-      <aside className={`${sidebarOpen ? 'w-60' : 'w-16'} flex-shrink-0 bg-brand-700 text-white flex flex-col transition-all duration-200`}>
+      <aside
+        className={`${sidebarOpen || sidebarHover ? 'w-60' : 'w-16'} flex-shrink-0 bg-brand-700 text-white flex flex-col transition-all duration-200`}
+        onMouseEnter={() => { if (!sidebarOpen) setSidebarHover(true); }}
+        onMouseLeave={() => setSidebarHover(false)}
+      >
         {/* Logo */}
-        {sidebarOpen ? (
+        {sidebarOpen || sidebarHover ? (
           <div className="flex items-center gap-3 px-4 py-5 border-b border-brand-800">
             <span className="text-2xl">{brand.logoEmoji}</span>
             <div className="flex-1 min-w-0">
@@ -127,7 +132,7 @@ export default function Layout() {
                       </span>
                     )}
                   </div>
-                  {sidebarOpen && (
+                  {(sidebarOpen || sidebarHover) && (
                     <span className="flex items-center gap-2 flex-1">
                       {label}
                       {badge > 0 && (
@@ -162,7 +167,7 @@ export default function Layout() {
                 }
               >
                 <Icon size={18} className="flex-shrink-0" />
-                {sidebarOpen && <span>{label}</span>}
+                {(sidebarOpen || sidebarHover) && <span>{label}</span>}
                 {!sidebarOpen && (
                   <div className="absolute left-16 bg-brand-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity">
                     {label}
@@ -175,7 +180,7 @@ export default function Layout() {
 
         {/* User */}
         <div className="border-t border-brand-800 p-4">
-          {sidebarOpen ? (
+          {sidebarOpen || sidebarHover ? (
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center text-sm font-bold flex-shrink-0">
                 {user?.fullName?.[0] ?? 'V'}

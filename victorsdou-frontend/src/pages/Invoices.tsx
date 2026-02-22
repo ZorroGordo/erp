@@ -120,12 +120,40 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   const [entityAddr,  setEntityAddr]  = useState('');
   // For both FACTURA and BOLETA: choose between searching existing or entering new
   const [clientMode, setClientMode]   = useState<'search' | 'new'>('search');
+  // entityConfirmed: true only after user picks from search OR explicitly confirms manual entry
+  const [entityConfirmed, setEntityConfirmed] = useState(false);
   // Lookup state (for the RUC auto-fill button)
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupMsg,     setLookupMsg]     = useState<{ type: 'ok' | 'warn'; text: string } | null>(null);
 
   // Lines
   const [lines, setLines] = useState<LineItem[]>([{ ...BLANK_LINE }]);
+  // Product catalog search
+  const [productSearch, setProductSearch] = useState('');
+  const [productDropdownOpen, setProductDropdownOpen] = useState(false);
+  const productRef = useRef<HTMLDivElement>(null);
+
+  const { data: productsData } = useQuery<{ data: any[] }>({
+    queryKey: ['products-catalog'],
+    queryFn:  () => api.get('/v1/products/').then(r => r.data),
+    staleTime: 60_000,
+  });
+
+  const filteredProducts = (productsData?.data ?? []).filter(p =>
+    !productSearch || p.name?.toLowerCase().includes(productSearch.toLowerCase()) || p.sku?.toLowerCase().includes(productSearch.toLowerCase())
+  ).slice(0, 8);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (!productRef.current?.contains(e.target as Node)) setProductDropdownOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  function addProductLine(product: any) {
+    setLines(ls => [...ls, { description: product.name, qty: 1, unitPrice: product.basePricePen ?? 0, igvRate: 0.18 }]);
+    setProductSearch('');
+    setProductDropdownOpen(false);
+  }
 
   const totals = {
     sub:   round2(lines.reduce((s, l) => s + calcLine(l).sub,   0)),
@@ -139,6 +167,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   function clearEntity() {
     setEntityId(''); setEntityDocNo(''); setEntityName('');
     setEntityEmail(''); setEntityAddr(''); setLookupMsg(null);
+    setEntityConfirmed(false);
   }
 
   async function runRucLookup() {
@@ -151,6 +180,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
       if (name) setEntityName(name);
       if (r.data.direccion) setEntityAddr(r.data.direccion);
       setLookupMsg({ type: 'ok', text: `✓ ${name || 'Encontrado'} · ${r.data.direccion ?? ''}` });
+      setEntityConfirmed(true);
     } catch (e: any) {
       const code = e?.response?.data?.error ?? '';
       const text = code === 'APIS_TOKEN_MISSING'
@@ -187,7 +217,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   const linesValid = lines.every(l => l.description.trim() && l.qty > 0 && l.unitPrice >= 0);
   const canSave = linesValid && (
     isFactura
-      ? (entityDocNo.trim().length === 11 && entityName.trim().length > 0)   // Factura: RUC + name required
+      ? (entityConfirmed && entityDocNo.trim().length === 11 && entityName.trim().length > 0)
       : true   // Boleta: entity entirely optional
   );
   // Also need Building2 for the entity chip icon above
@@ -246,8 +276,8 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
               </div>
             </div>
 
-            {/* Selected customer chip */}
-            {(entityDocNo || entityName) && (
+            {/* Selected customer chip — only shown once entity is confirmed */}
+            {entityConfirmed && (entityDocNo || entityName) && (
               <div className="bg-white rounded-xl border border-brand-200 px-4 py-3 flex items-center gap-3">
                 <span className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center text-brand-700 flex-shrink-0">
                   {isFactura ? <Building2 size={15} /> : <User size={15} />}
@@ -262,10 +292,10 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
             )}
 
             {/* Search mode: pick from existing customers */}
-            {clientMode === 'search' && !entityDocNo && !entityName && (
+            {clientMode === 'search' && !entityConfirmed && (
               <>
                 <CustomerSearch onSelect={c => {
-                  if (c) { setEntityId(c.id); setEntityDocNo(c.docNumber); setEntityName(c.displayName); setEntityEmail(c.email ?? ''); }
+                  if (c) { setEntityId(c.id); setEntityDocNo(c.docNumber); setEntityName(c.displayName); setEntityEmail(c.email ?? ''); setEntityConfirmed(true); }
                   else   { clearEntity(); }
                 }} />
                 {!isFactura && <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>}
@@ -274,7 +304,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
             )}
 
             {/* Manual / new mode: RUC entry + SUNAT lookup */}
-            {clientMode === 'new' && !entityDocNo && !entityName && (
+            {clientMode === 'new' && !entityConfirmed && (
               <div className="space-y-3">
                 <div className="flex gap-2">
                   <input
@@ -313,23 +343,62 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
                   value={entityEmail}
                   onChange={e => setEntityEmail(e.target.value)}
                 />
+                {/* Confirm button — only needed when lookup didn't auto-confirm */}
+                {!lookupMsg?.type.startsWith('ok') && (entityDocNo || entityName) && (
+                  <button
+                    type="button"
+                    onClick={() => setEntityConfirmed(true)}
+                    disabled={isFactura && (entityDocNo.trim().length !== 11 || !entityName.trim())}
+                    className="w-full py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-40 transition-colors"
+                  >
+                    Confirmar datos →
+                  </button>
+                )}
+                {!isFactura && !entityDocNo && !entityName && (
+                  <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>
+                )}
               </div>
-            )}
-
-            {/* Boleta anónima hint */}
-            {!isFactura && !entityDocNo && !entityName && clientMode === 'new' && !entityName && (
-              <p className="text-xs text-gray-400 italic flex items-center gap-1"><UserPlus size={12} /> Sin receptor → boleta anónima.</p>
             )}
           </div>
 
           {/* Line items */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Líneas del comprobante</label>
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Productos / Servicios</label>
               <button onClick={() => setLines(ls => [...ls, { ...BLANK_LINE }])}
                 className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-800 font-medium">
-                <Plus size={13} /> Agregar línea
+                <Plus size={13} /> Línea libre
               </button>
+            </div>
+
+            {/* Product catalog search */}
+            <div ref={productRef} className="relative mb-3">
+              <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-brand-300">
+                <Search size={14} className="text-gray-400 flex-shrink-0" />
+                <input
+                  className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
+                  placeholder="Buscar producto del catálogo y agregar a la línea…"
+                  value={productSearch}
+                  onChange={e => { setProductSearch(e.target.value); setProductDropdownOpen(true); }}
+                  onFocus={() => setProductDropdownOpen(true)}
+                />
+                {productSearch && <button onClick={() => { setProductSearch(''); setProductDropdownOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
+              </div>
+              {productDropdownOpen && (filteredProducts.length > 0 || productSearch) && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-hidden">
+                  {filteredProducts.map(p => (
+                    <button key={p.id} className="w-full px-4 py-2.5 text-left hover:bg-brand-50 flex items-center gap-3 transition-colors"
+                      onClick={() => addProductLine(p)}>
+                      <span className="text-xs text-gray-400 font-mono w-16 flex-shrink-0 truncate">{p.sku}</span>
+                      <span className="flex-1 text-sm font-medium text-gray-800 truncate">{p.name}</span>
+                      <span className="text-xs text-gray-500 flex-shrink-0">S/ {(p.basePricePen ?? 0).toFixed(2)}</span>
+                    </button>
+                  ))}
+                  {filteredProducts.length === 0 && (
+                    <p className="px-4 py-3 text-sm text-gray-400 italic">Sin resultados — usa "Línea libre" para ingresar manualmente.</p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">

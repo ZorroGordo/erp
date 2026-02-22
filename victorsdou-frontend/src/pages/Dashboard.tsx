@@ -6,12 +6,12 @@ import { fmtMoney, fmtInt } from '../lib/fmt';
 import {
   Package, AlertTriangle, Factory, ShoppingCart, TrendingUp, Clock,
   ChevronLeft, ChevronRight, DollarSign, Cake, GripVertical, X, Plus,
-  LayoutGrid, FileText, Mail,
+  LayoutGrid, FileText, Mail, CheckCircle2, ClipboardCheck,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type CardId = 'income' | 'kpis' | 'birthdays' | 'recentSales' | 'prodOrders' | 'comprobantes' | 'payrollSummary' | 'stockAlerts' | 'expiryAlerts';
+type CardId = 'income' | 'kpis' | 'birthdays' | 'recentSales' | 'prodOrders' | 'comprobantes' | 'payrollSummary' | 'stockAlerts' | 'expiryAlerts' | 'tasks';
 interface DashCard { id: CardId; visible: boolean; order: number; }
 
 const CARD_DEFS: { id: CardId; label: string }[] = [
@@ -24,6 +24,7 @@ const CARD_DEFS: { id: CardId; label: string }[] = [
   { id: 'payrollSummary', label: 'Resumen de nómina' },
   { id: 'stockAlerts',    label: 'Stock crítico' },
   { id: 'expiryAlerts',   label: 'Lotes por vencer' },
+  { id: 'tasks',          label: 'Tareas pendientes' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ function monthLabel(m: string) {
 // ── Per-user dashboard config ─────────────────────────────────────────────────
 function useDashConfig(userId: string) {
   const key = `vos_dash_${userId}`;
-  const defaultConfig: DashCard[] = CARD_DEFS.map((c, i) => ({ id: c.id, visible: true, order: i }));
+  const defaultConfig: DashCard[] = CARD_DEFS.map((c, i) => ({ id: c.id, visible: c.id !== 'tasks', order: i }));
 
   const [config, setConfig] = useState<DashCard[]>(() => {
     try {
@@ -53,7 +54,7 @@ function useDashConfig(userId: string) {
         const saved = JSON.parse(raw) as DashCard[];
         const merged = CARD_DEFS.map(d => {
           const s = saved.find(c => c.id === d.id);
-          return s ?? { id: d.id, visible: true, order: CARD_DEFS.indexOf(d) };
+          return s ?? { id: d.id, visible: d.id !== 'tasks', order: CARD_DEFS.indexOf(d) };
         });
         return merged.sort((a, b) => a.order - b.order);
       }
@@ -397,6 +398,73 @@ function ExpiryAlertsCard() {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
+
+// ?? TasksCard ?????????????????????????????????????????????????????????????????
+function TaskProgressRow({ label, done, total, color }: { label: string; done: number; total: number; color: string }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const all = done === total && total > 0;
+  return (
+    <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 border border-gray-100">
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${all ? 'bg-green-100' : color}`}>
+        <CheckCircle2 size={16} className={all ? 'text-green-600' : 'text-white'} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs font-medium text-gray-700 truncate">{label}</p>
+          <span className={`text-xs font-bold ml-2 flex-shrink-0 ${all ? 'text-green-600' : 'text-gray-500'}`}>{done}/{total}</span>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-1.5">
+          <div className={`h-1.5 rounded-full transition-all ${all ? 'bg-green-500' : 'bg-brand-500'}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TasksCard({ month }: { month: string }) {
+  const { data: payrollData } = useQuery<any>({
+    queryKey: ['tasks-payroll', month],
+    queryFn: () => api.get(`/v1/payroll/summary?month=${month}`).then(r => r.data).catch(() => null),
+    staleTime: 60_000,
+  });
+  const { data: compData } = useQuery<any>({
+    queryKey: ['tasks-comprobantes'],
+    queryFn: () => api.get('/v1/comprobantes/stats/summary').then(r => r.data).catch(() => null),
+    staleTime: 60_000,
+  });
+
+  const boletas   = { done: payrollData?.data?.confirmed ?? 0, total: payrollData?.data?.total ?? 0 };
+  const validated = { done: compData?.data?.validated    ?? 0, total: compData?.data?.total   ?? 0 };
+  const emailPend = compData?.data?.emailPendientes ?? 0;
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-9 h-9 bg-brand-600 rounded-xl flex items-center justify-center">
+          <ClipboardCheck size={17} className="text-white" />
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 text-sm">Tareas pendientes</h3>
+          <p className="text-xs text-gray-400">Estado operativo del mes</p>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <TaskProgressRow label="Boletas de planilla confirmadas" done={boletas.done} total={boletas.total} color="bg-brand-500" />
+        <TaskProgressRow label="Comprobantes de proveedor validados" done={validated.done} total={validated.total} color="bg-purple-500" />
+        {emailPend > 0 && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 border border-amber-100">
+            <Mail size={14} className="text-amber-500 flex-shrink-0" />
+            <p className="text-xs text-amber-700 font-medium">{emailPend} comprobante{emailPend !== 1 ? 's' : ''} por revisar en bandeja de entrada</p>
+          </div>
+        )}
+        {boletas.total === 0 && validated.total === 0 && (
+          <p className="text-xs text-gray-400 text-center py-3">No hay datos de tareas para este mes.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const userId   = user?.id ?? 'guest';
@@ -526,7 +594,7 @@ export default function Dashboard() {
   };
 
   const topIds:    CardId[] = ['income', 'kpis'];
-  const bottomIds: CardId[] = ['birthdays', 'recentSales', 'prodOrders', 'comprobantes', 'payrollSummary', 'stockAlerts', 'expiryAlerts'];
+  const bottomIds: CardId[] = ['birthdays', 'recentSales', 'prodOrders', 'comprobantes', 'payrollSummary', 'stockAlerts', 'expiryAlerts', 'tasks'];
   const visibleCards  = config.filter(c => c.visible);
   const hiddenCards   = config.filter(c => !c.visible);
   const visibleTop    = visibleCards.filter(c => topIds.includes(c.id));
@@ -602,7 +670,7 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          {hiddenCards.length > 0 && !editMode && (
+          {!editMode && (
             <button onClick={() => setEditMode(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border bg-white text-brand-600 border-brand-200 hover:bg-brand-50 hover:border-brand-400 transition-all shadow-sm">
               <Plus size={13} /> Agregar widget
