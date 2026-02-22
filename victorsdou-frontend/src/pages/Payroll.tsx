@@ -8,7 +8,14 @@ import {
 import toast from "react-hot-toast";
 import { fmtMoney } from '../lib/fmt';
 
-const AFP_OPTIONS   = ["AFP Integra", "Prima AFP", "Profuturo AFP", "Habitat AFP"];
+const AFP_OPTIONS    = ["AFP Integra", "Prima AFP", "Profuturo AFP", "Habitat AFP"];
+const SEGURO_OPTIONS = [
+  { value: "ESSALUD",      label: "EsSalud (9%)"              },
+  { value: "EPS",          label: "EPS (privado)"             },
+  { value: "ESSALUD_EPS",  label: "EsSalud + EPS"             },
+  { value: "SIS",          label: "SIS"                       },
+  { value: "SCTR",         label: "SCTR (trabajo de riesgo)"  },
+];
 const CONTRACT_OPTS = [
   { value: "INDEFINIDO", label: "Indefinido" },
   { value: "PLAZO_FIJO",  label: "Plazo Fijo" },
@@ -18,9 +25,11 @@ const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","A
 const MONTH_SHORT = ["ENE","FEB","MAR","ABR","MAY","JUN","JUL","AGO","SEP","OCT","NOV","DIC"];
 const GRATIF_MONTHS = [7, 12];
 const EMPTY_EMP_FORM = {
-  fullName: "", dni: "", position: "", department: "",
+  fullName: "", nombres: "", apellidoPaterno: "", apellidoMaterno: "",
+  dni: "", birthDate: "", position: "", department: "",
   employmentType: "PLANILLA", contractType: "INDEFINIDO",
   hireDate: "", baseSalary: "", pensionSystem: "AFP", afpName: "",
+  seguroSalud: "ESSALUD",
   cuspp: "", email: "", bankAccount: "", bankName: "",
 };
 
@@ -33,7 +42,32 @@ function statusBadge(s: string) {
 }
 
 function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (data: any) => void; onClose: () => void }) {
-  const [form, setForm] = useState<any>(initial);
+  const [form, setForm] = useState<any>(() => {
+    // Back-fill name parts from fullName if not separately stored
+    const f = { ...initial };
+    if (!f.nombres && !f.apellidoPaterno && f.fullName) {
+      const parts = f.fullName.trim().split(/\s+/);
+      if (parts.length >= 3) {
+        f.apellidoMaterno = parts[parts.length - 1];
+        f.apellidoPaterno = parts[parts.length - 2];
+        f.nombres         = parts.slice(0, parts.length - 2).join(' ');
+      } else if (parts.length === 2) {
+        f.apellidoPaterno = parts[1];
+        f.nombres         = parts[0];
+        f.apellidoMaterno = '';
+      } else {
+        f.nombres = f.fullName;
+        f.apellidoPaterno = '';
+        f.apellidoMaterno = '';
+      }
+    }
+    if (!f.seguroSalud) f.seguroSalud = 'ESSALUD';
+    if (!f.birthDate && f.birthDate !== '') {
+      const bd = initial.birthDate;
+      f.birthDate = bd ? new Date(bd).toISOString().split('T')[0] : '';
+    }
+    return f;
+  });
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const isRxH = form.employmentType === "RXH";
   return (
@@ -45,13 +79,28 @@ function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (da
         </div>
         <div className="px-6 py-5 space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Nombre completo *</label>
-              <input className="input" value={form.fullName} onChange={e => set("fullName", e.target.value)} />
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Nombres *</label>
+              <input className="input" placeholder="Ej: María del Carmen" value={form.nombres}
+                onChange={e => { set("nombres", e.target.value); set("fullName", [e.target.value, form.apellidoPaterno, form.apellidoMaterno].filter(Boolean).join(" ")); }} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Apellido Paterno *</label>
+              <input className="input" placeholder="Ej: García" value={form.apellidoPaterno}
+                onChange={e => { set("apellidoPaterno", e.target.value); set("fullName", [form.nombres, e.target.value, form.apellidoMaterno].filter(Boolean).join(" ")); }} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Apellido Materno</label>
+              <input className="input" placeholder="Ej: López" value={form.apellidoMaterno}
+                onChange={e => { set("apellidoMaterno", e.target.value); set("fullName", [form.nombres, form.apellidoPaterno, e.target.value].filter(Boolean).join(" ")); }} />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">DNI *</label>
               <input className="input" value={form.dni} onChange={e => set("dni", e.target.value)} maxLength={8} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de nacimiento</label>
+              <input className="input" type="date" value={form.birthDate} onChange={e => set("birthDate", e.target.value)} />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Cargo</label>
@@ -105,6 +154,12 @@ function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (da
                 <label className="block text-xs font-medium text-gray-600 mb-1">CUSPP (codigo AFP)</label>
                 <input className="input" value={form.cuspp} onChange={e => set("cuspp", e.target.value)} placeholder="Opcional" />
               </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Seguro de salud</label>
+                <select className="input" value={form.seguroSalud} onChange={e => set("seguroSalud", e.target.value)}>
+                  {SEGURO_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
             </>)}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Email (para boletas)</label>
@@ -122,7 +177,7 @@ function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (da
         </div>
         <div className="px-6 py-4 border-t flex gap-2 justify-end bg-gray-50 sticky bottom-0">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={() => onSave({ ...form, baseSalary: parseFloat(form.baseSalary) || 0 })}>
+          <button className="btn-primary" onClick={() => onSave({ ...form, baseSalary: parseFloat(form.baseSalary) || 0, birthDate: form.birthDate || undefined })}>
             {initial.id ? "Guardar cambios" : "Registrar empleado"}
           </button>
         </div>

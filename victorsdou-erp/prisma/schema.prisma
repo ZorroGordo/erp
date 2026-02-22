@@ -1256,6 +1256,10 @@ model DeliveryIncident {
 model Employee {
   id              String         @id @default(uuid())
   fullName        String
+  nombres         String?
+  apellidoPaterno String?
+  apellidoMaterno String?
+  seguroSalud     String?        // ESSALUD | EPS | ESSALUD_EPS | SIS | SCTR
   dni             String         @unique
   cuspp           String?        // AFP code (CUSPP = Código Único de Sistema de Pensiones)
   contractType    ContractType   @default(INDEFINIDO)

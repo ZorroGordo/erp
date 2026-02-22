@@ -346,4 +346,132 @@ export async function customersRoutes(app: FastifyInstance) {
     await prisma.sucursal.update({ where: { id: sucursalId }, data: { isActive: false } });
     return reply.code(204).send();
   });
+
+  // ── POST /v1/customers/:id/contacts ────────────────────────────────────────
+  app.post('/:id/contacts', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      fullName: string;
+      role?: string;
+      email?: string;
+      phone?: string;
+      isPrimary?: boolean;
+      receivesFacturas?: boolean;
+    };
+    if (!body.fullName?.trim()) return reply.code(400).send({ error: 'fullName required' });
+    const contact = await prisma.customerContact.create({
+      data: {
+        customerId:      id,
+        fullName:        body.fullName.trim(),
+        role:            body.role            ?? null,
+        email:           body.email?.trim()   ?? null,
+        phone:           body.phone?.trim()   ?? null,
+        isPrimary:       body.isPrimary       ?? false,
+        receivesFacturas: body.receivesFacturas ?? false,
+      },
+    });
+    return reply.code(201).send({ data: contact });
+  });
+
+  // ── PATCH /v1/customers/:id/contacts/:contactId ─────────────────────────────
+  app.patch('/:id/contacts/:contactId', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { contactId } = req.params as { id: string; contactId: string };
+    const body = req.body as {
+      fullName?: string; role?: string; email?: string;
+      phone?: string; isPrimary?: boolean; receivesFacturas?: boolean;
+    };
+    const contact = await prisma.customerContact.update({
+      where: { id: contactId },
+      data: {
+        ...(body.fullName  !== undefined ? { fullName:  body.fullName.trim() } : {}),
+        ...(body.role      !== undefined ? { role:      body.role ?? null }    : {}),
+        ...(body.email     !== undefined ? { email:     body.email?.trim() ?? null } : {}),
+        ...(body.phone     !== undefined ? { phone:     body.phone?.trim() ?? null } : {}),
+        ...(body.isPrimary !== undefined ? { isPrimary: body.isPrimary }        : {}),
+        ...(body.receivesFacturas !== undefined ? { receivesFacturas: body.receivesFacturas } : {}),
+      },
+    });
+    return reply.send({ data: contact });
+  });
+
+  // ── DELETE /v1/customers/:id/contacts/:contactId ────────────────────────────
+  app.delete('/:id/contacts/:contactId', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { contactId } = req.params as { id: string; contactId: string };
+    await prisma.customerContact.delete({ where: { id: contactId } });
+    return reply.send({ success: true });
+  });
+
+  // ── POST /v1/customers/:id/addresses ───────────────────────────────────────
+  app.post('/:id/addresses', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      label: string; addressLine1: string; addressLine2?: string;
+      district: string; province?: string; department?: string;
+      isDefault?: boolean; deliveryNotes?: string;
+    };
+    if (body.isDefault) {
+      await prisma.customerAddress.updateMany({ where: { customerId: id }, data: { isDefault: false } });
+    }
+    const addr = await prisma.customerAddress.create({
+      data: {
+        customerId:   id,
+        label:        body.label?.trim() || 'Principal',
+        addressLine1: body.addressLine1.trim(),
+        addressLine2: body.addressLine2?.trim() ?? null,
+        district:     body.district.trim(),
+        province:     body.province?.trim() || 'Lima',
+        department:   body.department?.trim() || 'Lima',
+        isDefault:    body.isDefault ?? false,
+        deliveryNotes: body.deliveryNotes?.trim() ?? null,
+      },
+    });
+    return reply.code(201).send({ data: addr });
+  });
+
+  // ── PATCH /v1/customers/:id/addresses/:addressId ────────────────────────────
+  app.patch('/:id/addresses/:addressId', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id, addressId } = req.params as { id: string; addressId: string };
+    const body = req.body as {
+      label?: string; addressLine1?: string; addressLine2?: string;
+      district?: string; province?: string; department?: string;
+      isDefault?: boolean; deliveryNotes?: string;
+    };
+    if (body.isDefault) {
+      await prisma.customerAddress.updateMany({ where: { customerId: id }, data: { isDefault: false } });
+    }
+    const addr = await prisma.customerAddress.update({
+      where: { id: addressId },
+      data: {
+        ...(body.label        !== undefined ? { label:        body.label?.trim() || 'Principal' } : {}),
+        ...(body.addressLine1 !== undefined ? { addressLine1: body.addressLine1.trim() }          : {}),
+        ...(body.addressLine2 !== undefined ? { addressLine2: body.addressLine2?.trim() ?? null } : {}),
+        ...(body.district     !== undefined ? { district:     body.district.trim() }              : {}),
+        ...(body.province     !== undefined ? { province:     body.province?.trim() || 'Lima' }   : {}),
+        ...(body.department   !== undefined ? { department:   body.department?.trim() || 'Lima' } : {}),
+        ...(body.isDefault    !== undefined ? { isDefault:    body.isDefault }                    : {}),
+        ...(body.deliveryNotes !== undefined ? { deliveryNotes: body.deliveryNotes?.trim() ?? null } : {}),
+      },
+    });
+    return reply.send({ data: addr });
+  });
+
+  // ── DELETE /v1/customers/:id/addresses/:addressId ──────────────────────────
+  app.delete('/:id/addresses/:addressId', {
+    preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { addressId } = req.params as { id: string; addressId: string };
+    await prisma.customerAddress.delete({ where: { id: addressId } });
+    return reply.send({ success: true });
+  });
+
 }

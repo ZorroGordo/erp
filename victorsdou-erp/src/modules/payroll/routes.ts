@@ -102,6 +102,11 @@ export async function payrollRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const body = req.body as {
       fullName:       string;
+      nombres?:       string;
+      apellidoPaterno?: string;
+      apellidoMaterno?: string;
+      seguroSalud?:   string;
+      birthDate?:     string;
       dni:            string;
       position:       string;
       department?:    string;
@@ -124,6 +129,11 @@ export async function payrollRoutes(app: FastifyInstance) {
     const employee = await prisma.employee.create({
       data: {
         fullName:       body.fullName.trim(),
+        nombres:        body.nombres?.trim()        ?? null,
+        apellidoPaterno: body.apellidoPaterno?.trim() ?? null,
+        apellidoMaterno: body.apellidoMaterno?.trim() ?? null,
+        seguroSalud:    body.seguroSalud?.trim()     ?? 'ESSALUD',
+        birthDate:      body.birthDate  ? new Date(body.birthDate) : null,
         dni:            body.dni.trim(),
         position:       body.position?.trim() ?? '',
         department:     body.department?.trim() ?? null,
@@ -149,6 +159,11 @@ export async function payrollRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const body = req.body as {
       fullName?:       string;
+      nombres?:        string;
+      apellidoPaterno?: string;
+      apellidoMaterno?: string;
+      seguroSalud?:    string;
+      birthDate?:      string;
       position?:       string;
       department?:     string;
       employmentType?: string;
@@ -171,6 +186,11 @@ export async function payrollRoutes(app: FastifyInstance) {
       where: { id },
       data: {
         ...(body.fullName       !== undefined ? { fullName:       body.fullName.trim() }        : {}),
+        ...(body.nombres        !== undefined ? { nombres:        body.nombres?.trim() ?? null }  : {}),
+        ...(body.apellidoPaterno !== undefined ? { apellidoPaterno: body.apellidoPaterno?.trim() ?? null } : {}),
+        ...(body.apellidoMaterno !== undefined ? { apellidoMaterno: body.apellidoMaterno?.trim() ?? null } : {}),
+        ...(body.seguroSalud    !== undefined ? { seguroSalud:    body.seguroSalud?.trim() ?? null } : {}),
+        ...(body.birthDate      !== undefined ? { birthDate:      body.birthDate ? new Date(body.birthDate) : null } : {}),
         ...(body.position       !== undefined ? { position:       body.position.trim() }        : {}),
         ...(body.department     !== undefined ? { department:     body.department?.trim() ?? null } : {}),
         ...(body.employmentType !== undefined ? { employmentType: body.employmentType as any }  : {}),
