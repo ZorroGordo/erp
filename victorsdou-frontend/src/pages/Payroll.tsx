@@ -497,7 +497,8 @@ function PayslipDetailModal({
   const [manualBonus, setManualBonus] = useState(Number(ps.manualBonuses ?? 0));
   const [manualDed,   setManualDed]   = useState(Number(ps.manualDeductions ?? 0));
   const [notes,       setNotes]       = useState(ps.notes ?? "");
-  const [showOTForm,  setShowOTForm]  = useState(false);
+  const [showOTForm,       setShowOTForm]       = useState(false);
+  const [showUnpayConfirm, setShowUnpayConfirm] = useState(false);
   const [otForm, setOtForm] = useState({
     date: new Date().toISOString().split("T")[0],
     isHoliday: false, holidayHours: "0",
@@ -741,40 +742,97 @@ function PayslipDetailModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex items-center gap-2 flex-wrap">
-          {!isPaid && (
-            <button
-              onClick={() => saveAndRecalc.mutate()}
-              disabled={saveAndRecalc.isPending}
-              className="btn-primary flex items-center gap-1.5 text-sm"
-            >
-              {saveAndRecalc.isPending ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Pencil size={14} /> Guardar ajustes</>}
-            </button>
-          )}
-          {ps.status === "DRAFT" && (
-            <button onClick={onConfirm} className="btn-secondary flex items-center gap-1.5 text-sm text-blue-600 border-blue-200 hover:bg-blue-50">
-              <CheckCircle size={14} /> Confirmar boleta
-            </button>
-          )}
-          {ps.status === "CONFIRMED" && (<>
-            <button onClick={onUnconfirm} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
-              <RotateCcw size={14} /> Revertir a borrador
-            </button>
-            <button onClick={onPay} className="btn-secondary flex items-center gap-1.5 text-sm text-green-600 border-green-200 hover:bg-green-50">
-              <DollarSign size={14} /> Pagar{ps.employee?.email && <Mail size={12} />}
-            </button>
-          </>)}
-          {ps.status === "PAID" && (<>
-            <span className="text-sm text-green-600 flex items-center gap-1.5 font-medium">
-              <CheckCircle size={14} /> Pagado{ps.emailSentAt ? " · Email enviado" : ""}
-            </span>
-            <button onClick={onUnpay} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
-              <RotateCcw size={14} /> Revertir pago
-            </button>
-          </>)}
-          <button onClick={onClose} className="ml-auto btn-secondary text-sm">Cerrar</button>
+        <div className="px-6 py-4 border-t border-gray-100 space-y-3">
+          {/* State machine stepper */}
+          <div className="flex items-center gap-1">
+            {(["DRAFT", "CONFIRMED", "PAID"] as const).map((step, i, arr) => {
+              const idx     = ["DRAFT", "CONFIRMED", "PAID"].indexOf(ps.status);
+              const stepIdx = i;
+              const isDone   = stepIdx < idx;
+              const isActive = stepIdx === idx;
+              const labels   = ["Borrador", "Confirmado", "Pagado"];
+              const icons    = [Edit2, CheckCircle, DollarSign];
+              const Icon     = icons[i];
+              return (
+                <div key={step} className="flex items-center gap-1">
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all
+                    ${isActive  ? 'bg-brand-100 text-brand-700 ring-2 ring-brand-300'
+                    : isDone    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-400'}`}>
+                    <Icon size={12} />
+                    {labels[i]}
+                  </div>
+                  {i < arr.length - 1 && (
+                    <ChevronRight size={14} className="text-gray-300 flex-shrink-0" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {!isPaid && (
+              <button
+                onClick={() => saveAndRecalc.mutate()}
+                disabled={saveAndRecalc.isPending}
+                className="btn-primary flex items-center gap-1.5 text-sm"
+              >
+                {saveAndRecalc.isPending ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Pencil size={14} /> Guardar ajustes</>}
+              </button>
+            )}
+            {ps.status === "DRAFT" && (
+              <button onClick={onConfirm} className="btn-secondary flex items-center gap-1.5 text-sm text-blue-600 border-blue-200 hover:bg-blue-50">
+                <CheckCircle size={14} /> Confirmar boleta
+              </button>
+            )}
+            {ps.status === "CONFIRMED" && (<>
+              <button onClick={onUnconfirm} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
+                <RotateCcw size={14} /> Revertir a borrador
+              </button>
+              <button onClick={onPay} className="btn-secondary flex items-center gap-1.5 text-sm text-green-600 border-green-200 hover:bg-green-50">
+                <DollarSign size={14} /> Pagar{ps.employee?.email && <Mail size={12} className="ml-0.5" />}
+              </button>
+            </>)}
+            {ps.status === "PAID" && (<>
+              <span className="text-sm text-green-600 flex items-center gap-1.5 font-medium">
+                <CheckCircle size={14} /> Pagado{ps.emailSentAt ? " · Email enviado" : ""}
+              </span>
+              <button onClick={() => setShowUnpayConfirm(true)} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
+                <RotateCcw size={14} /> Revertir pago
+              </button>
+            </>)}
+            <button onClick={onClose} className="ml-auto btn-secondary text-sm">Cerrar</button>
+          </div>
         </div>
       </div>
+
+      {/* Confirmation dialog — Revertir pago */}
+      {showUnpayConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowUnpayConfirm(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                <RotateCcw size={18} className="text-amber-600" />
+              </div>
+              <h3 className="font-semibold text-gray-900 text-lg">¿Revertir pago?</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-5">
+              La boleta de <strong className="text-gray-800">{ps.employee?.fullName}</strong> volverá al estado <span className="font-medium text-blue-700">Confirmado</span>. Deberás volver a marcarla como pagada cuando corresponda.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button className="btn-secondary text-sm" onClick={() => setShowUnpayConfirm(false)}>Cancelar</button>
+              <button
+                className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
+                onClick={() => { setShowUnpayConfirm(false); onUnpay(); }}
+              >
+                <RotateCcw size={14} /> Sí, revertir pago
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -954,6 +954,8 @@ export default function Comprobantes() {
                   {([
                     ['FACTURA',       'Factura'],
                     ['BOLETA',        'Boleta'],
+                    ['NOTA_CREDITO',  'Nota de Crédito'],
+                    ['NOTA_DEBITO',   'Nota de Débito'],
                     ['GUIA_REMISION', 'Guía de Remisión'],
                     ['ORDEN_COMPRA',  'Orden de Compra'],
                     ['OTRO',          'Otro'],

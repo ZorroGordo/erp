@@ -235,8 +235,8 @@ function DraggableSection({
   id, editMode, onRemove, onDragStart, onDragOver, onDrop, isDragOver, children,
 }: {
   id: CardId; editMode: boolean; onRemove: () => void;
-  onDragStart: () => void; onDragOver: (e: React.DragEvent) => void;
-  onDrop: () => void; isDragOver: boolean; children: React.ReactNode;
+  onDragStart: (e: React.DragEvent) => void; onDragOver: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void; isDragOver: boolean; children: React.ReactNode;
 }) {
   return (
     <div
@@ -261,6 +261,8 @@ function DraggableSection({
           <div className="absolute inset-0 z-10 rounded-xl border-2 border-dashed border-brand-300 pointer-events-none" />
         </>
       )}
+      {/* Transparent overlay in edit mode so drag events reach the wrapper, not card content */}
+      {editMode && <div className="absolute inset-0 z-[15] cursor-grab active:cursor-grabbing" />}
       <div className={editMode ? 'opacity-90' : ''}>{children}</div>
     </div>
   );
@@ -524,9 +526,9 @@ export default function Dashboard() {
     const wrap = (id: CardId, children: React.ReactNode) => (
       <DraggableSection key={id} id={id} editMode={editMode}
         onRemove={() => toggleVisible(id)}
-        onDragStart={() => handleDragStart(id)}
+        onDragStart={e => { e.dataTransfer.setData('text/plain', id); handleDragStart(id); }}
         onDragOver={e => handleDragOver(e, id)}
-        onDrop={() => handleDrop(id)}
+        onDrop={e => { e.preventDefault(); handleDrop(id); }}
         isDragOver={dragOver === id}
       >
         {children}
@@ -617,12 +619,8 @@ export default function Dashboard() {
     }
   };
 
-  const topIds:    CardId[] = ['income', 'kpis'];
-  const bottomIds: CardId[] = ['birthdays', 'recentSales', 'prodOrders', 'comprobantes', 'payrollSummary', 'stockAlerts', 'expiryAlerts', 'tasks'];
   const visibleCards  = config.filter(c => c.visible);
   const hiddenCards   = config.filter(c => !c.visible);
-  const visibleTop    = visibleCards.filter(c => topIds.includes(c.id));
-  const visibleBottom = visibleCards.filter(c => bottomIds.includes(c.id));
 
   // Close date picker when clicking outside
   const handleOutsideClick = () => {
@@ -761,17 +759,10 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Top cards — 2-col grid (income half-width alongside kpis) */}
-      {visibleTop.length > 0 && (
-        <div className={visibleTop.length === 1 ? 'space-y-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6 items-start'}>
-          {visibleTop.map(c => renderCard(c))}
-        </div>
-      )}
-
-      {/* Bottom cards — 2-col grid */}
-      {visibleBottom.length > 0 && (
-        <div className={visibleBottom.length === 1 ? 'space-y-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6'}>
-          {visibleBottom.map(c => renderCard(c))}
+      {/* All cards — single unified 2-col grid, freely reorderable */}
+      {visibleCards.length > 0 && (
+        <div className={visibleCards.length === 1 ? 'space-y-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6 items-start'}>
+          {visibleCards.map(c => renderCard(c))}
         </div>
       )}
 
