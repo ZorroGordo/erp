@@ -66,6 +66,9 @@ interface Comprobante {
   emailSubject: string | null;
   createdAt: string;
   archivos: ComprobanteArchivo[];
+  fechaPago: string | null;
+  proveedorId: string | null;
+  proveedor?: { id: string; businessName: string; ruc: string } | null;
   purchaseOrder?: { id: string; poNumber: string; supplier?: { businessName: string } } | null;
   invoice?: { id: string; docType: string; series: string; correlative: string; entityName: string } | null;
 }
@@ -84,6 +87,12 @@ interface PendingFile {
   docType: DocType;
   b64: string;
   size: number;
+}
+
+interface SupplierOption {
+  id: string;
+  businessName: string;
+  ruc: string;
 }
 
 interface PurchaseOrderOption {
@@ -136,6 +145,14 @@ const fmtMoney = (n: number | null | undefined, moneda = 'PEN') => {
 const fmtDate = (s: string | null | undefined) => {
   if (!s) return '—';
   return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const fmtPagoColor = (fechaPago: string | null | undefined): { label: string; cls: string } => {
+  if (!fechaPago) return { label: ''  , cls: 'text-gray-400' };
+  const days = Math.ceil((new Date(fechaPago).getTime() - Date.now()) / 86400_000);
+  if (days < 0)   return { label: fmtDate(fechaPago), cls: 'text-red-600 font-semibold' };
+  if (days <= 7)  return { label: fmtDate(fechaPago), cls: 'text-amber-600 font-semibold' };
+  return           { label: fmtDate(fechaPago), cls: 'text-green-600' };
 };
 
 const fmtBytes = (n: number) => {
@@ -194,11 +211,21 @@ export default function Comprobantes() {
   const [filterSource,  setFilterSource] = useState<'EMAIL' | ''>('');
   const [fechaDesde,    setFechaDesde]   = useState('');
   const [fechaHasta,    setFechaHasta]   = useState('');
+  const [filterMoneda,  setFilterMoneda] = useState<'USD'|'PEN'|''>('');
+  const [filterPago,    setFilterPago]   = useState<'vencida'|'proxima'|'sin_fecha'|''>('');
 
   // ── Detail Panel ─────────────────────────────────────────────────────────
   const [selectedId,   setSelectedId]   = useState<string | null>(null);
   const [detail,       setDetail]       = useState<Comprobante | null>(null);
-  const [detailLoad,   setDetailLoad]   = useState(false);
+  const [detailLoad,     setDetailLoad]     = useState(false);
+  const [editFields,     setEditFields]     = useState<{
+    descripcion: string; montoTotal: string; moneda: string;
+    fechaRecibido: string; fechaPago: string; proveedorId: string; proveedorName: string;
+  } | null>(null);
+  const [editSaving,     setEditSaving]     = useState(false);
+  const [editProvOpts,   setEditProvOpts]   = useState<SupplierOption[]>([]);
+  const [editProvSearch, setEditProvSearch] = useState('');
+  const [reExtracting,   setReExtracting]   = useState(false);
 
   // ── New Comprobante Modal ─────────────────────────────────────────────────
   const [newModal,     setNewModal]     = useState(false);
@@ -283,6 +310,8 @@ export default function Comprobantes() {
       if (filterSource)  params.source       = filterSource;
       if (fechaDesde)    params.fechaDesde   = fechaDesde;
       if (fechaHasta)    params.fechaHasta   = fechaHasta;
+      if (filterMoneda)  params.moneda       = filterMoneda;
+      if (filterPago)    params.fechaPago     = filterPago;
 
       const res = await api.get('/v1/comprobantes', { params });
       setItems(res.data.data);
@@ -292,7 +321,7 @@ export default function Comprobantes() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, filterEstado, filterDoc, filterSource, fechaDesde, fechaHasta]);
+  }, [page, search, filterEstado, filterDoc, filterSource, fechaDesde, fechaHasta, filterMoneda, filterPago]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -317,8 +346,36 @@ export default function Comprobantes() {
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => {
     if (selectedId) loadDetail(selectedId);
-    else setDetail(null);
+    else { setDetail(null); setEditFields(null); }
   }, [selectedId, loadDetail]);
+
+  // Sync editFields whenever detail changes
+  useEffect(() => {
+    if (!detail) { setEditFields(null); return; }
+    const arch = detail.archivos[0];
+    setEditFields({
+      descripcion:   detail.descripcion,
+      montoTotal:    detail.montoTotal != null ? String(Number(detail.montoTotal)) : arch?.total != null ? String(Number(arch.total)) : '',
+      moneda:        detail.moneda ?? arch?.monedaDoc ?? 'PEN',
+      fechaRecibido: detail.fecha ? detail.fecha.slice(0, 10) : '',
+      fechaPago:     detail.fechaPago ? detail.fechaPago.slice(0, 10) : '',
+      proveedorId:   detail.proveedorId ?? '',
+      proveedorName: detail.proveedor?.businessName ?? (arch?.emisorNombre ?? ''),
+    });
+    setEditProvSearch(detail.proveedor?.businessName ?? (arch?.emisorNombre ?? ''));
+  }, [detail]);
+
+  // Supplier typeahead for edit panel
+  useEffect(() => {
+    if (editProvSearch.length < 2) { setEditProvOpts([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/v1/procurement/suppliers', { params: { search: editProvSearch, limit: 8 } });
+        setEditProvOpts(res.data.data ?? []);
+      } catch { setEditProvOpts([]); }
+    }, 280);
+    return () => clearTimeout(t);
+  }, [editProvSearch]);
 
   // ─────────────────────────────────────────────────────────────────────────
   //  PO Search
@@ -459,6 +516,37 @@ export default function Comprobantes() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const saveEdits = async () => {
+    if (!selectedId || !editFields) return;
+    setEditSaving(true);
+    try {
+      await api.patch(`/v1/comprobantes/${selectedId}`, {
+        descripcion: editFields.descripcion || undefined,
+        montoTotal:  editFields.montoTotal ? parseFloat(editFields.montoTotal) : null,
+        moneda:      editFields.moneda || undefined,
+        fecha:       editFields.fechaRecibido || undefined,
+        fechaPago:   editFields.fechaPago || null,
+        proveedorId: editFields.proveedorId || null,
+      });
+      toast.success('Guardado');
+      await loadItems();
+      await loadDetail(selectedId);
+    } catch { toast.error('Error al guardar'); }
+    finally { setEditSaving(false); }
+  };
+
+  const reExtract = async () => {
+    if (!selectedId) return;
+    setReExtracting(true);
+    try {
+      await api.post(`/v1/comprobantes/${selectedId}/re-extract`);
+      toast.success('Re-extraccion completada');
+      await loadDetail(selectedId);
+      await loadItems();
+    } catch { toast.error('Error al re-extraer'); }
+    finally { setReExtracting(false); }
   };
 
   const resetNewModal = () => {
@@ -650,9 +738,22 @@ export default function Comprobantes() {
         <span className="text-gray-400 text-xs">—</span>
         <input type="date" className="input text-sm" value={fechaHasta}
           onChange={e => { setFechaHasta(e.target.value); setPage(1); }} />
-        {(search || filterEstado || filterDoc || filterSource || fechaDesde || fechaHasta) && (
+        <select className="input text-sm w-32" value={filterMoneda}
+          onChange={e => { setFilterMoneda(e.target.value as 'USD'|'PEN'|''); setPage(1); }}>
+          <option value="">Moneda</option>
+          <option value="PEN">S/ PEN</option>
+          <option value="USD">$ USD</option>
+        </select>
+        <select className="input text-sm w-40" value={filterPago}
+          onChange={e => { setFilterPago(e.target.value as 'vencida'|'proxima'|'sin_fecha'|''); setPage(1); }}>
+          <option value="">F. Pago</option>
+          <option value="vencida">🔴 Vencidas</option>
+          <option value="proxima">🟡 Prox. 7 dias</option>
+          <option value="sin_fecha">Sin fecha pago</option>
+        </select>
+        {(search || filterEstado || filterDoc || filterSource || fechaDesde || fechaHasta || filterMoneda || filterPago) && (
           <button className="btn-secondary text-xs px-2 py-1.5"
-            onClick={() => { setSearch(''); setFilterEstado(''); setFilterDoc(''); setFilterSource(''); setFechaDesde(''); setFechaHasta(''); setPage(1); }}>
+            onClick={() => { setSearch(''); setFilterEstado(''); setFilterDoc(''); setFilterSource(''); setFechaDesde(''); setFechaHasta(''); setFilterMoneda(''); setFilterPago(''); setPage(1); }}>
             <X size={13} />
           </button>
         )}
@@ -682,6 +783,7 @@ export default function Comprobantes() {
                   <th className="text-left px-4 py-3">Documentos</th>
                   <th className="text-left px-4 py-3">Emisor</th>
                   <th className="text-right px-4 py-3">Monto</th>
+                  <th className="text-left px-4 py-3">F. Pago</th>
                   <th className="text-left px-4 py-3">Estado</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -754,6 +856,9 @@ export default function Comprobantes() {
                           (item.archivos[0]?.monedaDoc ?? item.moneda) as string,
                         )}
                       </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {(() => { const p = fmtPagoColor(item.fechaPago); return p.label ? <span className={p.cls}>{p.label}</span> : <span className="text-gray-300 text-xs">&#8212;</span>; })()}
+                      </td>
                       <td className="px-4 py-3">
                         <EstadoBadge estado={item.estado} />
                       </td>
@@ -809,30 +914,81 @@ export default function Comprobantes() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
-                  {/* Info */}
-                  <div className="px-4 py-3 space-y-1.5 text-xs border-b border-gray-100">
-                    {detail.montoTotal != null && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-500 flex items-center gap-1"><DollarSign size={11}/> Monto</span>
-                        <span className="font-semibold text-gray-900">{fmtMoney(detail.montoTotal, detail.moneda)}</span>
+                                    {/* Editable Fields */}
+                  {editFields && (
+                    <div className="px-4 py-3 space-y-2.5 border-b border-gray-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalle</p>
+                        <button
+                          onClick={reExtract}
+                          disabled={reExtracting}
+                          className="text-xs flex items-center gap-1 text-brand-600 hover:text-brand-700 disabled:opacity-50"
+                        >
+                          {reExtracting ? <><Loader2 size={11} className="animate-spin"/> Re-extrayendo...</> : <><ArrowUpDown size={11}/> Re-extraer PDF</>}
+                        </button>
                       </div>
-                    )}
-                    {detail.purchaseOrder && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-500 flex items-center gap-1"><ClipboardList size={11}/> OC</span>
-                        <span className="font-medium text-blue-600">{detail.purchaseOrder.poNumber}</span>
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Descripcion</label>
+                        <input className="input text-xs w-full mt-0.5" value={editFields.descripcion}
+                          onChange={e => setEditFields(f => f && ({ ...f, descripcion: e.target.value }))} />
                       </div>
-                    )}
-                    {detail.consolidacionRef && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-500 flex items-center gap-1"><Link2 size={11}/> Consolidación</span>
-                        <span className="font-medium text-purple-600">{detail.consolidacionRef}</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Monto</label>
+                          <input type="number" step="0.01" className="input text-xs w-full mt-0.5" value={editFields.montoTotal}
+                            onChange={e => setEditFields(f => f && ({ ...f, montoTotal: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Moneda</label>
+                          <select className="input text-xs w-full mt-0.5" value={editFields.moneda}
+                            onChange={e => setEditFields(f => f && ({ ...f, moneda: e.target.value }))}>
+                            <option value="PEN">S/ PEN</option>
+                            <option value="USD">$ USD</option>
+                          </select>
+                        </div>
                       </div>
-                    )}
-                    {detail.notas && (
-                      <div className="mt-1 p-2 bg-gray-50 rounded text-gray-600 text-xs">{detail.notas}</div>
-                    )}
-                  </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">F. Recibido</label>
+                          <input type="date" className="input text-xs w-full mt-0.5" value={editFields.fechaRecibido}
+                            onChange={e => setEditFields(f => f && ({ ...f, fechaRecibido: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">F. Pago</label>
+                          <input type="date" className={`input text-xs w-full mt-0.5 ${editFields.fechaPago ? fmtPagoColor(editFields.fechaPago).cls : ''}`} value={editFields.fechaPago}
+                            onChange={e => setEditFields(f => f && ({ ...f, fechaPago: e.target.value }))} />
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Emisor / Proveedor</label>
+                        <input className="input text-xs w-full mt-0.5" placeholder="Buscar proveedor..." value={editProvSearch}
+                          onChange={e => { setEditProvSearch(e.target.value); setEditFields(f => f && ({ ...f, proveedorId: '', proveedorName: e.target.value })); }} />
+                        {editProvOpts.length > 0 && (
+                          <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-36 overflow-y-auto">
+                            {editProvOpts.map(s => (
+                              <button key={s.id} className="w-full text-left px-3 py-2 text-xs hover:bg-brand-50 flex items-center justify-between"
+                                onClick={() => { setEditFields(f => f && ({ ...f, proveedorId: s.id, proveedorName: s.businessName })); setEditProvSearch(s.businessName); setEditProvOpts([]); }}>
+                                <span className="font-medium">{s.businessName}</span>
+                                <span className="text-gray-400">{s.ruc}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {editFields.proveedorId && <p className="text-[10px] text-green-600 mt-0.5 flex items-center gap-1"><CheckCircle2 size={10}/> Vinculado a proveedor</p>}
+                      </div>
+                      {detail.purchaseOrder && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400 flex items-center gap-1"><ClipboardList size={11}/> OC</span>
+                          <span className="font-medium text-blue-600">{detail.purchaseOrder.poNumber}</span>
+                        </div>
+                      )}
+                      {detail.notas && <div className="p-2 bg-gray-50 rounded text-gray-600 text-xs">{detail.notas}</div>}
+                      <button onClick={saveEdits} disabled={editSaving}
+                        className="w-full btn-primary text-xs py-1.5 flex items-center justify-center gap-1 disabled:opacity-50">
+                        {editSaving ? <><Loader2 size={12} className="animate-spin"/> Guardando...</> : 'Guardar cambios'}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Archivos */}
                   <div className="px-4 py-3">
