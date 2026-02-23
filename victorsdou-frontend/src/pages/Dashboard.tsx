@@ -590,6 +590,9 @@ export default function Dashboard() {
       case 'expiryAlerts':
         return wrap('expiryAlerts', <ExpiryAlertsCard />);
 
+      case 'tasks':
+        return wrap('tasks', <TasksCard month={month} />);
+
       default: return null;
     }
   };

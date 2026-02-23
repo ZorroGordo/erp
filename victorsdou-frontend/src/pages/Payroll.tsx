@@ -29,7 +29,8 @@ const EMPTY_EMP_FORM = {
   fullName: "", nombres: "", apellidoPaterno: "", apellidoMaterno: "",
   dni: "", birthDate: "", position: "", department: "",
   employmentType: "PLANILLA", contractType: "INDEFINIDO",
-  hireDate: "", baseSalary: "", pensionSystem: "AFP", afpName: "",
+  hireDate: "", contractEndDate: "", contractFileUrl: "",
+  baseSalary: "", pensionSystem: "AFP", afpName: "",
   seguroSalud: "ESSALUD",
   cuspp: "", email: "", bankAccount: "", bankName: "",
 };
@@ -174,6 +175,29 @@ function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (da
               <label className="block text-xs font-medium text-gray-600 mb-1">Banco</label>
               <input className="input" value={form.bankName} onChange={e => set("bankName", e.target.value)} />
             </div>
+          </div>
+
+          {/* ── Contrato ── */}
+          <div className="border-t border-gray-100 pt-4">
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Contrato</h4>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de expiración</label>
+                <input className="input" type="date" value={form.contractEndDate ?? ''} onChange={e => set("contractEndDate", e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">URL del contrato (PDF)</label>
+                <input className="input" type="url" placeholder="https://..." value={form.contractFileUrl ?? ''} onChange={e => set("contractFileUrl", e.target.value)} />
+              </div>
+            </div>
+            {form.contractFileUrl && (
+              <div className="mt-2">
+                <a href={form.contractFileUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-brand-600 hover:underline">
+                  <span>📄</span> Ver contrato adjunto
+                </a>
+              </div>
+            )}
           </div>
         </div>
         <div className="px-6 py-4 border-t flex gap-2 justify-end bg-gray-50 sticky bottom-0">
@@ -867,6 +891,7 @@ export default function Payroll() {
                     <th className="px-5 py-3 text-left">Cargo / Area</th>
                     <th className="px-5 py-3 text-right">Sueldo bruto</th>
                     <th className="px-5 py-3 text-left">Pension</th>
+                    <th className="px-5 py-3 text-left">Exp. contrato</th>
                     <th className="px-5 py-3 text-left">Estado</th>
                     <th className="px-5 py-3 text-right">Acciones</th>
                   </tr>
@@ -886,6 +911,18 @@ export default function Payroll() {
                         {e.employmentType === "RXH" ? <span className="text-gray-400 text-xs">N/A</span>
                           : <div><span className="badge bg-indigo-100 text-indigo-700 text-xs">{e.pensionSystem}</span>
                               {e.afpName && <p className="text-xs text-gray-400 mt-0.5">{e.afpName}</p>}</div>}
+                      </td>
+                      <td className="px-5 py-3">
+                        {e.contractEndDate ? (() => {
+                          const daysLeft = Math.ceil((new Date(e.contractEndDate).getTime() - Date.now()) / 86400000);
+                          const isUrgent = daysLeft < 60;
+                          return (
+                            <span className={"text-xs font-medium " + (isUrgent ? "text-red-600" : "text-gray-600")}>
+                              {new Date(e.contractEndDate).toLocaleDateString('es-PE')}
+                              {isUrgent && <span className="ml-1 badge bg-red-100 text-red-600">{daysLeft}d</span>}
+                            </span>
+                          );
+                        })() : <span className="text-xs text-gray-400">—</span>}
                       </td>
                       <td className="px-5 py-3">
                         <span className={"badge text-xs " + (e.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500")}>

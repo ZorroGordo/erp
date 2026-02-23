@@ -391,7 +391,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
                       onClick={() => addProductLine(p)}>
                       <span className="text-xs text-gray-400 font-mono w-16 flex-shrink-0 truncate">{p.sku}</span>
                       <span className="flex-1 text-sm font-medium text-gray-800 truncate">{p.name}</span>
-                      <span className="text-xs text-gray-500 flex-shrink-0">S/ {(p.basePricePen ?? 0).toFixed(2)}</span>
+                      <span className="text-xs text-gray-500 flex-shrink-0">S/ {(parseFloat(p.basePricePen ?? '0') || 0).toFixed(2)}</span>
                     </button>
                   ))}
                   {filteredProducts.length === 0 && (

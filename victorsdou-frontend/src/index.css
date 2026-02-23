@@ -45,16 +45,33 @@
   .table-container {
     @apply w-full relative;
     overflow-x: auto;
-    /* Stronger left/right scroll-shadow via background-attachment: local/scroll trick */
+    /* Visible left/right scroll shadows */
     background:
       linear-gradient(to right, white 30%, rgba(255,255,255,0)) left center,
-      linear-gradient(to right, rgba(0,0,0,0.12), rgba(0,0,0,0) 24px) left center,
+      linear-gradient(to right, rgba(0,0,0,0.08) 0%, rgba(99,109,78,0.18) 8px, rgba(0,0,0,0) 28px) left center,
       linear-gradient(to left,  white 30%, rgba(255,255,255,0)) right center,
-      linear-gradient(to left,  rgba(0,0,0,0.12), rgba(0,0,0,0) 24px) right center;
+      linear-gradient(to left,  rgba(0,0,0,0.08) 0%, rgba(99,109,78,0.18) 8px, rgba(0,0,0,0) 28px) right center;
     background-repeat: no-repeat;
     background-color: white;
-    background-size: 60px 100%, 24px 100%, 60px 100%, 24px 100%;
+    background-size: 60px 100%, 32px 100%, 60px 100%, 32px 100%;
     background-attachment: local, scroll, local, scroll;
+    /* Always show scrollbar so users can see the table is scrollable */
+    scrollbar-width: thin;
+    scrollbar-color: #8fa068 #f0f2ec;
+  }
+  .table-container::-webkit-scrollbar {
+    height: 6px;
+  }
+  .table-container::-webkit-scrollbar-track {
+    background: #f0f2ec;
+    border-radius: 3px;
+  }
+  .table-container::-webkit-scrollbar-thumb {
+    background: #8fa068;
+    border-radius: 3px;
+  }
+  .table-container::-webkit-scrollbar-thumb:hover {
+    background: #6b7e4c;
   }
   /* Scroll hint badge — shown via JS when table overflows */
   .scroll-hint {
