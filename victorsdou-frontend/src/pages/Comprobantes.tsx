@@ -541,7 +541,7 @@ export default function Comprobantes() {
     if (!selectedId) return;
     setReExtracting(true);
     try {
-      await api.post(`/v1/comprobantes/${selectedId}/re-extract`);
+      await api.post(`/v1/comprobantes/${selectedId}/re-extract`, {});
       toast.success('Re-extraccion completada');
       await loadDetail(selectedId);
       await loadItems();
