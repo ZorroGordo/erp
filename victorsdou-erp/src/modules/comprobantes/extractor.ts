@@ -171,9 +171,9 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
           const ocrResult = await extractFromImage(imgBuf.toString('base64'));
           if (Object.keys(ocrResult).length > 1) return ocrResult; // more than just monedaDoc
         }
-      } catch { /* screenshot unavailable — fall through */ }
+      } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
     }
-  } catch { /* pdf-parse/node unavailable — fall through to v1 */ }
+  } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
 
   // ── Attempt 2: pdf-parse v1 API (pdfParse(buffer) → { text }) ────────────
   if (!cleanText) {
@@ -187,7 +187,7 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
         cleanText   = (data.text ?? '').replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
         if (cleanText.length > 20) return extractTextHeuristics(cleanText);
       }
-    } catch { /* v1 also failed */ }
+    } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
   }
 
   return {};
@@ -241,7 +241,7 @@ export async function autoExtract(mimeType: string, dataBase64: string): Promise
     if (mimeType.startsWith('image/')) {
       return await extractFromImage(dataBase64);
     }
-  } catch { /* silent — extraction is always best-effort */ }
+  } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
   return {};
 }
 
