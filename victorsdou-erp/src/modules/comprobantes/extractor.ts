@@ -3,8 +3,8 @@
 //
 //  Supports:
 //    • SUNAT UBL 2.1 XML  (Facturas, Boletas, Notas, Guías)
-//    • PDF text heuristics (via pdf-parse v2)
-//    • Image OCR           (via tesseract.js — Spanish + English)
+//    • PDF text heuristics (via pdf-parse v2 Node build, with v1 API fallback)
+//    • Image OCR           (via tesseract.js — Spanish+English, eng fallback)
 //
 //  All functions are best-effort: failures return an empty object rather
 //  than throwing, so the calling code can always store the raw file even
@@ -135,73 +135,96 @@ function extractTextHeuristics(text: string): ExtractedDoc {
 }
 
 export async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
+  const buf = Buffer.from(b64, 'base64');
+  let cleanText = '';
+
+  // ── Attempt 1: pdf-parse v2 Node.js build ────────────────────────────────
+  // pdf-parse v2 ships a Node-specific CJS entry at 'pdf-parse/node'.
+  // The default '.' export is the cross-platform (browser) build which does
+  // NOT extract text in Node.js — always use the '/node' subpath on the server.
   try {
-    const { PDFParse } = _require('pdf-parse') as {
-      PDFParse: new (opts: { data: Uint8Array; password?: string }) => {
-        getText(): Promise<{ text: string }>;
-        getScreenshot(opts: { pages: number[]; width: number }): Promise<{
-          pages: Array<{ data: Record<number, number> }>;
-          total: number;
-        }>;
-      };
-    };
-    const buf    = Buffer.from(b64, 'base64');
-    const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
-    const { text } = await parser.getText();
-
-    // pdf-parse v2 wraps pages with "-- N of N --" separators.
-    // Strip them and see if real text remains.
-    const cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-
-    if (cleanText.length > 20) {
-      // Text-based PDF: run heuristics directly on the embedded text.
-      return extractTextHeuristics(cleanText);
-    }
-
-    // Image-based / scanned PDF: render page 1 to PNG then OCR it.
-    const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
-    const pageData = ss.pages[0]?.data;
-    if (!pageData) return {};
-
-    const imgBuf = Buffer.from(Object.values(pageData) as number[]);
-
-    const { createWorker } = _require('tesseract.js') as {
-      createWorker: (langs: string, oem?: number, opts?: Record<string, unknown>) => Promise<{
-        recognize(image: Buffer): Promise<{ data: { text: string } }>;
-        terminate(): Promise<void>;
+    const nodeModule = _require('pdf-parse/node');
+    // CJS interop: class may live at top-level or under .default
+    const PDFParse: (new (opts: { data: Uint8Array; password?: string }) => {
+      getText(): Promise<{ text: string }>;
+      getScreenshot(opts: { pages: number[]; width: number }): Promise<{
+        pages: Array<{ data: Record<number, number> }>;
+        total: number;
       }>;
-    };
-    const worker = await createWorker('spa+eng', 1, { errorHandler: () => {} });
-    const { data: { text: ocrText } } = await worker.recognize(imgBuf);
-    await worker.terminate();
-    return extractTextHeuristics(ocrText);
-  } catch {
-    return {};
+    }) | undefined = nodeModule.PDFParse ?? nodeModule.default?.PDFParse ?? nodeModule.default;
+
+    if (PDFParse && typeof PDFParse === 'function') {
+      const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
+      const { text } = await parser.getText();
+      cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
+
+      if (cleanText.length > 20) {
+        return extractTextHeuristics(cleanText);
+      }
+
+      // Image-based / scanned PDF: render page 1 to PNG then OCR it.
+      try {
+        const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
+        const pageData = ss.pages[0]?.data;
+        if (pageData) {
+          const imgBuf = Buffer.from(Object.values(pageData) as number[]);
+          const ocrResult = await extractFromImage(imgBuf.toString('base64'));
+          if (Object.keys(ocrResult).length > 1) return ocrResult; // more than just monedaDoc
+        }
+      } catch { /* screenshot unavailable — fall through */ }
+    }
+  } catch { /* pdf-parse/node unavailable — fall through to v1 */ }
+
+  // ── Attempt 2: pdf-parse v1 API (pdfParse(buffer) → { text }) ────────────
+  if (!cleanText) {
+    try {
+      const pdfMod  = _require('pdf-parse');
+      const pdfFn   = typeof pdfMod === 'function' ? pdfMod
+                    : typeof pdfMod.default === 'function' ? pdfMod.default
+                    : null;
+      if (pdfFn) {
+        const data  = await pdfFn(buf);
+        cleanText   = (data.text ?? '').replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
+        if (cleanText.length > 20) return extractTextHeuristics(cleanText);
+      }
+    } catch { /* v1 also failed */ }
   }
+
+  return {};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Image OCR extractor (tesseract.js v5 — Spanish + English)
+//  Image OCR extractor (tesseract.js v5 — Spanish + English, with eng fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 export async function extractFromImage(b64: string): Promise<ExtractedDoc> {
-  try {
-    const { createWorker } = _require('tesseract.js') as {
-      createWorker: (langs: string, oem?: number, opts?: Record<string, unknown>) => Promise<{
-        recognize(image: Buffer): Promise<{ data: { text: string } }>;
-        terminate(): Promise<void>;
-      }>;
-    };
-    // OEM 1 = LSTM only (faster / more accurate than legacy)
-    const worker = await createWorker('spa+eng', 1, { errorHandler: () => {} });
-    const imageBuffer = Buffer.from(b64, 'base64');
-    const { data: { text } } = await worker.recognize(imageBuffer);
-    await worker.terminate();
-    return extractTextHeuristics(text);
-  } catch {
-    // Tesseract not installed, WASM init failed, or language data unavailable —
-    // silently fall back to storing the image without extracted fields.
-    return {};
+  const imageBuffer = Buffer.from(b64, 'base64');
+
+  // Try spa+eng first (best quality for Peruvian invoices), fall back to eng
+  // if the Spanish language pack fails to download (common in Docker/Railway).
+  for (const langs of ['spa+eng', 'eng']) {
+    try {
+      const { createWorker } = _require('tesseract.js') as {
+        createWorker: (langs: string, oem?: number, opts?: Record<string, unknown>) => Promise<{
+          recognize(image: Buffer): Promise<{ data: { text: string } }>;
+          terminate(): Promise<void>;
+        }>;
+      };
+      // OEM 1 = LSTM only (faster / more accurate than legacy)
+      // cachePath: use /tmp so Docker containers can cache downloaded lang data
+      const worker = await createWorker(langs, 1, {
+        errorHandler: () => {},
+        cachePath: process.env.TESSDATA_PREFIX ?? '/tmp',
+      });
+      const { data: { text } } = await worker.recognize(imageBuffer);
+      await worker.terminate();
+      if (text?.trim().length > 10) return extractTextHeuristics(text);
+    } catch {
+      // Language data unavailable or WASM failed — try next lang set
+    }
   }
+
+  // Tesseract not installed or all lang attempts failed
+  return {};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
