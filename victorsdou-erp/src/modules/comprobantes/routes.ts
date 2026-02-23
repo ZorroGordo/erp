@@ -366,13 +366,27 @@ export async function comprobantesRoutes(app: FastifyInstance) {
       });
 
       // Kick off async extraction for all files
+      let bestDate: Date | undefined;
+      let bestTotal: number | undefined;
+      let bestMoneda: string | undefined;
       for (const arch of await prisma.comprobanteArchivo.findMany({ where: { comprobanteId: comprobante.id } })) {
         try {
           const extracted = await autoExtract(arch.mimeType, arch.dataBase64);
           if (Object.keys(extracted).length > 0) {
             await prisma.comprobanteArchivo.update({ where: { id: arch.id }, data: extracted as any });
           }
+          if (extracted.fechaEmision && !bestDate)   bestDate   = extracted.fechaEmision;
+          if (extracted.total        && !bestTotal)  bestTotal  = extracted.total;
+          if (extracted.monedaDoc    && !bestMoneda) bestMoneda = extracted.monedaDoc;
         } catch { /* best-effort */ }
+      }
+      // Propagate extracted metadata to parent Comprobante
+      const mailgunUpdates: Record<string, unknown> = {};
+      if (bestDate)   mailgunUpdates.fecha      = bestDate;
+      if (bestTotal)  mailgunUpdates.montoTotal  = bestTotal;
+      if (bestMoneda) mailgunUpdates.moneda      = bestMoneda;
+      if (Object.keys(mailgunUpdates).length > 0) {
+        await prisma.comprobante.update({ where: { id: comprobante.id }, data: mailgunUpdates }).catch(() => {});
       }
 
       return reply.code(200).send({ ok: true, created: true, id: comprobante.id });

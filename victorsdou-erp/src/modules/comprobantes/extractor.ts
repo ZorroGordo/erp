@@ -85,26 +85,43 @@ export function extractFromSunatXml(xml: string): ExtractedDoc {
 //  Text heuristics (used by both PDF and OCR paths)
 // ─────────────────────────────────────────────────────────────────────────────
 function extractTextHeuristics(text: string): ExtractedDoc {
+  // Normalise whitespace
+  const t = text.replace(/[ \t]+/g, ' ');
+
   // Serie-correlativo: F001-00001234 or B001-12345678
-  const numM = text.match(/\b([A-Z]\d{3}-\d{4,8})\b/);
+  const numM = t.match(/\b([A-Z]\d{3}-\d{4,8})\b/);
   const num  = numM?.[1];
   let serie: string | undefined, correlativo: string | undefined;
   if (num) { const p = num.split('-'); serie = p[0]; correlativo = p[1]; }
 
   // RUC (11 digits starting with 20 or 10)
-  const rucM = text.match(/(?:RUC|R\.U\.C\.)\s*[:\s#]?\s*((?:20|10)\d{9})/i);
+  const rucM = t.match(/(?:RUC|R\.U\.C\.)[\s:#]*((?:20|10)\d{9})/i);
   const ruc  = rucM?.[1];
 
-  // Date: DD/MM/YYYY or DD-MM-YYYY
-  const dateM = text.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
+  // Date: prefer labelled emission date, then any DD/MM/YYYY
+  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[o\xf3]n|emitido)[^\d]{0,20}(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/i);
+  const anyM = t.match(/(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/);
   let fecha: Date | undefined;
-  if (dateM) fecha = new Date(`${dateM[3]}-${dateM[2]}-${dateM[1]}`);
+  const dm = emM ?? anyM;
+  if (dm) {
+    const [d, m, y] = emM ? [emM[1], emM[2], emM[3]] : [dm[1], dm[2], dm[3]];
+    const dt = new Date(`${y}-${m}-${d}`);
+    if (!isNaN(dt.getTime())) fecha = dt;
+  }
 
-  // Currency amounts
-  const totalM = text.match(/(?:TOTAL[^\n]*?|IMPORTE TOTAL[^\n]*?)\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-  const igvM   = text.match(/(?:IGV|I\.G\.V\.)[^\n]*?\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-  const baseM  = text.match(/(?:SUB[- ]TOTAL|BASE IMPONIBLE)[^\n]*?\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-  const parse  = (s?: string) => s ? parseFloat(s.replace(/,/g, '')) : undefined;
+  const parse = (s?: string) => (s ? parseFloat(s.replace(/,/g, '')) : undefined);
+
+  const totalM =
+    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d\n]{0,30}(\d[\d,]*\.\d{2})/i) ??
+    t.match(/\bTOTAL\b[^\d\n]{0,20}(?:S\/\.?\s*|PEN\s*)?(\d[\d,]*\.\d{2})/i);
+
+  const igvM =
+    t.match(/(?:IGV|I\.G\.V\.|18%)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+
+  const baseM =
+    t.match(/(?:SUB\s*-?\s*TOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+
+  const moneda = /\b(USD|US\$|D[O\xd3]LARES)\b/i.test(t) ? 'USD' : 'PEN';
 
   return {
     serie, correlativo, numero: num,
@@ -113,13 +130,10 @@ function extractTextHeuristics(text: string): ExtractedDoc {
     total:    parse(totalM?.[1]),
     igv:      parse(igvM?.[1]),
     subtotal: parse(baseM?.[1]),
-    monedaDoc: text.includes('USD') ? 'USD' : 'PEN',
+    monedaDoc: moneda,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PDF extractor (pdf-parse v2)
-// ─────────────────────────────────────────────────────────────────────────────
 export async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
   try {
     const { PDFParse } = _require('pdf-parse') as {

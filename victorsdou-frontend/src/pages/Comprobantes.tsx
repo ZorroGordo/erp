@@ -698,7 +698,9 @@ export default function Comprobantes() {
                       className={`border-b border-gray-50 cursor-pointer transition-colors hover:bg-gray-50
                         ${isSelected ? 'bg-brand-50 border-l-2 border-l-brand-500' : ''}`}
                     >
-                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{fmtDate(item.fecha)}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                        <div>{fmtDate(item.archivos[0]?.fechaEmision ?? item.fecha)}</div>
+                      </td>
                       <td className="px-4 py-3 max-w-xs">
                         <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
                           {item.tipoDoc && <DocTypeBadge type={item.tipoDoc} />}
@@ -747,7 +749,10 @@ export default function Comprobantes() {
                       </td>
                       <td className="px-4 py-3 text-gray-600 max-w-[160px] truncate">{emisor}</td>
                       <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
-                        {fmtMoney(item.montoTotal, item.moneda)}
+                        {fmtMoney(
+                          item.montoTotal ?? (item.archivos[0]?.total as number | null) ?? null,
+                          (item.archivos[0]?.monedaDoc ?? item.moneda) as string,
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <EstadoBadge estado={item.estado} />
@@ -906,32 +911,38 @@ export default function Comprobantes() {
                   </div>
                 </div>
 
-                {/* Panel Actions */}
-                <div className="border-t border-gray-100 px-4 py-3 flex flex-wrap gap-2">
-                  {detail.estado === 'PENDIENTE' && (
-                    <button className="btn-primary text-xs py-1.5 flex items-center gap-1"
-                      onClick={() => updateEstado(detail.id, 'VALIDADO')}>
-                      <CheckCircle2 size={13}/> Validar
-                    </button>
-                  )}
-                  {detail.estado === 'PENDIENTE' && (
-                    <button className="btn-secondary text-xs py-1.5 flex items-center gap-1"
-                      onClick={() => updateEstado(detail.id, 'OBSERVADO')}>
-                      <AlertCircle size={13}/> Observar
-                    </button>
-                  )}
-                  {detail.estado === 'VALIDADO' && (
-                    <button className="btn-secondary text-xs py-1.5 flex items-center gap-1"
-                      onClick={() => updateEstado(detail.id, 'PENDIENTE')}>
-                      <ArrowUpDown size={13}/> Revertir
-                    </button>
-                  )}
-                  {detail.estado !== 'ANULADO' && (
-                    <button className="btn-secondary text-xs py-1.5 flex items-center gap-1 ml-auto text-red-500 hover:text-red-700"
-                      onClick={() => handleDelete(detail.id)}>
-                      <Trash2 size={13}/> Eliminar
-                    </button>
-                  )}
+              {/* Panel Actions */}
+                <div className="border-t border-gray-100 px-4 py-3 space-y-2.5">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-1.5">Estado</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(Object.keys(ESTADO_CONFIG) as Estado[]).map(e => {
+                        const { label, cls, icon: Icon } = ESTADO_CONFIG[e];
+                        const isActive = detail.estado === e;
+                        return (
+                          <button
+                            key={e}
+                            disabled={isActive}
+                            onClick={() => !isActive && updateEstado(detail.id, e)}
+                            className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-full transition-all ${
+                              isActive
+                                ? `${cls} ring-2 ring-offset-1 ring-current`
+                                : 'border border-gray-200 text-gray-500 bg-white hover:border-gray-300 hover:text-gray-700'
+                            }`}
+                          >
+                            <Icon size={11} />
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <button
+                    className="w-full text-xs py-1.5 flex items-center justify-center gap-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    onClick={() => handleDelete(detail.id)}
+                  >
+                    <Trash2 size={13} /> Eliminar comprobante
+                  </button>
                 </div>
               </>
             ) : null}
