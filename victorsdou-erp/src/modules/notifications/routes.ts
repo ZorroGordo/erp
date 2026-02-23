@@ -144,7 +144,7 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
           const parsed = await simpleParser(rawBuffer, { skipTextToHtml: true });
 
           const fromText   = parsed.from?.text ?? 'desconocido';
-          const toText     = parsed.to?.text   ?? '';
+          const toText     = Array.isArray(parsed.to) ? parsed.to.map((a: any) => a.text).join(', ') : (parsed.to?.text ?? '');
           const subject    = parsed.subject    ?? '(sin asunto)';
           const allAttachments = parsed.attachments ?? [];
 
