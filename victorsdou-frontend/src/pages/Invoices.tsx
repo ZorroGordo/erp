@@ -9,7 +9,7 @@ import { useState, useRef, useEffect } from 'react';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type DocType      = 'FACTURA' | 'BOLETA';
+type DocType      = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO';
 type InvoiceStatus= 'DRAFT' | 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'VOIDED';
 
 interface Invoice {
@@ -22,16 +22,17 @@ interface Customer {
   id: string; displayName: string; docType: string; docNumber: string;
   email?: string; type: string;
 }
-interface LineItem { description: string; qty: number; unitPrice: number; igvRate: number }
+interface LineItem { description: string; qty: number; unitPrice: number; igvRate: number; discountPct: number }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const calcLine = (l: LineItem) => {
-  const sub = round2(l.qty * l.unitPrice);
+  const effPrice = round2(l.unitPrice * (1 - (l.discountPct ?? 0) / 100));
+  const sub = round2(l.qty * effPrice);
   const igv = round2(sub * l.igvRate);
   return { sub, igv, total: round2(sub + igv) };
 };
-const BLANK_LINE: LineItem = { description: '', qty: 1, unitPrice: 0, igvRate: 0.18 };
+const BLANK_LINE: LineItem = { description: '', qty: 1, unitPrice: 0, igvRate: 0.18, discountPct: 0 };
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 function StatusBadge({ status, reason }: { status: InvoiceStatus; reason?: string }) {
@@ -128,6 +129,8 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
 
   // Lines
   const [lines, setLines] = useState<LineItem[]>([{ ...BLANK_LINE }]);
+  // Master discount
+  const [masterDiscountPct, setMasterDiscountPct] = useState(0);
   // Product catalog search
   const [productSearch, setProductSearch] = useState('');
   const [productDropdownOpen, setProductDropdownOpen] = useState(false);
@@ -150,15 +153,22 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   function addProductLine(product: any) {
-    setLines(ls => [...ls, { description: product.name, qty: 1, unitPrice: parseFloat(product.basePricePen ?? '0') || 0, igvRate: 0.18 }]);
+    setLines(ls => [...ls, { description: product.name, qty: 1, unitPrice: parseFloat(product.basePricePen ?? '0') || 0, igvRate: 0.18, discountPct: 0 }]);
     setProductSearch('');
     setProductDropdownOpen(false);
   }
 
-  const totals = {
+  const rawTotals = {
     sub:   round2(lines.reduce((s, l) => s + calcLine(l).sub,   0)),
     igv:   round2(lines.reduce((s, l) => s + calcLine(l).igv,   0)),
     total: round2(lines.reduce((s, l) => s + calcLine(l).total, 0)),
+  };
+  const masterFactor = 1 - (masterDiscountPct > 0 ? masterDiscountPct / 100 : 0);
+  const totals = {
+    sub:        round2(rawTotals.sub   * masterFactor),
+    igv:        round2(rawTotals.igv   * masterFactor),
+    total:      round2(rawTotals.total * masterFactor),
+    masterDisc: masterDiscountPct > 0 ? round2(rawTotals.total * (masterDiscountPct / 100)) : 0,
   };
 
   const updateLine = (i: number, patch: Partial<LineItem>) =>
@@ -200,7 +210,13 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
         entityDocNo: entityDocNo.trim(),
         entityName:  entityName.trim(),
         entityEmail: entityEmail.trim() || undefined,
-        items: lines.map(l => ({ description: l.description, qty: l.qty, unitPrice: l.unitPrice, igvRate: l.igvRate })),
+        items: lines.map(l => ({
+          description: l.description,
+          qty: l.qty,
+          // Apply per-line + master discount to the unit price sent to backend
+          unitPrice: round2(l.unitPrice * (1 - (l.discountPct ?? 0) / 100) * masterFactor),
+          igvRate: l.igvRate,
+        })),
       }).then(async (r) => {
         if (emitAfter) await api.post(`/v1/invoices/${r.data.data.id}/emit`);
         return r.data.data;
@@ -213,7 +229,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
     onError: (e: any) => toast.error(e?.response?.data?.detail ?? e?.response?.data?.error ?? e?.message ?? 'Error'),
   });
 
-  const isFactura = docType === 'FACTURA';
+  const isFactura = docType === 'FACTURA' || docType === 'NOTA_CREDITO';
   const linesValid = lines.every(l => l.description.trim() && l.qty > 0 && l.unitPrice >= 0);
   const canSave = linesValid && (
     isFactura
@@ -248,16 +264,21 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
           {/* Doc type toggle */}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tipo de documento</label>
-            <div className="flex gap-2">
-              {(['FACTURA', 'BOLETA'] as DocType[]).map(dt => (
+            <div className="flex gap-2 flex-wrap">
+              {([
+                ['FACTURA',      '📄 Factura (01)'],
+                ['BOLETA',       '🧾 Boleta (03)'],
+                ['NOTA_CREDITO', '📋 Nota Crédito (07)'],
+              ] as [DocType, string][]).map(([dt, label]) => (
                 <button key={dt} onClick={() => { setDocType(dt); clearEntity(); setClientMode('search'); }}
                   className={`px-4 py-2 rounded-xl text-sm font-medium border transition-all ${docType === dt ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-brand-200 hover:bg-brand-50'}`}>
-                  {dt === 'FACTURA' ? '📄 Factura (01)' : '🧾 Boleta de Venta (03)'}
+                  {label}
                 </button>
               ))}
             </div>
             {isFactura && <p className="text-xs text-amber-600 mt-1.5">Factura: requiere RUC del receptor. Otorga crédito fiscal IGV al cliente.</p>}
-            {!isFactura && <p className="text-xs text-blue-500 mt-1.5">Boleta: para consumidores finales. El receptor es opcional (anónimo).</p>}
+            {docType === 'BOLETA' && <p className="text-xs text-blue-500 mt-1.5">Boleta: para consumidores finales. El receptor es opcional (anónimo).</p>}
+            {docType === 'NOTA_CREDITO' && <p className="text-xs text-purple-600 mt-1.5">Nota de Crédito: anula o reduce el monto de una factura o boleta emitida.</p>}
           </div>
 
           {/* ── Client section ── */}
@@ -403,15 +424,15 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
 
             <div className="space-y-2">
               {/* Header */}
-              <div className="grid grid-cols-[1fr_80px_110px_80px_90px_30px] gap-2 px-1 text-xs text-gray-400 font-medium uppercase tracking-wide">
+              <div className="grid grid-cols-[1fr_70px_110px_60px_80px_90px_30px] gap-2 px-1 text-xs text-gray-400 font-medium uppercase tracking-wide">
                 <span>Descripción</span><span className="text-right">Cant.</span><span className="text-right">P. Unit (sin IGV)</span>
-                <span className="text-right">IGV</span><span className="text-right">Total</span><span />
+                <span className="text-right">Dsc.%</span><span className="text-right">IGV</span><span className="text-right">Total</span><span />
               </div>
 
               {lines.map((line, i) => {
-                const { sub, igv, total } = calcLine(line);
+                const { sub: _sub, igv, total } = calcLine(line);
                 return (
-                  <div key={i} className="grid grid-cols-[1fr_80px_110px_80px_90px_30px] gap-2 items-center">
+                  <div key={i} className="grid grid-cols-[1fr_70px_110px_60px_80px_90px_30px] gap-2 items-center">
                     <input className="border border-brand-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-brand-300 w-full"
                       placeholder="Descripción del producto/servicio"
                       value={line.description}
@@ -424,8 +445,13 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
                       className="border border-brand-200 rounded-lg px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-brand-300 w-full"
                       value={line.unitPrice}
                       onChange={e => updateLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} />
+                    <input type="number" min={0} max={100} step={0.5}
+                      className="border border-brand-200 rounded-lg px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-brand-300 w-full"
+                      placeholder="0"
+                      value={line.discountPct || ''}
+                      onChange={e => updateLine(i, { discountPct: Math.min(100, parseFloat(e.target.value) || 0) })} />
                     <p className="text-sm text-right text-gray-500 font-mono">S/{igv.toFixed(2)}</p>
-                    <p className="text-sm text-right font-semibold font-mono text-gray-800">S/{total.toFixed(2)}</p>
+                    <p className={`text-sm text-right font-semibold font-mono ${(line.discountPct ?? 0) > 0 ? 'text-brand-700' : 'text-gray-800'}`}>S/{total.toFixed(2)}</p>
                     <button onClick={() => setLines(ls => ls.filter((_, idx) => idx !== i))}
                       disabled={lines.length === 1}
                       className="text-gray-300 hover:text-red-400 disabled:opacity-20 transition-colors flex items-center justify-center">
@@ -437,9 +463,27 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Totals */}
-            <div className="mt-4 ml-auto w-64 space-y-1.5 border-t border-gray-100 pt-3">
+            <div className="mt-4 ml-auto w-72 space-y-1.5 border-t border-gray-100 pt-3">
               <div className="flex justify-between text-sm text-gray-500">
-                <span>Subtotal (sin IGV)</span><span className="font-mono">S/ {totals.sub.toFixed(2)}</span>
+                <span>Subtotal (sin IGV)</span><span className="font-mono">S/ {rawTotals.sub.toFixed(2)}</span>
+              </div>
+              {/* Master discount */}
+              <div className="flex items-center justify-between text-sm text-gray-500 gap-2">
+                <span className="flex items-center gap-1.5 flex-shrink-0">
+                  Descuento global
+                  <input type="number" min={0} max={100} step={0.5} placeholder="0"
+                    className="border border-brand-200 rounded-md px-1.5 py-0.5 text-xs text-right w-14 outline-none focus:ring-1 focus:ring-brand-300"
+                    value={masterDiscountPct || ''}
+                    onChange={e => setMasterDiscountPct(Math.min(100, parseFloat(e.target.value) || 0))} />
+                  <span className="text-xs">%</span>
+                </span>
+                {totals.masterDisc > 0
+                  ? <span className="font-mono text-red-500">- S/ {totals.masterDisc.toFixed(2)}</span>
+                  : <span className="font-mono text-gray-300">—</span>
+                }
+              </div>
+              <div className="flex justify-between text-sm text-gray-500">
+                <span>Subtotal neto</span><span className="font-mono">S/ {totals.sub.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm text-gray-500">
                 <span>IGV (18%)</span><span className="font-mono">S/ {totals.igv.toFixed(2)}</span>
@@ -527,7 +571,7 @@ export default function Invoices() {
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-semibold hover:bg-brand-700 transition-all shadow-sm"
         >
-          <Plus size={16} /> Nueva factura / boleta
+          <Plus size={16} /> Nuevo comprobante
         </button>
       </div>
 

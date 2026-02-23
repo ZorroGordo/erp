@@ -61,6 +61,37 @@ export async function accountingRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: entry });
   });
 
+  // ── POST /v1/accounting/journal-entries/bulk-import ────────────────────────
+  // Bulk-import historical journal entries (from Excel upload on the frontend)
+  app.post('/journal-entries/bulk-import', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR')] }, async (req, reply) => {
+    const { entries: rows } = req.body as {
+      entries: Array<{
+        entryDate: string;
+        description: string;
+        sourceModule?: string;
+        lines: Array<{ accountCode: string; debit?: number; credit?: number; description?: string }>;
+      }>;
+    };
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return reply.code(400).send({ error: 'entries array is required' });
+    }
+    const created: any[] = [];
+    const errors: { row: number; message: string }[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        const entry = await AccountingService.postJournalEntry(
+          { ...row, sourceModule: row.sourceModule ?? 'MANUAL_IMPORT', entryDate: new Date(row.entryDate) },
+          req.actor!.sub,
+        );
+        created.push(entry);
+      } catch (err: any) {
+        errors.push({ row: i + 1, message: err?.message ?? 'Error' });
+      }
+    }
+    return reply.code(201).send({ created: created.length, errors, total: rows.length });
+  });
+
   app.get('/periods', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR')] }, async (_req, reply) => {
     const periods = await prisma.accountingPeriod.findMany({ orderBy: [{ year: 'desc' }, { month: 'desc' }] });
     return reply.send({ data: periods });

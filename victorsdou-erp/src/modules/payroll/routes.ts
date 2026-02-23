@@ -492,4 +492,21 @@ export async function payrollRoutes(app: FastifyInstance) {
 
     return reply.send({ data: { ...updated, emailSentAt } });
   });
+
+  // ── POST /v1/payroll/payslips/:id/unpay ────────────────────────────────────
+  // Revert a PAID payslip back to CONFIRMED (e.g. marked paid by mistake)
+  app.post('/payslips/:id/unpay', {
+    preHandler: [requireAnyOf('FINANCE_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await prisma.payslip.findUnique({ where: { id } });
+    if (!existing) return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (existing.status !== 'PAID') return reply.code(400).send({ error: 'Payslip is not PAID' });
+
+    const updated = await prisma.payslip.update({
+      where: { id },
+      data: { status: 'CONFIRMED', paidAt: null, paidBy: null },
+    });
+    return reply.send({ data: updated });
+  });
 }

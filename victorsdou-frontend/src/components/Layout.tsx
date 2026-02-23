@@ -38,6 +38,14 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const canGoBack = location.key !== 'default';
+  const PATH_LABELS: Record<string, string> = {
+    dashboard: 'Dashboard', inventory: 'Inventario', products: 'Productos',
+    customers: 'Clientes', sales: 'Ventas', production: 'Producción',
+    procurement: 'Compras', delivery: 'Despacho', payroll: 'Trabajadores',
+    accounting: 'Contabilidad', invoices: 'Facturación', comprobantes: 'Comprobantes',
+    ai: 'IA Forecast', settings: 'Configuración',
+  };
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarHover, setSidebarHover] = useState(false);
   const [emailPendientes, setEmailPendientes] = useState(0);
@@ -108,7 +116,7 @@ export default function Layout() {
         )}
 
         {/* Navigation */}
-        <nav className="flex-1 py-4 overflow-y-auto flex flex-col">
+        <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden flex flex-col">
           <div className="flex-1">
             {visibleNav.map(({ to, label, icon: Icon }) => {
               const badge = to === '/comprobantes' && emailPendientes > 0 ? emailPendientes : 0;
@@ -221,8 +229,8 @@ export default function Layout() {
               </button>
             )}
             <ChevronRight size={14} className="text-gray-300" />
-            <span className="text-gray-900 font-medium capitalize">
-              {location.pathname.split('/')[1] || 'Dashboard'}
+            <span className="text-gray-900 font-medium">
+              {PATH_LABELS[location.pathname.split('/')[1]] ?? (location.pathname.split('/')[1] || 'Dashboard')}
             </span>
           </div>
           <div className="text-xs text-gray-400">

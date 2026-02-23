@@ -102,18 +102,29 @@ function StatCard({ icon: Icon, label, value, sub, color, to }: any) {
 
 // ── IncomeCard ────────────────────────────────────────────────────────────────
 function IncomeCard({ month, customerType }: { month: string; customerType: 'all' | 'B2B' | 'B2C' }) {
+  const prevMonth = shiftMonth(month, -1);
+  const qs = (m: string) => `/v1/invoices/summary?month=${m}${customerType !== 'all' ? `&customerType=${customerType}` : ''}`;
+
   const { data, isLoading } = useQuery({
     queryKey: ['invoice-summary', month, customerType],
-    queryFn: () =>
-      api.get(`/v1/invoices/summary?month=${month}${customerType !== 'all' ? `&customerType=${customerType}` : ''}`)
-        .then(r => r.data.data),
+    queryFn: () => api.get(qs(month)).then(r => r.data.data),
   });
-  const total    = data?.totalIncome        ?? 0;
-  const subtotal = data?.subtotal           ?? 0;
-  const igv      = data?.igv                ?? 0;
-  const count    = data?.invoiceCount       ?? 0;
-  const factura  = data?.breakdown?.factura ?? 0;
-  const boleta   = data?.breakdown?.boleta  ?? 0;
+  const { data: prevData } = useQuery({
+    queryKey: ['invoice-summary', prevMonth, customerType],
+    queryFn: () => api.get(qs(prevMonth)).then(r => r.data.data),
+  });
+
+  const total     = data?.totalIncome        ?? 0;
+  const subtotal  = data?.subtotal           ?? 0;
+  const igv       = data?.igv                ?? 0;
+  const count     = data?.invoiceCount       ?? 0;
+  const factura   = data?.breakdown?.factura ?? 0;
+  const boleta    = data?.breakdown?.boleta  ?? 0;
+  const prevTotal = prevData?.totalIncome    ?? 0;
+  const pctChange = prevTotal > 0 ? ((total - prevTotal) / prevTotal * 100) : null;
+  const [prevY, prevMo] = prevMonth.split('-').map(Number);
+  const prevLabel = new Date(prevY, prevMo - 1, 1).toLocaleDateString('es-PE', { month: 'short', year: '2-digit' });
+
   return (
     <div className="card p-5 flex items-start gap-4">
       <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-emerald-500">
@@ -125,6 +136,15 @@ function IncomeCard({ month, customerType }: { month: string; customerType: 'all
           ? <p className="text-2xl font-bold text-gray-300 tabular-nums animate-pulse">—</p>
           : <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtMoney(total)}</p>
         }
+        {/* Prior-month comparison */}
+        {!isLoading && pctChange !== null && (
+          <p className={`text-xs font-medium mt-0.5 ${pctChange >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+            {pctChange >= 0 ? '▲' : '▼'} {Math.abs(pctChange).toFixed(1)}% vs {prevLabel}
+          </p>
+        )}
+        {!isLoading && pctChange === null && (
+          <p className="text-xs text-gray-400 mt-0.5">Sin datos mes anterior</p>
+        )}
         <p className="text-xs text-gray-400 mt-1">
           Sin IGV:&nbsp;<span className="font-medium text-gray-600">{fmtMoney(subtotal)}</span>
           &ensp;·&ensp;
@@ -741,10 +761,12 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Top cards — full width */}
-      <div className="space-y-4">
-        {visibleTop.map(c => renderCard(c))}
-      </div>
+      {/* Top cards — 2-col grid (income half-width alongside kpis) */}
+      {visibleTop.length > 0 && (
+        <div className={visibleTop.length === 1 ? 'space-y-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6 items-start'}>
+          {visibleTop.map(c => renderCard(c))}
+        </div>
+      )}
 
       {/* Bottom cards — 2-col grid */}
       {visibleBottom.length > 0 && (

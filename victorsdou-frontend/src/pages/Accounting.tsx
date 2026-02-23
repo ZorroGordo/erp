@@ -789,6 +789,96 @@ function JournalEntriesTab({ year, month }: { year: number; month: number }) {
   );
 }
 
+// ─── Excel/CSV Historical Import Button ──────────────────────────────────────
+// Accepts CSV files (save the template as CSV from Excel before importing)
+function parseCsv(text: string): Record<string, string>[] {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/["""]/g, ''));
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(',');
+    if (parts.every(p => !p.trim())) continue;
+    const row: Record<string, string> = {};
+    headers.forEach((h, idx) => { row[h] = (parts[idx] ?? '').trim().replace(/^"|"$/g, ''); });
+    rows.push(row);
+  }
+  return rows;
+}
+
+function ExcelImportButton() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      if (rows.length === 0) { toast.error('El archivo no tiene datos o no tiene formato CSV'); return; }
+
+      // Expected columns (case-insensitive): fecha, descripcion, modulo, cuenta_debito, debito, cuenta_credito, credito
+      const get = (row: Record<string, string>, ...keys: string[]) => {
+        for (const k of keys) { if (row[k] !== undefined && row[k] !== '') return row[k]; }
+        return '';
+      };
+
+      // Group rows into entries by fecha+descripcion
+      const entriesMap = new Map<string, any>();
+      for (const row of rows) {
+        const fecha = get(row, 'fecha', 'date', 'entry_date');
+        const desc  = get(row, 'descripcion', 'descripción', 'description', 'glosa');
+        const mod   = get(row, 'modulo', 'módulo', 'module') || 'MANUAL_IMPORT';
+        const key   = `${fecha}||${desc}`;
+        if (!entriesMap.has(key)) {
+          entriesMap.set(key, { entryDate: fecha, description: String(desc), sourceModule: String(mod), lines: [] });
+        }
+        const entry = entriesMap.get(key);
+        const cuentaDeb = get(row, 'cuenta_debito', 'cuentadebito', 'debit_account', 'cuenta debito').trim();
+        const cuentaCre = get(row, 'cuenta_credito', 'cuentacredito', 'credit_account', 'cuenta credito').trim();
+        const debit  = parseFloat(get(row, 'debito', 'débito', 'debit', 'debe')) || 0;
+        const credit = parseFloat(get(row, 'credito', 'crédito', 'credit', 'haber')) || 0;
+        if (cuentaDeb && debit  > 0) entry.lines.push({ accountCode: cuentaDeb, debit,  description: String(desc) });
+        if (cuentaCre && credit > 0) entry.lines.push({ accountCode: cuentaCre, credit, description: String(desc) });
+      }
+
+      const entries = Array.from(entriesMap.values()).filter(e => e.lines.length > 0);
+      if (entries.length === 0) {
+        toast.error('No se encontraron asientos válidos. Verifica que el CSV tenga las columnas: fecha, descripcion, cuenta_debito, debito, cuenta_credito, credito');
+        return;
+      }
+
+      const res = await api.post('/v1/accounting/journal-entries/bulk-import', { entries });
+      const { created, errors, total } = res.data;
+      if (errors?.length > 0) {
+        toast(`Importados ${created}/${total} asientos. ${errors.length} con error.`, { icon: '⚠️' });
+      } else {
+        toast.success(`✅ ${created} asiento${created !== 1 ? 's' : ''} histórico${created !== 1 ? 's' : ''} importado${created !== 1 ? 's' : ''}`);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Error al importar el archivo');
+    } finally { setImporting(false); }
+  };
+
+  return (
+    <>
+      <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFile} />
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={importing}
+        className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-60 transition-all shadow-sm"
+        title="Importa asientos históricos desde CSV (guarda la plantilla como CSV desde Excel)"
+      >
+        {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+        Importar CSV
+      </button>
+    </>
+  );
+}
+
 // ─── Main Accounting Component ────────────────────────────────────────────────
 export default function Accounting() {
   const [activeTab, setActiveTab] = useState<TopTab>('financials');
@@ -992,6 +1082,16 @@ export default function Accounting() {
   const fmtS = (v: any, currency = 'PEN') =>
     `${currency === 'USD' ? 'US$' : 'S/'} ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}`;
 
+  // ── Price / provider notification banner ───────────────────────────────────
+  const PRICE_NOTIF_KEY = 'vos_price_notif_dismissed';
+  const [priceNotifVisible, setPriceNotifVisible] = useState(() => {
+    try { return !localStorage.getItem(PRICE_NOTIF_KEY); } catch { return true; }
+  });
+  const dismissPriceNotif = () => {
+    try { localStorage.setItem(PRICE_NOTIF_KEY, '1'); } catch {}
+    setPriceNotifVisible(false);
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
   const TOP_TABS = [
     { id: 'financials' as TopTab,     label: 'Estados Financieros', icon: BarChart3  },
@@ -1019,16 +1119,36 @@ export default function Accounting() {
           <h1 className="text-2xl font-bold text-gray-900">Contabilidad</h1>
           <p className="text-sm text-gray-500">Estados financieros PCGE · NIC/NIIF · Asientos y conciliación bancaria</p>
         </div>
-        <a
-          href="/plantilla_contable_historicos.xlsx"
-          download="Plantilla_Contable_Historicos.xlsx"
-          className="flex items-center gap-2 px-4 py-2 bg-white border border-brand-200 rounded-xl text-sm font-medium text-brand-700 hover:bg-brand-50 hover:border-brand-400 transition-all shadow-sm"
-          title="Descarga la plantilla Excel para importar asientos históricos de años anteriores"
-        >
-          <Download size={15} />
-          Descargar plantilla históricos
-        </a>
+        <div className="flex items-center gap-2">
+          <a
+            href="/plantilla_contable_historicos.xlsx"
+            download="Plantilla_Contable_Historicos.xlsx"
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-brand-200 rounded-xl text-sm font-medium text-brand-700 hover:bg-brand-50 hover:border-brand-400 transition-all shadow-sm"
+            title="Descarga la plantilla Excel para importar asientos históricos de años anteriores"
+          >
+            <Download size={15} />
+            Plantilla
+          </a>
+          <ExcelImportButton />
+        </div>
       </div>
+
+      {/* Price / provider notification banner */}
+      {priceNotifVisible && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <AlertTriangle size={18} className="text-amber-500 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-amber-800">Revisión periódica de precios y costos</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Recuerda revisar los precios de venta y los costos de proveedores regularmente para mantener los márgenes actualizados.
+              Ve a <strong>Productos</strong> para ajustar precios de lista y a <strong>Compras</strong> para comparar costos por proveedor.
+            </p>
+          </div>
+          <button onClick={dismissPriceNotif} className="text-amber-400 hover:text-amber-600 flex-shrink-0 mt-0.5">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Top tab bar */}
       <div className="flex gap-1 p-1 bg-brand-50 rounded-xl border border-brand-200 w-fit">

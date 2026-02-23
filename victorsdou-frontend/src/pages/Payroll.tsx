@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { useState } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import {
   Plus, UserCheck, Edit2, Clock, Calendar, ChevronLeft, ChevronRight,
   CheckCircle, DollarSign, Mail, X, AlertCircle, RefreshCw, Star, Pencil, Trash2, Save, Check,
-  RotateCcw
+  RotateCcw, Upload, FileText
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { fmtMoney } from '../lib/fmt';
@@ -41,6 +41,167 @@ function statusBadge(s: string) {
   if (s === "PAID")      return <span className="badge bg-green-100 text-green-700 text-xs">Pagado</span>;
   if (s === "CONFIRMED") return <span className="badge bg-blue-100 text-blue-700 text-xs">Confirmado</span>;
   return                        <span className="badge bg-gray-100 text-gray-500 text-xs">Borrador</span>;
+}
+
+// ── ContractsManager ─────────────────────────────────────────────────────────
+interface ContractEntry {
+  id: string; type: string; signDate: string; startDate: string; endDate: string;
+  fileName: string; dataUrl?: string;
+}
+function ContractsManager({
+  contractsJson, onChange,
+}: {
+  contractsJson: string;
+  onChange: (json: string, latestEndDate: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setFormC] = useState<Omit<ContractEntry, 'id' | 'fileName' | 'dataUrl'>>({
+    type: 'PLAZO_FIJO', signDate: '', startDate: '', endDate: '',
+  });
+  const [pendingFile, setPendingFile] = useState<{ name: string; dataUrl: string } | null>(null);
+
+  const contracts: ContractEntry[] = (() => {
+    try { if (contractsJson?.startsWith('[')) return JSON.parse(contractsJson); } catch {}
+    return [];
+  })();
+
+  const save = (next: ContractEntry[]) => {
+    const latestEnd = next
+      .map(c => c.endDate)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? '';
+    onChange(JSON.stringify(next), latestEnd);
+  };
+
+  const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setPendingFile({ name: file.name, dataUrl: ev.target?.result as string });
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const addContract = () => {
+    const entry: ContractEntry = {
+      id: Date.now().toString(),
+      type: form.type, signDate: form.signDate, startDate: form.startDate, endDate: form.endDate,
+      fileName: pendingFile?.name ?? '', dataUrl: pendingFile?.dataUrl,
+    };
+    save([...contracts, entry]);
+    setFormC({ type: 'PLAZO_FIJO', signDate: '', startDate: '', endDate: '' });
+    setPendingFile(null);
+    setShowForm(false);
+  };
+
+  const remove = (id: string) => save(contracts.filter(c => c.id !== id));
+
+  const CONTRACT_LABELS: Record<string, string> = {
+    INDEFINIDO: 'Indefinido', PLAZO_FIJO: 'Plazo Fijo', PART_TIME: 'Part Time',
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Contratos</h4>
+        <button type="button" className="text-xs text-brand-600 hover:underline flex items-center gap-1"
+          onClick={() => setShowForm(v => !v)}>
+          <Plus size={12} /> Agregar contrato
+        </button>
+      </div>
+
+      {/* Existing contracts */}
+      {contracts.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {contracts.map(c => {
+            const daysLeft = c.endDate
+              ? Math.ceil((new Date(c.endDate).getTime() - Date.now()) / 86400000)
+              : null;
+            const isUrgent = daysLeft !== null && daysLeft < 60;
+            return (
+              <div key={c.id} className="flex items-start justify-between gap-3 p-2.5 rounded-lg bg-gray-50 border border-gray-200">
+                <div className="flex items-start gap-2 min-w-0">
+                  <FileText size={16} className="text-brand-500 mt-0.5 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-700">{CONTRACT_LABELS[c.type] ?? c.type}</p>
+                    {c.signDate && <p className="text-xs text-gray-400">Firma: {c.signDate}</p>}
+                    <p className="text-xs text-gray-400">
+                      {c.startDate && `Inicio: ${c.startDate}`}
+                      {c.startDate && c.endDate && ' · '}
+                      {c.endDate && (
+                        <span className={isUrgent ? 'text-red-600 font-medium' : ''}>
+                          Vence: {c.endDate}{isUrgent && ` (${daysLeft}d)`}
+                        </span>
+                      )}
+                    </p>
+                    {c.fileName && (
+                      c.dataUrl
+                        ? <a href={c.dataUrl} download={c.fileName} className="text-xs text-brand-600 hover:underline">📄 {c.fileName}</a>
+                        : <p className="text-xs text-gray-400">📄 {c.fileName}</p>
+                    )}
+                  </div>
+                </div>
+                <button type="button" onClick={() => remove(c.id)} className="text-gray-300 hover:text-red-500 flex-shrink-0">
+                  <X size={14} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {contracts.length === 0 && !showForm && (
+        <p className="text-xs text-gray-400 mb-3">Sin contratos registrados</p>
+      )}
+
+      {/* Add contract form */}
+      {showForm && (
+        <div className="p-3 rounded-lg border border-brand-200 bg-brand-50/50 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
+              <select className="input text-sm" value={form.type} onChange={e => setFormC(f => ({ ...f, type: e.target.value }))}>
+                {CONTRACT_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de firma</label>
+              <input className="input text-sm" type="date" value={form.signDate} onChange={e => setFormC(f => ({ ...f, signDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de inicio</label>
+              <input className="input text-sm" type="date" value={form.startDate} onChange={e => setFormC(f => ({ ...f, startDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de expiración</label>
+              <input className="input text-sm" type="date" value={form.endDate} onChange={e => setFormC(f => ({ ...f, endDate: e.target.value }))} />
+            </div>
+          </div>
+          {/* File upload */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Contrato PDF (opcional)</label>
+            <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFile} />
+            {pendingFile ? (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-brand-600">📄 {pendingFile.name}</span>
+                <button type="button" onClick={() => setPendingFile(null)} className="text-gray-400 hover:text-red-500"><X size={12} /></button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => fileRef.current?.click()}
+                className="flex items-center gap-1.5 text-xs text-brand-600 border border-brand-300 rounded-lg px-3 py-1.5 hover:bg-brand-50">
+                <Upload size={12} /> Subir PDF
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button type="button" className="btn-primary text-xs py-1.5 px-3" onClick={addContract}>Guardar contrato</button>
+            <button type="button" className="btn-secondary text-xs py-1.5 px-3" onClick={() => { setShowForm(false); setPendingFile(null); }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (data: any) => void; onClose: () => void }) {
@@ -177,20 +338,20 @@ function EmployeeModal({ initial, onSave, onClose }: { initial: any; onSave: (da
             </div>
           </div>
 
-          {/* ── Contrato ── */}
+          {/* ── Contratos ── */}
           <div className="border-t border-gray-100 pt-4">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Contrato</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de expiración</label>
-                <input className="input" type="date" value={form.contractEndDate ?? ''} onChange={e => set("contractEndDate", e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">URL del contrato (PDF)</label>
-                <input className="input" type="url" placeholder="https://..." value={form.contractFileUrl ?? ''} onChange={e => set("contractFileUrl", e.target.value)} />
-              </div>
+            <ContractsManager
+              contractsJson={form.contractFileUrl ?? ''}
+              onChange={(json, latestEndDate) => {
+                set("contractFileUrl", json);
+                if (latestEndDate) set("contractEndDate", latestEndDate);
+              }}
+            />
+            {/* Keep contractEndDate hidden but derived from latest contract */}
+            <div className="hidden">
+              <input type="hidden" value={form.contractEndDate ?? ''} />
             </div>
-            {form.contractFileUrl && (
+            {false && (
               <div className="mt-2">
                 <a href={form.contractFileUrl} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs text-brand-600 hover:underline">
@@ -322,10 +483,10 @@ function PayslipRow({ ps, onConfirm, onPay, onClick }: { ps: any; onConfirm: () 
 
 // ── PayslipDetailModal ────────────────────────────────────────────────────────
 function PayslipDetailModal({
-  ps, period, onClose, onConfirm, onUnconfirm, onPay, onRecalculated,
+  ps, period, onClose, onConfirm, onUnconfirm, onPay, onUnpay, onRecalculated,
 }: {
   ps: any; period: any;
-  onClose: () => void; onConfirm: () => void; onUnconfirm: () => void; onPay: () => void; onRecalculated: () => void;
+  onClose: () => void; onConfirm: () => void; onUnconfirm: () => void; onPay: () => void; onUnpay: () => void; onRecalculated: () => void;
 }) {
   const qc  = useQueryClient();
   const ded = ps.deductions as any ?? {};
@@ -603,11 +764,14 @@ function PayslipDetailModal({
               <DollarSign size={14} /> Pagar{ps.employee?.email && <Mail size={12} />}
             </button>
           </>)}
-          {ps.status === "PAID" && (
+          {ps.status === "PAID" && (<>
             <span className="text-sm text-green-600 flex items-center gap-1.5 font-medium">
               <CheckCircle size={14} /> Pagado{ps.emailSentAt ? " · Email enviado" : ""}
             </span>
-          )}
+            <button onClick={onUnpay} className="btn-secondary flex items-center gap-1.5 text-sm text-amber-600 border-amber-200 hover:bg-amber-50">
+              <RotateCcw size={14} /> Revertir pago
+            </button>
+          </>)}
           <button onClick={onClose} className="ml-auto btn-secondary text-sm">Cerrar</button>
         </div>
       </div>
@@ -669,6 +833,16 @@ function MonthView({ year, month, periods }: { year: number; month: number; peri
     mutationFn: (id: string) => api.post("/v1/payroll/payslips/" + id + "/pay", {}),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["payslips", period?.id] }); toast.success("Pagado y correo enviado"); },
     onError:   (e: any) => toast.error(e.response?.data?.message ?? "Error al pagar"),
+  });
+
+  const unpay = useMutation({
+    mutationFn: (id: string) => api.post("/v1/payroll/payslips/" + id + "/unpay", {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payslips", period?.id] });
+      setSelectedPayslip((cur: any) => cur ? { ...cur, status: "CONFIRMED", paidAt: null } : null);
+      toast.success("Pago revertido — boleta vuelve a Confirmada");
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? "Error al revertir pago"),
   });
 
   const totalNet   = payslips.reduce((s: number, p: any) => s + Number(p.netSalary || 0), 0);
@@ -788,6 +962,7 @@ function MonthView({ year, month, periods }: { year: number; month: number; peri
         onConfirm={() => confirm.mutate(selectedPayslip.id)}
         onUnconfirm={() => unconfirm.mutate(selectedPayslip.id)}
         onPay={() => pay.mutate(selectedPayslip.id)}
+        onUnpay={() => unpay.mutate(selectedPayslip.id)}
         onRecalculated={() => {
           qc.invalidateQueries({ queryKey: ["payslips", period?.id] });
           setSelectedPayslip(null);
@@ -853,7 +1028,7 @@ export default function Payroll() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Planilla</h1>
+          <h1 className="text-2xl font-bold">Trabajadores</h1>
           <p className="text-gray-500 text-sm">Empleados AFP/ONP - Pagos mensuales</p>
         </div>
         {tab === "employees" && (
