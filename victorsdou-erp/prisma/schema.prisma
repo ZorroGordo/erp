@@ -860,14 +860,15 @@ model CustomerAddress {
 }
 
 model CustomerContact {
-  id         String   @id @default(uuid())
-  customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
-  fullName   String
-  role       String?  // buyer|finance|delivery
-  email      String?
-  phone      String?
-  isPrimary  Boolean  @default(false)
+  id               String   @id @default(uuid())
+  customerId       String
+  customer         Customer @relation(fields: [customerId], references: [id])
+  fullName         String
+  role             String?  // buyer|finance|delivery
+  email            String?
+  phone            String?
+  isPrimary        Boolean  @default(false)
+  receivesFacturas Boolean  @default(false)
 
   @@map("customer_contacts")
 }
