@@ -14,136 +14,14 @@ import type {
 } from '@prisma/client';
 import { requireAnyOf } from '../../middleware/auth';
 import * as crypto from 'crypto';
+import {
+  type ExtractedDoc,
+  autoExtract,
+  archivoTipoFromMime,
+  guessDocTypeFromFilename as _guessDocTypeFromFilename,
+} from './extractor';
 
 const prisma = new PrismaClient();
-
-// ── Dynamic require for pdf-parse v2 (CJS / ESM interop) ─────────────────────
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const _require = (id: string) => require(id);
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  SUNAT XML Extractor  (UBL 2.1 — Factura / Boleta / Nota / Guía)
-// ─────────────────────────────────────────────────────────────────────────────
-interface ExtractedDoc {
-  serie?: string;
-  correlativo?: string;
-  numero?: string;
-  fechaEmision?: Date;
-  emisorRuc?: string;
-  emisorNombre?: string;
-  receptorRuc?: string;
-  receptorNombre?: string;
-  monedaDoc?: string;
-  subtotal?: number;
-  igv?: number;
-  total?: number;
-}
-
-function extractFromSunatXml(xml: string): ExtractedDoc {
-  const tag  = (name: string) => xml.match(new RegExp(`<cbc:${name}[^>]*>([^<]+)<\\/cbc:${name}>`))?.[1]?.trim();
-  const tag2 = (name: string) => xml.match(new RegExp(`<[^:]+:${name}[^>]*>([^<]+)<\\/[^:]+:${name}>`))?.[1]?.trim();
-
-  const id           = tag('ID');
-  const issueDate    = tag('IssueDate');
-  const currencyCode = tag('DocumentCurrencyCode') ?? tag2('DocumentCurrencyCode');
-
-  // Supplier (emisor) RUC — schemeID="6" means RUC in SUNAT
-  const supplierRucM  = xml.match(/<cac:AccountingSupplierParty[\s\S]*?<cbc:ID[^>]*schemeID="6"[^>]*>(\d+)<\/cbc:ID>/);
-  const supplierRuc   = supplierRucM?.[1];
-  const supplierNameM = xml.match(/<cac:AccountingSupplierParty[\s\S]*?<cbc:RegistrationName>([^<]+)<\/cbc:RegistrationName>/);
-  const supplierName  = supplierNameM?.[1]?.trim().replace(/&amp;/g, '&');
-
-  // Receiver (receptor) — customer RUC or DNI
-  const customerRucM  = xml.match(/<cac:AccountingCustomerParty[\s\S]*?<cbc:ID[^>]*>(\d+)<\/cbc:ID>/);
-  const customerRuc   = customerRucM?.[1];
-  const customerNameM = xml.match(/<cac:AccountingCustomerParty[\s\S]*?<cbc:RegistrationName>([^<]+)<\/cbc:RegistrationName>/);
-  const customerName  = customerNameM?.[1]?.trim().replace(/&amp;/g, '&');
-
-  // Monetary totals
-  const payable  = xml.match(/<cbc:PayableAmount[^>]*>([\d.]+)<\/cbc:PayableAmount>/)?.[1];
-  const taxAmt   = xml.match(/<cbc:TaxAmount[^>]*>([\d.]+)<\/cbc:TaxAmount>/)?.[1];
-  const lineExt  = xml.match(/<cbc:LineExtensionAmount[^>]*>([\d.]+)<\/cbc:LineExtensionAmount>/)?.[1];
-
-  // Parse serie / correlativo from "F001-00001234"
-  let serie: string | undefined, correlativo: string | undefined;
-  if (id) {
-    const parts = id.split('-');
-    if (parts.length === 2) { serie = parts[0]; correlativo = parts[1]; }
-  }
-
-  return {
-    serie,
-    correlativo,
-    numero: id,
-    fechaEmision: issueDate ? new Date(issueDate) : undefined,
-    emisorRuc: supplierRuc,
-    emisorNombre: supplierName,
-    receptorRuc: customerRuc,
-    receptorNombre: customerName,
-    monedaDoc: currencyCode ?? 'PEN',
-    total:    payable  ? parseFloat(payable)  : undefined,
-    igv:      taxAmt   ? parseFloat(taxAmt)   : undefined,
-    subtotal: lineExt  ? parseFloat(lineExt)  : undefined,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  PDF Heuristic Extractor
-// ─────────────────────────────────────────────────────────────────────────────
-async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
-  try {
-    const { PDFParse } = _require('pdf-parse') as {
-      PDFParse: new (opts: { data: Uint8Array; password?: string }) => { getText(): Promise<{ text: string }> };
-    };
-    const buf    = Buffer.from(b64, 'base64');
-    const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
-    const { text } = await parser.getText();
-
-    // Serie-correlativo pattern  (e.g. F001-00001234 or B001-12345678)
-    const numM  = text.match(/\b([A-Z]\d{3}-\d{4,8})\b/);
-    const num   = numM?.[1];
-    let serie: string | undefined, correlativo: string | undefined;
-    if (num) { const p = num.split('-'); serie = p[0]; correlativo = p[1]; }
-
-    // RUC  (11 digits starting with 20 or 10)
-    const rucM = text.match(/(?:RUC|R\.U\.C\.)\s*[:\s#]?\s*((?:20|10)\d{9})/i);
-    const ruc  = rucM?.[1];
-
-    // Date: DD/MM/YYYY or DD-MM-YYYY
-    const dateM = text.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
-    let fecha: Date | undefined;
-    if (dateM) fecha = new Date(`${dateM[3]}-${dateM[2]}-${dateM[1]}`);
-
-    // Total — look for last currency amount after keywords
-    const totalM = text.match(/(?:TOTAL[^\n]*?|IMPORTE TOTAL[^\n]*?)\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-    const igvM   = text.match(/(?:IGV|I\.G\.V\.)[^\n]*?\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-    const baseM  = text.match(/(?:SUB[- ]TOTAL|BASE IMPONIBLE)[^\n]*?\s*S\/\.?\s*([\d,]+\.?\d*)/i);
-
-    const parse = (s?: string) => s ? parseFloat(s.replace(/,/g, '')) : undefined;
-
-    return {
-      serie, correlativo, numero: num,
-      fechaEmision: fecha,
-      emisorRuc: ruc,
-      total:    parse(totalM?.[1]),
-      igv:      parse(igvM?.[1]),
-      subtotal: parse(baseM?.[1]),
-      monedaDoc: text.includes('USD') ? 'USD' : 'PEN',
-    };
-  } catch {
-    return {};
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Helper: detect archive type from MIME
-// ─────────────────────────────────────────────────────────────────────────────
-function archivoTipoFromMime(mime: string): ComprobanteArchivoTipo {
-  if (mime === 'application/pdf')   return 'PDF';
-  if (mime.startsWith('image/'))    return 'IMAGEN';
-  if (mime.includes('xml'))         return 'XML';
-  return 'PDF';
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Routes
@@ -585,39 +463,12 @@ export async function comprobantesRoutes(app: FastifyInstance) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Auto-extract helper — chooses XML vs PDF path
-// ─────────────────────────────────────────────────────────────────────────────
-async function autoExtract(mimeType: string, dataBase64: string): Promise<ExtractedDoc> {
-  try {
-    if (mimeType.includes('xml')) {
-      const xmlText = Buffer.from(dataBase64, 'base64').toString('utf-8');
-      return extractFromSunatXml(xmlText);
-    }
-    if (mimeType === 'application/pdf') {
-      return await extractFromPdf(dataBase64);
-    }
-  } catch { /* silent — extraction is best-effort */ }
-  return {};
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Email-ingest helpers
+//  Email-ingest helpers (re-exported from extractor.ts for backward compat)
 // ─────────────────────────────────────────────────────────────────────────────
 function mimeToArchivoTipo(mime: string): ComprobanteArchivoTipo {
-  if (mime === 'application/pdf') return 'PDF';
-  if (mime.startsWith('image/'))  return 'IMAGEN';
-  if (mime.includes('xml'))       return 'XML';
-  return 'PDF'; // fallback
+  return archivoTipoFromMime(mime);
 }
 
 function guessDocTypeFromFilename(filename: string): ComprobanteDocType {
-  const n = filename.toLowerCase();
-  if (n.includes('factura') || n.includes('fact'))          return 'FACTURA';
-  if (n.includes('boleta')  || n.includes('bol'))           return 'BOLETA';
-  if (n.includes('guia')    || n.includes('guía'))          return 'GUIA_REMISION';
-  if (n.includes('orden')   || n.includes('oc_'))           return 'ORDEN_COMPRA';
-  if (n.includes('honorario') || n.includes('rh_'))         return 'RECIBO_HONORARIOS';
-  if (n.includes('nota')    && n.includes('cred'))          return 'NOTA_CREDITO';
-  if (n.includes('nota')    && n.includes('deb'))           return 'NOTA_DEBITO';
-  return 'FACTURA'; // safe default
+  return _guessDocTypeFromFilename(filename);
 }

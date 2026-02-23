@@ -7,11 +7,19 @@
  * in the S3 bucket (victorsdou-docs/incoming/).
  *
  * Flow:
- *   docs@victorsdou.pe
+ *   docs@erp.victorsdou.pe
  *     → SES receipt rule (store-docs-to-s3)
  *       → S3: victorsdou-docs/incoming/<messageId>
  *         → S3 event notification → SNS topic
  *           → HTTP subscription → POST /webhooks/inbound-email
+ *
+ * On each notification:
+ *   1. Fetch raw MIME email from S3
+ *   2. Parse with mailparser (headers + attachments)
+ *   3. If the email has document attachments (PDF / XML / image):
+ *      → Create a Comprobante record with source = 'EMAIL'
+ *      → Store all attachments as ComprobanteArchivo records
+ *      → Kick off background extraction (RUC, totals, dates) for each file
  *
  * The endpoint also handles SNS SubscriptionConfirmation so the topic can
  * be wired up without manual console steps.
@@ -19,9 +27,18 @@
 
 import type { FastifyInstance } from 'fastify';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { PrismaClient } from '@prisma/client';
+import { simpleParser } from 'mailparser';
 import { config } from '../../config';
+import {
+  autoExtract,
+  archivoTipoFromMime,
+  guessDocTypeFromFilename,
+} from '../comprobantes/extractor';
 
-// ── S3 client (for fetching raw emails) ─────────────────────────────────────
+// ── Singletons ────────────────────────────────────────────────────────────────
+
+const prisma = new PrismaClient();
 
 const s3 = new S3Client({
   region: config.AWS_REGION,
@@ -31,47 +48,37 @@ const s3 = new S3Client({
       : undefined,
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Stream an S3 object body to a UTF-8 string. */
-async function s3ObjectToString(bucket: string, key: string): Promise<string> {
+/** Stream an S3 object body into a Buffer (preserves binary content). */
+async function s3ObjectToBuffer(bucket: string, key: string): Promise<Buffer> {
   const resp = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!resp.Body) return '';
+  if (!resp.Body) return Buffer.alloc(0);
   // @ts-ignore — Body is a Readable stream in Node environments
   const chunks: Buffer[] = [];
   for await (const chunk of resp.Body as AsyncIterable<Buffer>) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString('utf-8');
+  return Buffer.concat(chunks);
 }
 
-/** Very light email header parser — no external deps needed. */
-function parseEmailHeaders(raw: string): { from: string; to: string; subject: string; date: string } {
-  const headers: Record<string, string> = {};
-  const lines = raw.split(/\r?\n/);
-  let i = 0;
-  while (i < lines.length && lines[i] !== '') {
-    const line = lines[i];
-    if (/^\s/.test(line) && Object.keys(headers).length > 0) {
-      // continuation line — append to last header value
-      const last = Object.keys(headers).pop()!;
-      headers[last] += ' ' + line.trim();
-    } else {
-      const colon = line.indexOf(':');
-      if (colon > 0) {
-        const key   = line.slice(0, colon).toLowerCase().trim();
-        const value = line.slice(colon + 1).trim();
-        headers[key] = value;
-      }
-    }
-    i++;
-  }
-  return {
-    from:    headers['from']    ?? '',
-    to:      headers['to']      ?? '',
-    subject: headers['subject'] ?? '(no subject)',
-    date:    headers['date']    ?? new Date().toISOString(),
-  };
+/**
+ * Decide whether an email attachment is a real document (PDF / XML / image)
+ * versus decorative inline content (tiny tracking pixels, HTML boilerplate).
+ */
+function isDocumentAttachment(att: {
+  contentType: string;
+  contentDisposition?: string | null;
+  size?: number;
+  content: Buffer;
+}): boolean {
+  const mime = att.contentType.toLowerCase();
+  const size = att.size ?? att.content.length;
+  if (size < 512) return false; // too small to be a real document
+  if (mime === 'application/pdf')  return true;
+  if (mime.includes('xml'))        return true;
+  if (mime.startsWith('image/'))   return att.contentDisposition === 'attachment' || size > 10_000;
+  return false;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -86,7 +93,6 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
    *   - "Notification"              → process the S3 Put event
    */
   app.post('/inbound-email', async (req, reply) => {
-    // SNS sets this header; accept both values
     const msgType = (req.headers['x-amz-sns-message-type'] ?? '') as string;
 
     let body: any;
@@ -130,33 +136,123 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
 
         app.log.info({ bucket, key }, '[inbound-email] New inbound email stored in S3');
 
-        // Fetch and parse the raw email (best-effort; failures don't block response)
         try {
-          const raw     = await s3ObjectToString(bucket, key);
-          const headers = parseEmailHeaders(raw);
+          // ── 1. Fetch raw email from S3 ─────────────────────────────────────
+          const rawBuffer = await s3ObjectToBuffer(bucket, key);
+
+          // ── 2. Parse MIME ──────────────────────────────────────────────────
+          const parsed = await simpleParser(rawBuffer, { skipTextToHtml: true });
+
+          const fromText   = parsed.from?.text ?? 'desconocido';
+          const toText     = parsed.to?.text   ?? '';
+          const subject    = parsed.subject    ?? '(sin asunto)';
+          const allAttachments = parsed.attachments ?? [];
 
           app.log.info(
-            { from: headers.from, to: headers.to, subject: headers.subject, s3Key: key },
+            { from: fromText, to: toText, subject, attachmentCount: allAttachments.length, s3Key: key },
             '[inbound-email] Parsed inbound email',
           );
 
-          // TODO: persist to DB (InboundEmail table) and trigger any downstream
-          //       workflows (e.g. auto-attach PDF to a PO, trigger AP matching).
-          //
-          // Example (uncomment once the Prisma model exists):
-          //   await prisma.inboundEmail.create({
-          //     data: {
-          //       s3Bucket: bucket,
-          //       s3Key:    key,
-          //       fromAddr: headers.from,
-          //       toAddr:   headers.to,
-          //       subject:  headers.subject,
-          //       receivedAt: new Date(headers.date),
-          //     },
-          //   });
+          // ── 3. Filter to document attachments only ─────────────────────────
+          const docAttachments = allAttachments.filter(isDocumentAttachment);
+
+          if (docAttachments.length === 0) {
+            app.log.info(
+              { s3Key: key, subject, from: fromText },
+              '[inbound-email] No document attachments — no Comprobante created',
+            );
+            continue;
+          }
+
+          // ── 4. Create Comprobante record ───────────────────────────────────
+          const comprobante = await prisma.comprobante.create({
+            data: {
+              descripcion:  subject,
+              fecha:        new Date(),   // refined by extraction below
+              moneda:       'PEN',
+              source:       'EMAIL' as any,
+              senderEmail:  fromText,
+              emailSubject: subject,
+              createdBy:    fromText,
+              archivos: {
+                create: docAttachments.map((att) => ({
+                  docType:       guessDocTypeFromFilename(att.filename ?? 'documento'),
+                  archivoTipo:   archivoTipoFromMime(att.contentType),
+                  nombreArchivo: att.filename ?? `attachment_${Date.now()}`,
+                  mimeType:      att.contentType,
+                  tamanoBytes:   att.size ?? att.content.length,
+                  dataBase64:    att.content.toString('base64'),
+                })),
+              },
+            } as any,
+            select: { id: true },
+          });
+
+          app.log.info(
+            { comprobanteId: comprobante.id, from: fromText, subject, files: docAttachments.length },
+            '[inbound-email] Comprobante created — starting background extraction',
+          );
+
+          // ── 5. Background extraction (fire-and-forget) ────────────────────
+          // We return 200 to SNS immediately, then do the slow extraction work
+          // (especially OCR for images) asynchronously in the background.
+          void (async () => {
+            try {
+              const archivos = await prisma.comprobanteArchivo.findMany({
+                where:  { comprobanteId: comprobante.id },
+                select: { id: true, mimeType: true, dataBase64: true },
+              });
+
+              let bestDate:  Date    | undefined;
+              let bestTotal: number  | undefined;
+              let bestMoneda: string | undefined;
+
+              for (const arch of archivos) {
+                try {
+                  const extracted = await autoExtract(arch.mimeType, arch.dataBase64);
+
+                  if (Object.keys(extracted).length > 0) {
+                    await prisma.comprobanteArchivo.update({
+                      where: { id: arch.id },
+                      data:  extracted as any,
+                    });
+                  }
+
+                  // Track best metadata values to update parent Comprobante
+                  if (extracted.fechaEmision && !bestDate)  bestDate   = extracted.fechaEmision;
+                  if (extracted.total        && !bestTotal) bestTotal  = extracted.total;
+                  if (extracted.monedaDoc    && !bestMoneda) bestMoneda = extracted.monedaDoc;
+
+                } catch (err) {
+                  app.log.warn({ err, archivoId: arch.id }, '[inbound-email] Archivo extraction failed');
+                }
+              }
+
+              // Update parent Comprobante with refined metadata
+              const updates: Record<string, unknown> = {};
+              if (bestDate)   updates.fecha      = bestDate;
+              if (bestTotal)  updates.montoTotal  = bestTotal;
+              if (bestMoneda) updates.moneda      = bestMoneda;
+
+              if (Object.keys(updates).length > 0) {
+                await prisma.comprobante.update({
+                  where: { id: comprobante.id },
+                  data:  updates,
+                }).catch(() => { /* ignore if already updated */ });
+              }
+
+              app.log.info(
+                { comprobanteId: comprobante.id },
+                '[inbound-email] Background extraction complete',
+              );
+
+            } catch (err) {
+              app.log.error({ err, comprobanteId: comprobante.id }, '[inbound-email] Background extraction error');
+            }
+          })();
 
         } catch (err) {
-          app.log.error({ err, bucket, key }, '[inbound-email] Failed to fetch/parse email from S3');
+          app.log.error({ err, bucket, key }, '[inbound-email] Failed to process email from S3');
         }
       }
 
