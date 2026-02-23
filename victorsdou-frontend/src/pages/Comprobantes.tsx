@@ -726,7 +726,16 @@ export default function Comprobantes() {
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {item.archivos.slice(0, 3).map(a => (
-                            <DocTypeBadge key={a.id} type={a.docType} />
+                            <button
+                              key={a.id}
+                              title={`Ver ${a.nombreArchivo}`}
+                              onClick={e => { e.stopPropagation(); openViewer(a.id, a.mimeType, a.nombreArchivo); }}
+                              className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full hover:ring-2 hover:ring-offset-1 hover:ring-brand-400 transition-all cursor-pointer"
+                              style={{ background: 'inherit' }}
+                            >
+                              <DocTypeBadge type={a.docType} />
+                              <Eye size={10} className="text-gray-400 -ml-1" />
+                            </button>
                           ))}
                           {item.archivos.length > 3 && (
                             <span className="text-xs text-gray-400">+{item.archivos.length - 3}</span>
