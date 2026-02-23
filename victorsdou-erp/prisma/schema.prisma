@@ -627,6 +627,7 @@ model Supplier {
   priceLists     SupplierPriceList[]
   purchaseOrders PurchaseOrder[]
   performance    SupplierPerformance[]
+  comprobanteProveedor Comprobante[]   @relation("ComprobanteProveedor")
 
   @@map("suppliers")
 }
@@ -1526,6 +1527,11 @@ model Comprobante {
   senderEmail     String?           // email address that sent this, if source = EMAIL
   emailSubject    String?           // original email subject
 
+  // Payment & supplier link
+  fechaPago       DateTime?
+  proveedorId     String?
+  proveedor       Supplier?         @relation("ComprobanteProveedor", fields: [proveedorId], references: [id])
+
   // Status & metadata
   estado          ComprobanteEstado @default(PENDIENTE)
   notas           String?
@@ -1540,6 +1546,7 @@ model Comprobante {
   @@index([estado])
   @@index([source])
   @@index([purchaseOrderId])
+  @@index([fechaPago])
   @@map("comprobantes")
 }
 

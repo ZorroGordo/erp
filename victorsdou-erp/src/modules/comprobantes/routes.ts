@@ -36,6 +36,7 @@ export async function comprobantesRoutes(app: FastifyInstance) {
         estado, docType, search,
         fechaDesde, fechaHasta,
         purchaseOrderId, source,
+        moneda, fechaPago,
       } = req.query as Record<string, string>;
 
       const skip  = (parseInt(page) - 1) * parseInt(limit);
@@ -44,6 +45,13 @@ export async function comprobantesRoutes(app: FastifyInstance) {
       const where: any = {};
       if (estado)          where.estado = estado as ComprobanteEstado;
       if (source)          where.source = source;
+      if (moneda)          where.moneda = moneda;
+      if (fechaPago) {
+        const today = new Date();
+        if (fechaPago === 'vencida')  where.fechaPago = { lt: today };
+        else if (fechaPago === 'proxima') where.fechaPago = { gte: today, lte: new Date(Date.now() + 7*86400_000) };
+        else if (fechaPago === 'sin_fecha') where.fechaPago = null;
+      }
       if (purchaseOrderId) where.purchaseOrderId = purchaseOrderId;
       if (fechaDesde || fechaHasta) {
         where.fecha = {};
@@ -109,6 +117,7 @@ export async function comprobantesRoutes(app: FastifyInstance) {
           },
           purchaseOrder: { select: { id: true, poNumber: true, supplier: { select: { businessName: true, ruc: true } } } },
           invoice:        { select: { id: true, docType: true, series: true, correlative: true, entityName: true } },
+          proveedor:      { select: { id: true, businessName: true, ruc: true } },
         },
       });
       if (!item) return reply.code(404).send({ error: 'NOT_FOUND' });
@@ -204,9 +213,15 @@ export async function comprobantesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const body   = req.body as Record<string, unknown>;
-      const allowed = ['descripcion','fecha','moneda','montoTotal','purchaseOrderId','invoiceId','consolidacionRef','estado','notas','tags'];
+      const allowed = ['descripcion','fecha','moneda','montoTotal','fechaPago','proveedorId','purchaseOrderId','invoiceId','consolidacionRef','estado','notas','tags'];
       const data: Record<string, unknown> = {};
-      for (const k of allowed) if (k in body) data[k] = k === 'fecha' ? new Date(body[k] as string) : body[k];
+      for (const k of allowed) if (k in body) {
+        if (k === 'fecha' || k === 'fechaPago') {
+          data[k] = body[k] ? new Date(body[k] as string) : null;
+        } else {
+          data[k] = body[k];
+        }
+      }
 
       const updated = await prisma.comprobante.update({ where: { id }, data });
       return reply.send({ data: updated });
