@@ -307,6 +307,57 @@ export async function comprobantesRoutes(app: FastifyInstance) {
     }
   );
 
+  // ── RE-EXTRACT ───────────────────────────────────────────────────────────────────────
+  app.post('/:id/re-extract', { preHandler: [requireAnyOf('FINANCE_MGR', 'ACCOUNTANT', 'OPS_MGR', 'PROCUREMENT')] },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const parent = await prisma.comprobante.findUnique({ where: { id }, select: { id: true } });
+      if (!parent) return reply.code(404).send({ error: 'NOT_FOUND' });
+      const archivos = await prisma.comprobanteArchivo.findMany({
+        where: { comprobanteId: id },
+        select: { id: true, mimeType: true, dataBase64: true },
+      });
+      let bestDate: Date | undefined;
+      let bestTotal: number | undefined;
+      let bestMoneda: string | undefined;
+      for (const arch of archivos) {
+        try {
+          const extracted = await autoExtract(arch.mimeType, arch.dataBase64);
+          if (Object.keys(extracted).length > 0) {
+            await prisma.comprobanteArchivo.update({ where: { id: arch.id }, data: extracted as any });
+          }
+          if (extracted.fechaEmision && !bestDate)   bestDate  = extracted.fechaEmision;
+          if (extracted.total        && !bestTotal)  bestTotal = Number(extracted.total);
+          if (extracted.monedaDoc    && !bestMoneda) bestMoneda = extracted.monedaDoc;
+        } catch { /* best-effort */ }
+      }
+      const updates: Record<string, unknown> = {};
+      if (bestDate)   updates.fecha     = bestDate;
+      if (bestTotal)  updates.montoTotal = bestTotal;
+      if (bestMoneda) updates.moneda     = bestMoneda;
+      if (Object.keys(updates).length > 0) {
+        await prisma.comprobante.update({ where: { id }, data: updates });
+      }
+      const updated = await prisma.comprobante.findUnique({
+        where: { id },
+        include: {
+          archivos: {
+            select: {
+              id: true, docType: true, archivoTipo: true, nombreArchivo: true,
+              serie: true, correlativo: true, numero: true,
+              fechaEmision: true, emisorRuc: true, emisorNombre: true,
+              receptorRuc: true, receptorNombre: true,
+              monedaDoc: true, subtotal: true, igv: true, total: true,
+              mimeType: true, tamanoBytes: true, createdAt: true,
+            },
+          },
+          proveedor: { select: { id: true, businessName: true, ruc: true } },
+        },
+      });
+      return reply.send({ data: updated });
+    }
+  );
+
   // ── MAILGUN EMAIL INGEST (public webhook — verified by signature) ─────────
   // Mailgun POSTs here when an email arrives at comprobantes@<your-domain>.
   // The endpoint is intentionally unauthenticated (no JWT) but protected by
