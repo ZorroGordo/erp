@@ -137,12 +137,44 @@ function extractTextHeuristics(text: string): ExtractedDoc {
 export async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
   try {
     const { PDFParse } = _require('pdf-parse') as {
-      PDFParse: new (opts: { data: Uint8Array; password?: string }) => { getText(): Promise<{ text: string }> };
+      PDFParse: new (opts: { data: Uint8Array; password?: string }) => {
+        getText(): Promise<{ text: string }>;
+        getScreenshot(opts: { pages: number[]; width: number }): Promise<{
+          pages: Array<{ data: Record<number, number> }>;
+          total: number;
+        }>;
+      };
     };
     const buf    = Buffer.from(b64, 'base64');
     const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
     const { text } = await parser.getText();
-    return extractTextHeuristics(text);
+
+    // pdf-parse v2 wraps pages with "-- N of N --" separators.
+    // Strip them and see if real text remains.
+    const cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
+
+    if (cleanText.length > 20) {
+      // Text-based PDF: run heuristics directly on the embedded text.
+      return extractTextHeuristics(cleanText);
+    }
+
+    // Image-based / scanned PDF: render page 1 to PNG then OCR it.
+    const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
+    const pageData = ss.pages[0]?.data;
+    if (!pageData) return {};
+
+    const imgBuf = Buffer.from(Object.values(pageData) as number[]);
+
+    const { createWorker } = _require('tesseract.js') as {
+      createWorker: (langs: string, oem?: number, opts?: Record<string, unknown>) => Promise<{
+        recognize(image: Buffer): Promise<{ data: { text: string } }>;
+        terminate(): Promise<void>;
+      }>;
+    };
+    const worker = await createWorker('spa+eng', 1, { errorHandler: () => {} });
+    const { data: { text: ocrText } } = await worker.recognize(imgBuf);
+    await worker.terminate();
+    return extractTextHeuristics(ocrText);
   } catch {
     return {};
   }

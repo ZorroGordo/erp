@@ -186,12 +186,18 @@ export async function comprobantesRoutes(app: FastifyInstance) {
         } as any;
       }
 
+      // Propagate extracted fields to parent if not manually provided
+      const extracted0 = archivoData as any;
+      const resolvedFecha    = new Date(fecha);
+      const resolvedMoneda   = moneda !== 'PEN' ? moneda : (extracted0?.monedaDoc ?? moneda);
+      const resolvedMonto    = montoTotal != null ? montoTotal : (extracted0?.total ?? null);
+
       const comprobante = await prisma.comprobante.create({
         data: {
           descripcion,
-          fecha:           new Date(fecha),
-          moneda,
-          montoTotal:      montoTotal ?? archivoData ? (archivoData as any).total : undefined,
+          fecha:           extracted0?.fechaEmision ?? resolvedFecha,
+          moneda:          resolvedMoneda,
+          montoTotal:      resolvedMonto,
           purchaseOrderId: purchaseOrderId ?? null,
           invoiceId:       invoiceId       ?? null,
           consolidacionRef: consolidacionRef ?? null,
