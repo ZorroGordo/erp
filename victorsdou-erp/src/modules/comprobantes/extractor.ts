@@ -138,30 +138,27 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
   const buf = Buffer.from(b64, 'base64');
   let cleanText = '';
 
-  // ── Attempt 1: pdf-parse v2 Node.js build ────────────────────────────────
-  // pdf-parse v2 ships a Node-specific CJS entry at 'pdf-parse/node'.
-  // The default '.' export is the cross-platform (browser) build which does
-  // NOT extract text in Node.js — always use the '/node' subpath on the server.
+  // ?? Attempt 1: pdf-parse v2 API ???????????????????????????????????????????
+  // In pdf-parse v2, PDFParse lives in the *default* export (not '/node').
+  // The '/node' subpath only exports getHeader() for URL inspection.
   try {
-    const nodeModule = _require('pdf-parse/node');
-    // CJS interop: class may live at top-level or under .default
+    const pdfMod = _require('pdf-parse');
+    // CJS build exports named: { PDFParse, ... }
     const PDFParse: (new (opts: { data: Uint8Array; password?: string }) => {
       getText(): Promise<{ text: string }>;
       getScreenshot(opts: { pages: number[]; width: number }): Promise<{
         pages: Array<{ data: Record<number, number> }>;
         total: number;
       }>;
-    }) | undefined = nodeModule.PDFParse ?? nodeModule.default?.PDFParse ?? nodeModule.default;
+    }) | undefined = pdfMod.PDFParse ?? pdfMod.default?.PDFParse;
 
     if (PDFParse && typeof PDFParse === 'function') {
       const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
       const { text } = await parser.getText();
       cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-
       if (cleanText.length > 20) {
         return extractTextHeuristics(cleanText);
       }
-
       // Image-based / scanned PDF: render page 1 to PNG then OCR it.
       try {
         const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
@@ -169,33 +166,17 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
         if (pageData) {
           const imgBuf = Buffer.from(Object.values(pageData) as number[]);
           const ocrResult = await extractFromImage(imgBuf.toString('base64'));
-          if (Object.keys(ocrResult).length > 1) return ocrResult; // more than just monedaDoc
+          if (Object.keys(ocrResult).length > 1) return ocrResult;
         }
-      } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
+      } catch (err) { console.error('[ext] screenshot:', err instanceof Error ? err.message : String(err)); }
+    } else {
+      console.error('[ext] PDFParse class not found in pdf-parse exports. Keys:', Object.keys(pdfMod).join(','));
     }
-  } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
-
-  // ── Attempt 2: pdf-parse v1 API (pdfParse(buffer) → { text }) ────────────
-  if (!cleanText) {
-    try {
-      const pdfMod  = _require('pdf-parse');
-      const pdfFn   = typeof pdfMod === 'function' ? pdfMod
-                    : typeof pdfMod.default === 'function' ? pdfMod.default
-                    : null;
-      if (pdfFn) {
-        const data  = await pdfFn(buf);
-        cleanText   = (data.text ?? '').replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-        if (cleanText.length > 20) return extractTextHeuristics(cleanText);
-      }
-    } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
-  }
+  } catch (err) { console.error('[ext] pdf-parse v2 attempt:', err instanceof Error ? err.message : String(err)); }
 
   return {};
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Image OCR extractor (tesseract.js v5 — Spanish + English, with eng fallback)
-// ─────────────────────────────────────────────────────────────────────────────
 export async function extractFromImage(b64: string): Promise<ExtractedDoc> {
   const imageBuffer = Buffer.from(b64, 'base64');
 
