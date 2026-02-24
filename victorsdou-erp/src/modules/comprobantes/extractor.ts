@@ -86,42 +86,59 @@ export function extractFromSunatXml(xml: string): ExtractedDoc {
 // ─────────────────────────────────────────────────────────────────────────────
 function extractTextHeuristics(text: string): ExtractedDoc {
   // Normalise whitespace
-  const t = text.replace(/[ \t]+/g, ' ');
+  const t = text.replace(/[ 	]+/g, ' ');
 
-  // Serie-correlativo: F001-00001234 or B001-12345678
-  const numM = t.match(/\b([A-Z]\d{3}-\d{4,8})\b/);
+  // Serie-correlativo: F001-00001234 or B001-12345678 (SUNAT UBL format)
+  const numM = t.match(/([A-Z]\d{3}-\d{4,8})/);
   const num  = numM?.[1];
   let serie: string | undefined, correlativo: string | undefined;
   if (num) { const p = num.split('-'); serie = p[0]; correlativo = p[1]; }
 
   // RUC (11 digits starting with 20 or 10)
-  const rucM = t.match(/(?:RUC|R\.U\.C\.)[\s:#]*((?:20|10)\d{9})/i);
+  const rucM = t.match(/(?:RUC|R\.U\.C\.)\s*[:#]?\s*((?:20|10)\d{9})/i);
   const ruc  = rucM?.[1];
 
-  // Date: prefer labelled emission date, then any DD/MM/YYYY
-  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[o\xf3]n|emitido)[^\d]{0,20}(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/i);
-  const anyM = t.match(/(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/);
+  // Date: prefer labelled emission date (DD/MM/YYYY Peruvian), then any date
+  // Falls back from DD/MM/YYYY to MM/DD/YYYY when first parse is invalid
+  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[oó]n|emitido)[^\d]{0,20}(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/i);
+  const anyM = t.match(/(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/);
   let fecha: Date | undefined;
   const dm = emM ?? anyM;
   if (dm) {
-    const [d, m, y] = emM ? [emM[1], emM[2], emM[3]] : [dm[1], dm[2], dm[3]];
-    const dt = new Date(`${y}-${m}-${d}`);
-    if (!isNaN(dt.getTime())) fecha = dt;
+    const [g1, g2, g3] = [dm[1], dm[2], dm[3]];
+    // Try DD/MM/YYYY first (Peruvian standard)
+    const dtDMY = new Date(`${g3}-${g2}-${g1}`);
+    if (!isNaN(dtDMY.getTime())) {
+      fecha = dtDMY;
+    } else {
+      // Fallback: try MM/DD/YYYY (US format, e.g. DocuSign, international invoices)
+      const dtMDY = new Date(`${g3}-${g1}-${g2}`);
+      if (!isNaN(dtMDY.getTime())) fecha = dtMDY;
+    }
   }
 
   const parse = (s?: string) => (s ? parseFloat(s.replace(/,/g, '')) : undefined);
 
+  // Total: SUNAT-labelled first, then bare TOTAL not preceded by a word (avoids Tax Total)
   const totalM =
-    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d\n]{0,30}(\d[\d,]*\.\d{2})/i) ??
-    t.match(/\bTOTAL\b[^\d\n]{0,20}(?:S\/\.?\s*|PEN\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d
+]{0,30}(\d[\d,]*\.\d{2})/i) ??
+    t.match(/(?<![A-Za-z])TOTAL:?\s*(?:S\/\.?\s*|PEN\s*|USD\s*|GBP\s*|EUR\s*)?(\d[\d,]*\.\d{2})/i);
 
   const igvM =
-    t.match(/(?:IGV|I\.G\.V\.|18%)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:IGV|I\.G\.V\.|18%)\s*[^\d
+]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
+  // Subtotal: SUNAT labels + generic Subtotal/Subtotal:
   const baseM =
-    t.match(/(?:SUB\s*-?\s*TOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:SUB\s*-?\s*TOTAL|SUBTOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d
+]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
-  const moneda = /\b(USD|US\$|D[O\xd3]LARES)\b/i.test(t) ? 'USD' : 'PEN';
+  // Currency: default PEN, support USD, GBP, EUR
+  let moneda = 'PEN';
+  if      (/(USD|US\$|D[OÓ]LARES)/i.test(t)) moneda = 'USD';
+  else if (/GBP/i.test(t))                          moneda = 'GBP';
+  else if (/EUR/i.test(t))                          moneda = 'EUR';
 
   return {
     serie, correlativo, numero: num,
@@ -138,30 +155,27 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
   const buf = Buffer.from(b64, 'base64');
   let cleanText = '';
 
-  // ── Attempt 1: pdf-parse v2 Node.js build ────────────────────────────────
-  // pdf-parse v2 ships a Node-specific CJS entry at 'pdf-parse/node'.
-  // The default '.' export is the cross-platform (browser) build which does
-  // NOT extract text in Node.js — always use the '/node' subpath on the server.
+  // ?? Attempt 1: pdf-parse v2 API ???????????????????????????????????????????
+  // In pdf-parse v2, PDFParse lives in the *default* export (not '/node').
+  // The '/node' subpath only exports getHeader() for URL inspection.
   try {
-    const nodeModule = _require('pdf-parse/node');
-    // CJS interop: class may live at top-level or under .default
+    const pdfMod = _require('pdf-parse');
+    // CJS build exports named: { PDFParse, ... }
     const PDFParse: (new (opts: { data: Uint8Array; password?: string }) => {
       getText(): Promise<{ text: string }>;
       getScreenshot(opts: { pages: number[]; width: number }): Promise<{
         pages: Array<{ data: Record<number, number> }>;
         total: number;
       }>;
-    }) | undefined = nodeModule.PDFParse ?? nodeModule.default?.PDFParse ?? nodeModule.default;
+    }) | undefined = pdfMod.PDFParse ?? pdfMod.default?.PDFParse;
 
     if (PDFParse && typeof PDFParse === 'function') {
       const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
       const { text } = await parser.getText();
       cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-
       if (cleanText.length > 20) {
         return extractTextHeuristics(cleanText);
       }
-
       // Image-based / scanned PDF: render page 1 to PNG then OCR it.
       try {
         const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
@@ -169,33 +183,17 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
         if (pageData) {
           const imgBuf = Buffer.from(Object.values(pageData) as number[]);
           const ocrResult = await extractFromImage(imgBuf.toString('base64'));
-          if (Object.keys(ocrResult).length > 1) return ocrResult; // more than just monedaDoc
+          if (Object.keys(ocrResult).length > 1) return ocrResult;
         }
-      } catch { /* screenshot unavailable — fall through */ }
+      } catch (err) { console.error('[ext] screenshot:', err instanceof Error ? err.message : String(err)); }
+    } else {
+      console.error('[ext] PDFParse class not found in pdf-parse exports. Keys:', Object.keys(pdfMod).join(','));
     }
-  } catch { /* pdf-parse/node unavailable — fall through to v1 */ }
-
-  // ── Attempt 2: pdf-parse v1 API (pdfParse(buffer) → { text }) ────────────
-  if (!cleanText) {
-    try {
-      const pdfMod  = _require('pdf-parse');
-      const pdfFn   = typeof pdfMod === 'function' ? pdfMod
-                    : typeof pdfMod.default === 'function' ? pdfMod.default
-                    : null;
-      if (pdfFn) {
-        const data  = await pdfFn(buf);
-        cleanText   = (data.text ?? '').replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-        if (cleanText.length > 20) return extractTextHeuristics(cleanText);
-      }
-    } catch { /* v1 also failed */ }
-  }
+  } catch (err) { console.error('[ext] pdf-parse v2 attempt:', err instanceof Error ? err.message : String(err)); }
 
   return {};
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Image OCR extractor (tesseract.js v5 — Spanish + English, with eng fallback)
-// ─────────────────────────────────────────────────────────────────────────────
 export async function extractFromImage(b64: string): Promise<ExtractedDoc> {
   const imageBuffer = Buffer.from(b64, 'base64');
 
@@ -241,7 +239,7 @@ export async function autoExtract(mimeType: string, dataBase64: string): Promise
     if (mimeType.startsWith('image/')) {
       return await extractFromImage(dataBase64);
     }
-  } catch { /* silent — extraction is always best-effort */ }
+  } catch (err) { console.error("[ext]", err instanceof Error ? err.message : String(err)); }
   return {};
 }
 
