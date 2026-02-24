@@ -86,42 +86,59 @@ export function extractFromSunatXml(xml: string): ExtractedDoc {
 // ─────────────────────────────────────────────────────────────────────────────
 function extractTextHeuristics(text: string): ExtractedDoc {
   // Normalise whitespace
-  const t = text.replace(/[ \t]+/g, ' ');
+  const t = text.replace(/[ 	]+/g, ' ');
 
-  // Serie-correlativo: F001-00001234 or B001-12345678
-  const numM = t.match(/\b([A-Z]\d{3}-\d{4,8})\b/);
+  // Serie-correlativo: F001-00001234 or B001-12345678 (SUNAT UBL format)
+  const numM = t.match(/([A-Z]\d{3}-\d{4,8})/);
   const num  = numM?.[1];
   let serie: string | undefined, correlativo: string | undefined;
   if (num) { const p = num.split('-'); serie = p[0]; correlativo = p[1]; }
 
   // RUC (11 digits starting with 20 or 10)
-  const rucM = t.match(/(?:RUC|R\.U\.C\.)[\s:#]*((?:20|10)\d{9})/i);
+  const rucM = t.match(/(?:RUC|R\.U\.C\.)\s*[:#]?\s*((?:20|10)\d{9})/i);
   const ruc  = rucM?.[1];
 
-  // Date: prefer labelled emission date, then any DD/MM/YYYY
-  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[o\xf3]n|emitido)[^\d]{0,20}(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/i);
-  const anyM = t.match(/(\d{2})[\\/\\.\\-](\d{2})[\\/\\.\\-](\d{4})/);
+  // Date: prefer labelled emission date (DD/MM/YYYY Peruvian), then any date
+  // Falls back from DD/MM/YYYY to MM/DD/YYYY when first parse is invalid
+  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[oó]n|emitido)[^\d]{0,20}(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/i);
+  const anyM = t.match(/(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/);
   let fecha: Date | undefined;
   const dm = emM ?? anyM;
   if (dm) {
-    const [d, m, y] = emM ? [emM[1], emM[2], emM[3]] : [dm[1], dm[2], dm[3]];
-    const dt = new Date(`${y}-${m}-${d}`);
-    if (!isNaN(dt.getTime())) fecha = dt;
+    const [g1, g2, g3] = [dm[1], dm[2], dm[3]];
+    // Try DD/MM/YYYY first (Peruvian standard)
+    const dtDMY = new Date(`${g3}-${g2}-${g1}`);
+    if (!isNaN(dtDMY.getTime())) {
+      fecha = dtDMY;
+    } else {
+      // Fallback: try MM/DD/YYYY (US format, e.g. DocuSign, international invoices)
+      const dtMDY = new Date(`${g3}-${g1}-${g2}`);
+      if (!isNaN(dtMDY.getTime())) fecha = dtMDY;
+    }
   }
 
   const parse = (s?: string) => (s ? parseFloat(s.replace(/,/g, '')) : undefined);
 
+  // Total: SUNAT-labelled first, then bare TOTAL not preceded by a word (avoids Tax Total)
   const totalM =
-    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d\n]{0,30}(\d[\d,]*\.\d{2})/i) ??
-    t.match(/\bTOTAL\b[^\d\n]{0,20}(?:S\/\.?\s*|PEN\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d
+]{0,30}(\d[\d,]*\.\d{2})/i) ??
+    t.match(/(?<![A-Za-z])TOTAL:?\s*(?:S\/\.?\s*|PEN\s*|USD\s*|GBP\s*|EUR\s*)?(\d[\d,]*\.\d{2})/i);
 
   const igvM =
-    t.match(/(?:IGV|I\.G\.V\.|18%)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:IGV|I\.G\.V\.|18%)\s*[^\d
+]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
+  // Subtotal: SUNAT labels + generic Subtotal/Subtotal:
   const baseM =
-    t.match(/(?:SUB\s*-?\s*TOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d\n]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:SUB\s*-?\s*TOTAL|SUBTOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d
+]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
-  const moneda = /\b(USD|US\$|D[O\xd3]LARES)\b/i.test(t) ? 'USD' : 'PEN';
+  // Currency: default PEN, support USD, GBP, EUR
+  let moneda = 'PEN';
+  if      (/(USD|US\$|D[OÓ]LARES)/i.test(t)) moneda = 'USD';
+  else if (/GBP/i.test(t))                          moneda = 'GBP';
+  else if (/EUR/i.test(t))                          moneda = 'EUR';
 
   return {
     serie, correlativo, numero: num,
