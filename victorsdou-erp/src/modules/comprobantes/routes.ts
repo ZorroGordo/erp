@@ -13,7 +13,6 @@ import type {
   ComprobanteEstado,
 } from '@prisma/client';
 import { requireAnyOf } from '../../middleware/auth';
-import * as crypto from 'crypto';
 import {
   type ExtractedDoc,
   autoExtract,
@@ -357,116 +356,6 @@ export async function comprobantesRoutes(app: FastifyInstance) {
       return reply.send({ data: updated });
     }
   );
-
-  // ── MAILGUN EMAIL INGEST (public webhook — verified by signature) ─────────
-  // Mailgun POSTs here when an email arrives at comprobantes@<your-domain>.
-  // The endpoint is intentionally unauthenticated (no JWT) but protected by
-  // the Mailgun webhook signing key (MAILGUN_SIGNING_KEY env var).
-  app.post('/email-ingest', { config: { rawBody: true } }, async (req, reply) => {
-    try {
-      // ── 1. Parse multipart form fields + attachments ──────────────────────
-      const fields: Record<string, string> = {};
-      const attachments: Array<{ filename: string; mimeType: string; buffer: Buffer }> = [];
-
-      const parts = (req as any).parts();
-      for await (const part of parts) {
-        if (part.type === 'file') {
-          const chunks: Buffer[] = [];
-          for await (const chunk of part.file) chunks.push(chunk);
-          attachments.push({
-            filename: part.filename ?? 'attachment',
-            mimeType: part.mimetype ?? 'application/octet-stream',
-            buffer: Buffer.concat(chunks),
-          });
-        } else {
-          fields[part.fieldname] = part.value as string;
-        }
-      }
-
-      // ── 2. Verify Mailgun signature ────────────────────────────────────────
-      const signingKey = process.env.MAILGUN_SIGNING_KEY;
-      if (signingKey) {
-        const { timestamp = '', token = '', signature = '' } = fields;
-        const computed = crypto
-          .createHmac('sha256', signingKey)
-          .update(timestamp + token)
-          .digest('hex');
-        if (!crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(signature, 'hex'))) {
-          return reply.code(403).send({ error: 'INVALID_SIGNATURE' });
-        }
-      }
-
-      if (attachments.length === 0) {
-        // No attachments — accept but don't create a comprobante
-        return reply.code(200).send({ ok: true, created: false, reason: 'no_attachments' });
-      }
-
-      const sender  = fields['sender']  ?? fields['from'] ?? 'email-desconocido';
-      const subject = fields['subject'] ?? 'Sin asunto';
-
-      // ── 3. Create Comprobante with source = EMAIL ─────────────────────────
-      const firstAttach = attachments[0];
-      const firstB64    = firstAttach.buffer.toString('base64');
-      const firstExtract = await autoExtract(firstAttach.mimeType, firstB64);
-      const archivoTipo  = mimeToArchivoTipo(firstAttach.mimeType);
-
-      const comprobante = await prisma.comprobante.create({
-        data: {
-          descripcion:  subject,
-          fecha:        firstExtract.fechaEmision ?? new Date(),
-          moneda:       'PEN',
-          source:       'EMAIL' as any,
-          senderEmail:  sender,
-          emailSubject: subject,
-          createdBy:    sender,
-          archivos: {
-            create: attachments.map((att) => {
-              const b64     = att.buffer.toString('base64');
-              const tipo    = mimeToArchivoTipo(att.mimeType);
-              const docType = guessDocTypeFromFilename(att.filename);
-              return {
-                docType,
-                archivoTipo: tipo,
-                nombreArchivo: att.filename,
-                mimeType:  att.mimeType,
-                tamanoBytes: att.buffer.length,
-                dataBase64: b64,
-              };
-            }),
-          },
-        },
-      });
-
-      // Kick off async extraction for all files
-      let bestDate: Date | undefined;
-      let bestTotal: number | undefined;
-      let bestMoneda: string | undefined;
-      for (const arch of await prisma.comprobanteArchivo.findMany({ where: { comprobanteId: comprobante.id } })) {
-        try {
-          const extracted = await autoExtract(arch.mimeType, arch.dataBase64);
-          if (Object.keys(extracted).length > 0) {
-            await prisma.comprobanteArchivo.update({ where: { id: arch.id }, data: extracted as any });
-          }
-          if (extracted.fechaEmision && !bestDate)   bestDate   = extracted.fechaEmision;
-          if (extracted.total        && !bestTotal)  bestTotal  = extracted.total;
-          if (extracted.monedaDoc    && !bestMoneda) bestMoneda = extracted.monedaDoc;
-        } catch { /* best-effort */ }
-      }
-      // Propagate extracted metadata to parent Comprobante
-      const mailgunUpdates: Record<string, unknown> = {};
-      if (bestDate)   mailgunUpdates.fecha      = bestDate;
-      if (bestTotal)  mailgunUpdates.montoTotal  = bestTotal;
-      if (bestMoneda) mailgunUpdates.moneda      = bestMoneda;
-      if (Object.keys(mailgunUpdates).length > 0) {
-        await prisma.comprobante.update({ where: { id: comprobante.id }, data: mailgunUpdates }).catch(() => {});
-      }
-
-      return reply.code(200).send({ ok: true, created: true, id: comprobante.id });
-    } catch (err: unknown) {
-      req.log.error(err, 'email-ingest error');
-      return reply.code(200).send({ ok: false, error: 'internal' }); // always 200 to Mailgun
-    }
-  });
 
   // ── TEST ENDPOINT (JSON) — easy testing without Mailgun ───────────────────
   // POST /v1/comprobantes/email-ingest/test  { sender, subject, attachments: [{ filename, mimeType, dataBase64 }] }
