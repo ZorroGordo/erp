@@ -85,33 +85,60 @@ export function extractFromSunatXml(xml: string): ExtractedDoc {
 //  Text heuristics (used by both PDF and OCR paths)
 // ─────────────────────────────────────────────────────────────────────────────
 function extractTextHeuristics(text: string): ExtractedDoc {
-  // Normalise whitespace
-  const t = text.replace(/[ 	]+/g, ' ');
+  // Normalise whitespace (preserve line breaks for name extraction)
+  const t = text.replace(/[ \t]+/g, ' ');
 
   // Serie-correlativo: F001-00001234 or B001-12345678 (SUNAT UBL format)
-  const numM = t.match(/([A-Z]\d{3}-\d{4,8})/);
+  const numM = t.match(/([A-Z]\d{3}-\d{4,8})/);
   const num  = numM?.[1];
   let serie: string | undefined, correlativo: string | undefined;
   if (num) { const p = num.split('-'); serie = p[0]; correlativo = p[1]; }
 
-  // RUC (11 digits starting with 20 or 10)
-  const rucM = t.match(/(?:RUC|R\.U\.C\.)\s*[:#]?\s*((?:20|10)\d{9})/i);
-  const ruc  = rucM?.[1];
+  // Context-aware RUC: classify emisor vs receptor by surrounding keywords.
+  const rucRe = /(?:RUC|R\.U\.C\.)\s*[:#]?\s*((20|10)\d{9})/gi;
+  let mr: RegExpExecArray | null;
+  let emisorRuc: string | undefined;
+  let receptorRuc: string | undefined;
+  while ((mr = rucRe.exec(t)) !== null) {
+    const before = t.slice(Math.max(0, mr.index - 200), mr.index);
+    const isRecep = /(?:SE[NÑ]OR|CLIENTE|RECEPTOR|ADQUIRENTE|COMPRADOR|DESTINATARIO)/i.test(before);
+    if (isRecep && !receptorRuc) {
+      receptorRuc = mr[1];
+    } else if (!isRecep && !emisorRuc) {
+      emisorRuc = mr[1];
+    } else if (emisorRuc && !receptorRuc) {
+      receptorRuc = mr[1];
+    }
+  }
+  if (!emisorRuc) {
+    const fm = /(?:RUC|R\.U\.C\.)\s*[:#]?\s*((20|10)\d{9})/i.exec(t);
+    if (fm) emisorRuc = fm[1];
+  }
 
-  // Date: prefer labelled emission date (DD/MM/YYYY Peruvian), then any date
-  // Falls back from DD/MM/YYYY to MM/DD/YYYY when first parse is invalid
-  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[oó]n|emitido)[^\d]{0,20}(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/i);
-  const anyM = t.match(/(\d{2})[/.\ -](\d{2})[/.\ -](\d{4})/);
+  // Emisor name: last meaningful line before the emisor RUC number
+  let emisorNombre: string | undefined;
+  if (emisorRuc) {
+    const eidx = t.indexOf(emisorRuc);
+    if (eidx > 20) {
+      const ctx = t.slice(Math.max(0, eidx - 400), eidx);
+      const ctxLines = ctx.split('\n')
+        .map((l: string) => l.trim())
+        .filter((l: string) => l.length > 3 && !/^RUC/i.test(l) && !/^\d{11}$/.test(l) && !/^R\.U\.C\./i.test(l));
+      if (ctxLines.length > 0) emisorNombre = ctxLines[ctxLines.length - 1];
+    }
+  }
+
+  // Date: prefer labelled emission date (DD/MM/YYYY), then any date
+  const emM = t.match(/(?:fecha\s*(?:de\s*)?emisi[oó]n|emitido|issue\s*date)[^\d]{0,20}(\d{2})[-/. ](\d{2})[-/. ](\d{4})/i);
+  const anyM = t.match(/(\d{2})[-/. ](\d{2})[-/. ](\d{4})/);
   let fecha: Date | undefined;
   const dm = emM ?? anyM;
   if (dm) {
     const [g1, g2, g3] = [dm[1], dm[2], dm[3]];
-    // Try DD/MM/YYYY first (Peruvian standard)
     const dtDMY = new Date(`${g3}-${g2}-${g1}`);
     if (!isNaN(dtDMY.getTime())) {
       fecha = dtDMY;
     } else {
-      // Fallback: try MM/DD/YYYY (US format, e.g. DocuSign, international invoices)
       const dtMDY = new Date(`${g3}-${g1}-${g2}`);
       if (!isNaN(dtMDY.getTime())) fecha = dtMDY;
     }
@@ -119,37 +146,37 @@ function extractTextHeuristics(text: string): ExtractedDoc {
 
   const parse = (s?: string) => (s ? parseFloat(s.replace(/,/g, '')) : undefined);
 
-  // Total: SUNAT-labelled first, then bare TOTAL not preceded by a word (avoids Tax Total)
+  // Total: expanded label list + wider spacing tolerance
   const totalM =
-    t.match(/(?:IMPORTE TOTAL|TOTAL A PAGAR|TOTAL FACTURA|TOTAL BOLETA)[^\d
-]{0,30}(\d[\d,]*\.\d{2})/i) ??
+    t.match(/(?:IMPORTE\s+TOTAL|TOTAL\s+A\s+PAGAR|TOTAL\s+FACTURA|TOTAL\s+BOLETA|TOTAL\s+GENERAL|TOTAL\s+VENTA|TOTAL\s+COMPROBANTE|MONTO\s+TOTAL|TOTAL\s+NETO|PRECIO\s+TOTAL)[^\d]{0,60}(\d[\d,]*\.\d{2})/i) ??
     t.match(/(?<![A-Za-z])TOTAL:?\s*(?:S\/\.?\s*|PEN\s*|USD\s*|GBP\s*|EUR\s*)?(\d[\d,]*\.\d{2})/i);
 
   const igvM =
-    t.match(/(?:IGV|I\.G\.V\.|18%)\s*[^\d
-]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:IGV|I\.G\.V\.?|18%)\s*[^\d]{0,40}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
-  // Subtotal: SUNAT labels + generic Subtotal/Subtotal:
   const baseM =
-    t.match(/(?:SUB\s*-?\s*TOTAL|SUBTOTAL|BASE IMPONIBLE|OP(?:ERACIONES)?\s*GRAVADAS)[^\d
-]{0,20}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
+    t.match(/(?:SUB\s*-?\s*TOTAL|SUBTOTAL|BASE\s+IMPONIBLE|OP(?:ERACIONES)?\s+GRAVADAS|OP\.\s+GRAVADA)[^\d]{0,60}(?:S\/\.?\s*)?(\d[\d,]*\.\d{2})/i);
 
   // Currency: default PEN, support USD, GBP, EUR
   let moneda = 'PEN';
-  if      (/(USD|US\$|D[OÓ]LARES)/i.test(t)) moneda = 'USD';
-  else if (/GBP/i.test(t))                          moneda = 'GBP';
-  else if (/EUR/i.test(t))                          moneda = 'EUR';
+  if      (/(USD|US\$|D[OÓ]LARES)/i.test(t)) moneda = 'USD';
+  else if (/(GBP|LIBRAS)/i.test(t))           moneda = 'GBP';
+  else if (/(EUR|EUROS)/i.test(t))            moneda = 'EUR';
+  else if (/SOLES|S\/\.|PEN/i.test(t))        moneda = 'PEN';
 
   return {
     serie, correlativo, numero: num,
     fechaEmision: fecha,
-    emisorRuc:    ruc,
+    emisorRuc,
+    emisorNombre,
+    receptorRuc,
+    monedaDoc: moneda,
     total:    parse(totalM?.[1]),
     igv:      parse(igvM?.[1]),
     subtotal: parse(baseM?.[1]),
-    monedaDoc: moneda,
   };
 }
+
 
 export async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
   const buf = Buffer.from(b64, 'base64');
