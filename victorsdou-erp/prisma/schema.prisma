@@ -617,6 +617,9 @@ model Supplier {
   phone              String?
   address            String?
   paymentTermsDays   Int      @default(30)
+  paymentMethod      String?
+  bankName           String?
+  bankAccount        String?
   currency           String   @default("PEN")
   rating             Int?
   isActive           Boolean  @default(true)
