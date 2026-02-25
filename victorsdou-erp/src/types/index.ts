@@ -87,61 +87,6 @@ export interface WACUpdateInput {
   unitCost: number;
 }
 
-// ── Invoice ───────────────────────────────────────────────────────────────────
-
-export interface NubefactPayload {
-  operacion: string;
-  tipo_de_comprobante: number;  // 1=Factura, 3=Boleta, 7=Nota Crédito
-  serie: string;
-  numero: number;
-  sunat_transaction: number;
-  cliente_tipo_de_documento: number;
-  cliente_numero_de_documento: string;
-  cliente_denominacion: string;
-  cliente_direccion?: string;
-  cliente_email?: string;
-  fecha_de_emision: string;     // DD-MM-YYYY
-  moneda: number;               // 1=PEN, 2=USD
-  tipo_de_cambio?: number;
-  porcentaje_de_igv: number;    // 18
-  total_gravada: number;
-  total_igv: number;
-  total: number;
-  items: NubefactItem[];
-  // For credit notes
-  tipo_de_nota_de_credito?: number;
-  documento_que_se_modifica_tipo?: number;
-  documento_que_se_modifica_serie?: string;
-  documento_que_se_modifica_numero?: number;
-}
-
-export interface NubefactItem {
-  unidad_de_medida: string;
-  codigo: string;
-  descripcion: string;
-  cantidad: number;
-  valor_unitario: number;
-  precio_unitario: number;
-  subtotal: number;
-  tipo_de_igv: number;          // 1=Gravado, 2=Inafecto, 3=Exonerado
-  igv: number;
-  total: number;
-  anticipo_regularizacion: boolean;
-  anticipo_documento_serie?: string;
-  anticipo_documento_numero?: number;
-}
-
-export interface NubefactCDR {
-  aceptada_por_sunat: boolean;
-  codigo_sunat?: string;
-  mensaje_sunat?: string;
-  enlace_del_cpe?: string;  // PDF URL
-  enlace_del_xml?: string;
-  codigo_hash?: string;
-  qr?: string;
-  nubefact_id?: string;
-}
-
 // ── Payroll ───────────────────────────────────────────────────────────────────
 
 export interface PayrollCalculation {

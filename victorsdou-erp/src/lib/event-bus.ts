@@ -10,7 +10,7 @@ export type DomainEvent =
   | { type: 'stock.adjusted';  payload: { ingredientId: string; warehouseId: string; delta: number } }
   | { type: 'order.confirmed'; payload: { orderId: string; customerId: string; totalPen: number } }
   | { type: 'order.cancelled'; payload: { orderId: string; reason: string } }
-  | { type: 'invoice.issued';  payload: { invoiceId: string; docType: string; nubefactId?: string } }
+  | { type: 'invoice.issued';  payload: { invoiceId: string; docType: string } }
   | { type: 'invoice.accepted';payload: { invoiceId: string; hash: string } }
   | { type: 'invoice.rejected';payload: { invoiceId: string; reason: string } }
   | { type: 'payment.received';payload: { orderId: string; amountPen: number; method: string } }

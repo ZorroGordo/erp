@@ -148,10 +148,6 @@ export async function buildApp() {
 
   // ── Webhook Routes ────────────────────────────────────────────────────────
   await app.register(async (wh) => {
-    wh.post('/nubefact', async (_req, reply) => {
-      // Handled in invoicing module separately
-      return reply.send({ received: true });
-    });
     wh.post('/payment-gateway', async (_req, reply) => {
       return reply.send({ received: true });
     });

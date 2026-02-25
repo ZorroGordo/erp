@@ -186,16 +186,8 @@ export async function invoicingRoutes(app: FastifyInstance) {
     if (invoice.status === 'ACCEPTED') return reply.code(422).send({ error: 'ALREADY_EMITTED' });
     if (invoice.status === 'VOIDED')   return reply.code(422).send({ error: 'INVOICE_VOIDED' });
 
-    // Determine serie by doc type and provider
-    const provider = config.INVOICE_PROVIDER;
-    const tipoDocumento = invoice.docType === 'BOLETA' ? '03' : '01';
-    const serie = tipoDocumento === '01'
-      ? (provider === 'factpro' ? config.FACTPRO_SERIE_FACTURA : config.NUBEFACT_SERIE_FACTURA)
-      : (provider === 'factpro' ? config.FACTPRO_SERIE_BOLETA  : config.NUBEFACT_SERIE_BOLETA);
-
-    if (provider !== 'factpro') {
-      return reply.code(503).send({ error: 'PROVIDER_NOT_SUPPORTED', detail: 'Only factpro is currently enabled. Set INVOICE_PROVIDER=factpro.' });
-    }
+    const tipoDocumento = invoice.docType === "BOLETA" ? "03" : "01";
+    const serie = tipoDocumento === "01" ? config.FACTPRO_SERIE_FACTURA : config.FACTPRO_SERIE_BOLETA;
 
     const payload = buildFacturaPayload({
       tipoDocumento,
@@ -257,20 +249,4 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: factproRes, accepted });
   });
 
-  // Webhook: Nubefact CDR callback
-  app.post('/webhook/nubefact', { config: { rawBody: true } }, async (req, reply) => {
-    const cdr = req.body as { nubefact_id: string; aceptada_por_sunat: boolean; codigo_hash?: string; enlace_del_cpe?: string; qr?: string; codigo_sunat?: string; mensaje_sunat?: string };
-    await prisma.invoice.updateMany({
-      where: { nubefactId: cdr.nubefact_id },
-      data: {
-        status:         cdr.aceptada_por_sunat ? 'ACCEPTED' : 'REJECTED',
-        hashCpe:        cdr.codigo_hash,
-        qrCodeUrl:      cdr.qr,
-        pdfUrl:         cdr.enlace_del_cpe,
-        rejectionReason:!cdr.aceptada_por_sunat ? cdr.mensaje_sunat : null,
-        cdrResponse:    cdr as never,
-      },
-    });
-    return reply.send({ received: true });
-  });
 }

@@ -21,8 +21,8 @@ const envSchema = z.object({
   // CORS
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
 
-  // Electronic invoicing provider — 'factpro' | 'nubefact'
-  INVOICE_PROVIDER: z.enum(['factpro', 'nubefact']).default('factpro'),
+  // Electronic invoicing provider
+  INVOICE_PROVIDER: z.literal('factpro').default('factpro'),
 
   // Factpro (preferred — free tier)
   FACTPRO_API_TOKEN: z.string().optional(),
@@ -30,12 +30,6 @@ const envSchema = z.object({
   FACTPRO_SERIE_FACTURA: z.string().default('F001'),
   FACTPRO_SERIE_BOLETA:  z.string().default('B001'),
 
-  // Nubefact (legacy — kept as fallback)
-  NUBEFACT_BASE_URL: z.string().default('https://demo.nubefact.com'),
-  NUBEFACT_API_TOKEN: z.string().optional(),
-  NUBEFACT_RUC: z.string().optional(),
-  NUBEFACT_SERIE_FACTURA: z.string().default('F001'),
-  NUBEFACT_SERIE_BOLETA: z.string().default('B001'),
 
   // AWS / S3
   AWS_REGION: z.string().default('sa-east-1'),
