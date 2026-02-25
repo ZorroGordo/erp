@@ -722,6 +722,7 @@ export default function Customers() {
   const [form, setForm]                   = useState<FormState>(EMPTY_FORM);
   const [lookupStatus, setLookupStatus]   = useState<LookupStatus>('idle');
   const [lookupError, setLookupError]     = useState('');
+  const [lookupDismissed, setLookupDismissed] = useState(false);
   const [expandedId, setExpandedId]       = useState<string | null>(null);
   const [sucursalModal, setSucursalModal] = useState<{ customerId: string; sucursal?: any } | null>(null);
   const [searchText, setSearchText]       = useState('');
@@ -780,6 +781,7 @@ export default function Customers() {
     if (!n) return;
     setLookupStatus('loading');
     setLookupError('');
+    setLookupDismissed(false);
     try {
       if (form.docType === 'RUC') {
         const r = await api.get(`/v1/lookup/ruc?n=${n}`);
@@ -904,7 +906,7 @@ export default function Customers() {
                 <div className="flex gap-2">
                   <input className="input flex-1 font-mono" value={form.docNumber} placeholder="20xxxxxxxxx (11 dígitos)"
                     maxLength={11}
-                    onChange={e => { setForm(f => ({ ...f, docNumber: e.target.value.replace(/\D/g, '') })); setLookupStatus('idle'); }}
+                    onChange={e => { setForm(f => ({ ...f, docNumber: e.target.value.replace(/\D/g, '') })); setLookupStatus('idle'); setLookupDismissed(false); }}
                     onKeyDown={e => e.key === 'Enter' && form.docNumber.length === 11 && runLookup()} />
                   <button type="button" onClick={runLookup}
                     disabled={lookupStatus === 'loading' || form.docNumber.length !== 11}
@@ -913,9 +915,10 @@ export default function Customers() {
                     Buscar en SUNAT
                   </button>
                 </div>
-                {lookupStatus === 'error' && (
-                  <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-1">
-                    <AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}
+                {lookupStatus === 'error' && !lookupDismissed && (
+                  <div className="flex items-start justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-1">
+                    <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}</div>
+                    <button onClick={() => setLookupDismissed(true)} className="text-amber-500 hover:text-amber-700 shrink-0"><X size={13} /></button>
                   </div>
                 )}
               </div>
@@ -943,7 +946,7 @@ export default function Customers() {
                     <input className="input flex-1 font-mono" value={form.docNumber}
                       placeholder={form.docType === 'DNI' ? '12345678 (8 dígitos)' : form.docType === 'CE' ? 'Carnet de extranjería' : 'Número de pasaporte'}
                       maxLength={form.docType === 'DNI' ? 8 : form.docType === 'CE' ? 12 : 20}
-                      onChange={e => { setForm(f => ({ ...f, docNumber: form.docType === 'DNI' ? e.target.value.replace(/\D/g, '') : e.target.value })); setLookupStatus('idle'); }}
+                      onChange={e => { setForm(f => ({ ...f, docNumber: form.docType === 'DNI' ? e.target.value.replace(/\D/g, '') : e.target.value })); setLookupStatus('idle'); setLookupDismissed(false); }}
                       onKeyDown={e => { if (e.key === 'Enter' && form.docType === 'DNI' && form.docNumber.length === 8) runLookup(); }} />
                     {form.docType === 'DNI' && (
                       <button type="button" onClick={runLookup}
@@ -954,9 +957,10 @@ export default function Customers() {
                       </button>
                     )}
                   </div>
-                  {lookupStatus === 'error' && (
-                    <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      <AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}
+                  {lookupStatus === 'error' && !lookupDismissed && (
+                    <div className="flex items-start justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}</div>
+                      <button onClick={() => setLookupDismissed(true)} className="text-amber-500 hover:text-amber-700 shrink-0"><X size={13} /></button>
                     </div>
                   )}
                 </div>
