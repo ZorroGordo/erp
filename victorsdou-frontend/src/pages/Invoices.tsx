@@ -7,6 +7,7 @@ import {
 import toast from 'react-hot-toast';
 import { useState, useRef, useEffect } from 'react';
 import { fmtMoney, fmtNum } from '../lib/fmt';
+import { RucLookupInput } from '../components/RucLookupInput';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocType      = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO';
@@ -123,9 +124,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
   const [clientMode, setClientMode]   = useState<'search' | 'new'>('search');
   // entityConfirmed: true only after user picks from search OR explicitly confirms manual entry
   const [entityConfirmed, setEntityConfirmed] = useState(false);
-  // Lookup state (for the RUC auto-fill button)
-  const [lookupLoading, setLookupLoading] = useState(false);
-  const [lookupMsg,     setLookupMsg]     = useState<{ type: 'ok' | 'warn'; text: string } | null>(null);
+
 
   // Lines
   const [lines, setLines] = useState<LineItem[]>([{ ...BLANK_LINE }]);
@@ -180,27 +179,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
     setEntityConfirmed(false);
   }
 
-  async function runRucLookup() {
-    const n = entityDocNo.trim().replace(/\D/g, '');
-    if (n.length !== 11) return;
-    setLookupLoading(true); setLookupMsg(null);
-    try {
-      const r = await api.get(`/v1/lookup/ruc?n=${n}`);
-      const name = r.data.razonSocial || r.data.nombreComercial || '';
-      if (name) setEntityName(name);
-      if (r.data.direccion) setEntityAddr(r.data.direccion);
-      setLookupMsg({ type: 'ok', text: `✓ ${name || 'Encontrado'} · ${r.data.direccion ?? ''}` });
-      setEntityConfirmed(true);
-    } catch (e: any) {
-      const code = e?.response?.data?.error ?? '';
-      const text = code === 'APIS_TOKEN_MISSING'
-        ? 'Token no configurado — ingresa la razón social manualmente'
-        : code === 'NOT_FOUND'
-        ? 'RUC no encontrado en el padrón — ingresa la razón social manualmente'
-        : 'Error de búsqueda — ingresa los datos manualmente';
-      setLookupMsg({ type: 'warn', text });
-    } finally { setLookupLoading(false); }
-  }
+
 
   const createMutation = useMutation({
     mutationFn: (emitAfter: boolean) =>
@@ -327,30 +306,20 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
             {/* Manual / new mode: RUC entry + SUNAT lookup */}
             {clientMode === 'new' && !entityConfirmed && (
               <div className="space-y-3">
-                <div className="flex gap-2">
-                  <input
-                    className="flex-1 border border-brand-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-300 font-mono"
-                    placeholder={isFactura ? '20xxxxxxxxx — RUC (11 dígitos)' : 'DNI (8 dig.) o RUC (11 dig.) — opcional'}
-                    value={entityDocNo}
-                    maxLength={11}
-                    onChange={e => { const v = e.target.value.replace(/\D/g, ''); setEntityDocNo(v); setEntityId(''); setLookupMsg(null); }}
-                    onKeyDown={e => e.key === 'Enter' && [8,11].includes(entityDocNo.length) && runRucLookup()}
-                  />
-                  <button
-                    type="button"
-                    onClick={runRucLookup}
-                    disabled={lookupLoading || ![8, 11].includes(entityDocNo.trim().length)}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors"
-                  >
-                    {lookupLoading ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
-                    Buscar en SUNAT
-                  </button>
-                </div>
-                {lookupMsg && (
-                  <p className={`text-xs px-2 py-1.5 rounded-lg ${lookupMsg.type === 'ok' ? 'text-green-700 bg-green-50' : 'text-amber-700 bg-amber-50'}`}>
-                    {lookupMsg.text}
-                  </p>
-                )}
+                <RucLookupInput
+                  docType={isFactura ? 'RUC' : (entityDocNo.trim().length === 8 ? 'DNI' : 'RUC')}
+                  value={entityDocNo}
+                  onChange={v => { setEntityDocNo(v); setEntityId(''); }}
+                  onFound={(data) => {
+                    if ('razonSocial' in data) {
+                      if (data.razonSocial) setEntityName(data.razonSocial);
+                      if ((data as any).direccion) setEntityAddr((data as any).direccion);
+                    } else {
+                      if ('fullName' in data && data.fullName) setEntityName(data.fullName);
+                    }
+                    setEntityConfirmed(true);
+                  }}
+                />
                 <input
                   className="input w-full"
                   placeholder={isFactura ? 'Razón social *' : 'Nombre del cliente (opcional para boleta anónima)'}
@@ -365,7 +334,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
                   onChange={e => setEntityEmail(e.target.value)}
                 />
                 {/* Confirm button — only needed when lookup didn't auto-confirm */}
-                {!lookupMsg?.type.startsWith('ok') && (entityDocNo || entityName) && (
+                {!entityConfirmed && (entityDocNo || entityName) && (
                   <button
                     type="button"
                     onClick={() => setEntityConfirmed(true)}
@@ -686,7 +655,7 @@ export default function Invoices() {
         <span>
           Integrado con <strong>Factpro</strong> · Búsqueda RUC/DNI vía{' '}
           <a href="https://apis.net.pe" target="_blank" rel="noopener noreferrer" className="underline hover:text-brand-600">apis.net.pe</a>
-          {' '}(agrega <code className="bg-gray-100 px-1 rounded">APIS_NET_PE_TOKEN</code> en .env para activar auto-fill).
+
           Para producción cambia <code className="bg-gray-100 px-1 rounded">FACTPRO_BASE_URL</code> a <code className="bg-gray-100 px-1 rounded">https://api.factpro.la/api/v2</code>.
         </span>
       </div>
