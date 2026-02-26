@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { config } from '../../config';
 
-const BASE = 'https://api.decolecta.com/v1';
+const BASE = 'https://api.apis.net.pe/v2';
 
 async function apisNetPe(path: string): Promise<Response> {
   return fetch(`${BASE}${path}`, {
@@ -55,22 +55,22 @@ export async function lookupRoutes(app: FastifyInstance) {
     }
 
     const data = await res.json() as {
-      razon_social?: string;
-      numero_documento?: string;
+      razonSocial?: string;        // apis.net.pe
+      ruc?: string;
       estado?: string;
       condicion?: string;
       direccion?: string;
       distrito?: string;
       provincia?: string;
       departamento?: string;
-      es_agente_retencion?: boolean;
-      es_buen_contribuyente?: boolean;
+      nombreComercial?: string;
+      
     };
 
     return reply.send({
-      ruc:             data.numero_documento ?? n,
-      razonSocial:     data.razon_social ?? '',
-      nombreComercial: '',
+      ruc:             data.ruc ?? n,
+      razonSocial:     data.razonSocial ?? '',
+      nombreComercial: data.nombreComercial ?? '',
       estado:          data.estado ?? '',
       condicion:       data.condicion ?? '',
       direccion:       data.direccion ?? '',
@@ -114,21 +114,20 @@ export async function lookupRoutes(app: FastifyInstance) {
     }
 
     const data = await res.json() as {
-      first_name?: string;
-      first_last_name?: string;
-      second_last_name?: string;
-      full_name?: string;
-      document_number?: string;
+      nombres?: string;            // apis.net.pe
+      apellidoPaterno?: string;
+      apellidoMaterno?: string;
+      dni?: string;
+      
     };
 
-    const nombres         = data.first_name ?? '';
-    const apellidoPaterno = data.first_last_name ?? '';
-    const apellidoMaterno = data.second_last_name ?? '';
-    const fullName        = data.full_name
-      ?? [nombres, apellidoPaterno, apellidoMaterno].filter(Boolean).join(' ');
+    const nombres         = data.nombres ?? '';
+    const apellidoPaterno = data.apellidoPaterno ?? '';
+    const apellidoMaterno = data.apellidoMaterno ?? '';
+    const fullName = [nombres, apellidoPaterno, apellidoMaterno].filter(Boolean).join(' ');
 
     return reply.send({
-      dni:             data.document_number ?? n,
+      dni:             data.dni ?? n,
       nombres,
       apellidoPaterno,
       apellidoMaterno,
