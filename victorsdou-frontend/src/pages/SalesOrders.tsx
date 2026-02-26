@@ -6,6 +6,7 @@ import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 export default function SalesOrders() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
@@ -52,9 +53,40 @@ export default function SalesOrders() {
           <h1 className="text-2xl font-bold">Pedidos de venta</h1>
           <p className="text-gray-500 text-sm">B2B y B2C</p>
         </div>
-        <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
-          <Plus size={16} /> Nuevo pedido
-        </button>
+        <div className="flex items-center gap-2">
+          <ExcelDownloadButton
+            filename="pedidos-venta"
+            sheetName="Pedidos"
+            data={orders?.data ?? []}
+            dateField="createdAt"
+            dateLabel="Fecha del pedido"
+            columns={[
+              { header: 'N Pedido', key: 'orderNumber', width: 14 },
+              { header: 'Cliente', key: 'customer.displayName', width: 28 },
+              { header: 'Canal', key: 'channel', width: 12 },
+              { header: 'Estado', key: 'status', width: 14 },
+              { header: 'Total S/', key: 'totalAmount', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Fecha', key: 'createdAt', width: 18, format: (v: any) => v ? new Date(v).toLocaleDateString('es-PE') : '' },
+              { header: 'Notas', key: 'notes', width: 28 },
+            ]}
+            extraFilters={[
+              { key: 'status', label: 'Estado', type: 'select', options: [
+                { value: 'PENDING', label: 'Pendiente' },
+                { value: 'CONFIRMED', label: 'Confirmado' },
+                { value: 'DELIVERED', label: 'Entregado' },
+                { value: 'CANCELLED', label: 'Cancelado' },
+              ]},
+              { key: 'channel', label: 'Canal', type: 'select', options: [
+                { value: 'COUNTER', label: 'Mostrador' },
+                { value: 'ONLINE', label: 'Online' },
+                { value: 'WHOLESALE', label: 'Mayorista' },
+              ]},
+            ]}
+          />
+          <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
+            <Plus size={16} /> Nuevo pedido
+          </button>
+        </div>
       </div>
 
       {showForm && (

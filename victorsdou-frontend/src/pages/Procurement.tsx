@@ -112,6 +112,7 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
   );
 }
 
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 export default function Procurement() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'po'|'suppliers'>('po');
@@ -135,8 +136,58 @@ export default function Procurement() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold">Compras</h1><p className="text-gray-500 text-sm">Compras y proveedores</p></div>
-        {tab === 'po' && <button className="btn-primary flex items-center gap-2" onClick={() => setShowPOForm(v => !v)}><Plus size={16} /> Nueva OC</button>}
-        {tab === 'suppliers' && <button className="btn-primary flex items-center gap-2" onClick={() => { setEditingSup(null); setShowSupForm(true); }}><Plus size={16} /> Nuevo proveedor</button>}
+        {tab === 'po' && (
+          <div className="flex items-center gap-2">
+            <ExcelDownloadButton
+              filename="ordenes-de-compra"
+              sheetName="OC"
+              data={pos?.data ?? []}
+              dateField="orderedAt"
+              dateLabel="Fecha de OC"
+              columns={[
+                { header: 'N OC', key: 'poNumber', width: 12 },
+                { header: 'Proveedor', key: 'supplier.businessName', width: 28 },
+                { header: 'Estado', key: 'status', width: 12 },
+                { header: 'Total S/', key: 'totalAmountPen', width: 12, format: (v: any) => v != null ? Number(v) : '' },
+                { header: 'Total USD', key: 'totalAmountUsd', width: 12, format: (v: any) => v != null ? Number(v) : '' },
+                { header: 'F. entrega', key: 'expectedDeliveryDate', width: 16, format: (v: any) => v ? new Date(v).toLocaleDateString('es-PE') : '' },
+                { header: 'F. creacion', key: 'orderedAt', width: 18, format: (v: any) => v ? new Date(v).toLocaleDateString('es-PE') : '' },
+                { header: 'Notas', key: 'notes', width: 28 },
+              ]}
+              extraFilters={[
+                { key: 'status', label: 'Estado', type: 'select', options: [
+                  { value: 'DRAFT', label: 'Borrador' },
+                  { value: 'APPROVED', label: 'Aprobada' },
+                  { value: 'RECEIVED', label: 'Recibida' },
+                  { value: 'CANCELLED', label: 'Cancelada' },
+                ]},
+              ]}
+            />
+            <button className="btn-primary flex items-center gap-2" onClick={() => setShowPOForm(v => !v)}><Plus size={16} /> Nueva OC</button>
+          </div>
+        )}
+        {tab === 'suppliers' && (
+          <div className="flex items-center gap-2">
+            <ExcelDownloadButton
+              filename="proveedores"
+              sheetName="Proveedores"
+              data={suppliers?.data ?? []}
+              columns={[
+                { header: 'Razon Social', key: 'businessName', width: 30 },
+                { header: 'RUC', key: 'ruc', width: 14 },
+                { header: 'Contacto', key: 'contactName', width: 22 },
+                { header: 'Email', key: 'contactEmail', width: 28 },
+                { header: 'Telefono', key: 'contactPhone', width: 14 },
+                { header: 'Plazo pago (dias)', key: 'paymentTermsDays', width: 18 },
+                { header: 'Metodo pago', key: 'paymentMethod', width: 16 },
+                { header: 'Moneda', key: 'currency', width: 10 },
+                { header: 'Banco', key: 'bankName', width: 20 },
+                { header: 'Cuenta', key: 'bankAccount', width: 20 },
+              ]}
+            />
+            <button className="btn-primary flex items-center gap-2" onClick={() => { setEditingSup(null); setShowSupForm(true); }}><Plus size={16} /> Nuevo proveedor</button>
+          </div>
+        )}
       </div>
       <div className="flex gap-2 border-b border-gray-200">
         {(['po', 'suppliers'] as const).map(t => (

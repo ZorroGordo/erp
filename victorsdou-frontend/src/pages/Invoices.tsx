@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { useState, useRef, useEffect } from 'react';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 import { RucLookupInput } from '../components/RucLookupInput';
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocType      = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO';
@@ -175,7 +176,7 @@ function CreateInvoiceModal({ onClose }: { onClose: () => void }) {
 
   function clearEntity() {
     setEntityId(''); setEntityDocNo(''); setEntityName('');
-    setEntityEmail(''); setEntityAddr(''); setLookupMsg(null);
+    setEntityEmail(''); setEntityAddr('');
     setEntityConfirmed(false);
   }
 
@@ -536,12 +537,37 @@ export default function Invoices() {
           <h1 className="text-2xl font-bold text-gray-900">Facturación electrónica</h1>
           <p className="text-gray-500 text-sm">Comprobantes SUNAT — vía Factpro · Plan gratuito · DEMO</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-semibold hover:bg-brand-700 transition-all shadow-sm"
-        >
-          <Plus size={16} /> Nuevo comprobante
-        </button>
+        <div className="flex items-center gap-2">
+          <ExcelDownloadButton
+            filename="facturas"
+            sheetName="Facturacion"
+            data={invoices}
+            dateField="issuedAt"
+            dateLabel="Fecha de emision"
+            columns={[
+              { header: 'Serie-Numero', key: 'serieNumero', width: 14 },
+              { header: 'Tipo', key: 'type', width: 12 },
+              { header: 'RUC/DNI', key: 'entityDocNumber', width: 14 },
+              { header: 'Cliente', key: 'entityName', width: 30 },
+              { header: 'Moneda', key: 'currency', width: 8 },
+              { header: 'Subtotal', key: 'subtotal', width: 12, format: (v: any) => v != null ? Number(v) : '' },
+              { header: 'IGV', key: 'igv', width: 10, format: (v: any) => v != null ? Number(v) : '' },
+              { header: 'Total', key: 'total', width: 12, format: (v: any) => v != null ? Number(v) : '' },
+              { header: 'Estado', key: 'status', width: 12 },
+              { header: 'Fecha emision', key: 'issuedAt', width: 18, format: (v: any) => v ? new Date(v).toLocaleDateString('es-PE') : '' },
+            ]}
+            extraFilters={[
+              { key: 'type', label: 'Tipo', type: 'select', options: [{ value: 'FACTURA', label: 'Factura' }, { value: 'BOLETA', label: 'Boleta' }] },
+              { key: 'status', label: 'Estado', type: 'select', options: [{ value: 'ACCEPTED', label: 'Aceptado' }, { value: 'PENDING', label: 'Pendiente' }, { value: 'REJECTED', label: 'Rechazado' }] },
+            ]}
+          />
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-semibold hover:bg-brand-700 transition-all shadow-sm"
+          >
+            <Plus size={16} /> Nuevo comprobante
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}

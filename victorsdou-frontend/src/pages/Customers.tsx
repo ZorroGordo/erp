@@ -7,6 +7,7 @@ import {
   Edit2, Trash2, Store, CheckSquare, Square, Save, UserPlus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type DocType = 'DNI' | 'RUC' | 'CE' | 'PASAPORTE';
@@ -868,9 +869,31 @@ export default function Customers() {
           <h1 className="text-2xl font-bold text-gray-900">Clientes</h1>
           <p className="text-gray-500 text-sm">CRM B2B y B2C</p>
         </div>
-        <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
-          <Plus size={16} /> Nuevo cliente
-        </button>
+        <div className="flex items-center gap-2">
+          <ExcelDownloadButton
+            filename="clientes"
+            sheetName="Clientes"
+            data={allCustomers}
+            dateField="createdAt"
+            dateLabel="Fecha de creacion"
+            columns={[
+              { header: 'Tipo', key: 'type', width: 8 },
+              { header: 'Categoria', key: 'category', width: 18 },
+              { header: 'Doc. Tipo', key: 'docType', width: 10 },
+              { header: 'Doc. Numero', key: 'docNumber', width: 14 },
+              { header: 'Nombre / Razon Social', key: 'displayName', width: 30 },
+              { header: 'Email', key: 'email', width: 28 },
+              { header: 'Telefono', key: 'phone', width: 14 },
+              { header: 'Notas', key: 'notes', width: 30 },
+            ]}
+            extraFilters={[
+              { key: 'type', label: 'Tipo de cliente', type: 'select', options: [{ value: 'B2B', label: 'B2B' }, { value: 'B2C', label: 'B2C' }] },
+            ]}
+          />
+          <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
+            <Plus size={16} /> Nuevo cliente
+          </button>
+        </div>
       </div>
 
       {/* ── Create form ── */}

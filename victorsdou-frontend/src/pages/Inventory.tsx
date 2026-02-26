@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DashUnit    = 'qty' | 'pct' | 'und';
@@ -618,6 +619,27 @@ export default function Inventory() {
               </button>
             ))}
           </div>
+          <ExcelDownloadButton
+              filename="inventario"
+              sheetName="Inventario"
+              data={ingredients}
+              columns={[
+                { header: 'Ingrediente', key: 'name', width: 28 },
+                { header: 'Unidad', key: 'unit', width: 10 },
+                { header: 'Stock actual', key: 'currentStock', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Stock minimo', key: 'minStock', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Punto reorden', key: 'reorderPoint', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Costo unit. S/', key: 'averageCost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Estado', key: 'status', width: 12 },
+              ]}
+              extraFilters={[
+                { key: 'status', label: 'Estado', type: 'select', options: [
+                  { value: 'ok', label: 'OK' },
+                  { value: 'alert', label: 'Alerta' },
+                  { value: 'critical', label: 'Critico' },
+                ]},
+              ]}
+            />
           <button onClick={() => { setReceiveItem(undefined); setShowReceive(true); }} className="btn-primary flex items-center gap-2">
             <Plus size={15} /> Registrar entrada
           </button>

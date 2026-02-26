@@ -225,6 +225,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   );
 }
 
+import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
 export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -409,9 +410,28 @@ export default function Products() {
           <ShoppingBag className="w-7 h-7 text-indigo-600" />
           <h1 className="text-2xl font-bold text-gray-900">Productos</h1>
         </div>
-        <button onClick={() => setShowCreate(s => !s)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium">
-          <Plus className="w-4 h-4" /> Nuevo producto
-        </button>
+        <div className="flex items-center gap-2">
+          <ExcelDownloadButton
+            filename="productos"
+            sheetName="Productos"
+            data={productsData?.data ?? []}
+            columns={[
+              { header: 'Nombre', key: 'name', width: 28 },
+              { header: 'Categoria', key: 'category', width: 18 },
+              { header: 'SKU', key: 'sku', width: 14 },
+              { header: 'Precio venta S/', key: 'price', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Costo S/', key: 'cost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Unidad', key: 'unit', width: 10 },
+              { header: 'Activo', key: 'isActive', width: 8, format: (v: any) => v ? 'Si' : 'No' },
+            ]}
+            extraFilters={[
+              { key: 'category', label: 'Categoria', type: 'text' },
+            ]}
+          />
+          <button onClick={() => setShowCreate(s => !s)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium">
+            <Plus className="w-4 h-4" /> Nuevo producto
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
