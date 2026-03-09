@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState, useRef, useCallback, Fragment } from 'react';
 import {
@@ -6,14 +6,14 @@ import {
   Loader2, Sparkles, AlertTriangle, X, Link2, Receipt, ShoppingCart,
   CheckCircle2, Clock, ChevronRight, Lock, ChevronLeft, ChevronDown,
   BarChart3, TrendingUp, Activity, BookOpen, ArrowUpRight, ArrowDownRight,
-  Minus, Scale,
+  Minus, Scale, Landmark,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TopTab = 'financials' | 'entries' | 'reconciliation';
+type TopTab = 'financials' | 'entries' | 'reconciliation' | 'tributos';
 type FinancialView = 'pl' | 'balance' | 'cashflow';
 type PeriodMode = 'monthly' | 'ytd' | 'annual';
 
@@ -879,6 +879,334 @@ function ExcelImportButton() {
   );
 }
 
+// ─── Tributos Tab ─────────────────────────────────────────────────────────────
+
+type TributoStatus = 'PENDIENTE' | 'PAGADO' | 'VENCIDO' | 'ANULADO';
+
+interface TributoObligation {
+  id: string;
+  tipo: string;
+  periodo: string;
+  monto: number;
+  baseImponible?: number | null;
+  fechaVencimiento: string;
+  fechaPago?: string | null;
+  status: TributoStatus;
+  notas?: string | null;
+  createdAt: string;
+}
+
+const TRIBUTO_TIPOS = ['IGV', 'Renta 3ra Categoría', 'Essalud', 'ONP', 'PLAME', 'CTS', 'Gratificaciones', 'Otros'] as const;
+
+const TRIBUTO_STATUS_COLORS: Record<TributoStatus, string> = {
+  PENDIENTE: 'bg-amber-100 text-amber-800',
+  PAGADO:    'bg-green-100 text-green-800',
+  VENCIDO:   'bg-red-100 text-red-800',
+  ANULADO:   'bg-gray-100 text-gray-600',
+};
+
+const TRIBUTO_STATUS_ES: Record<TributoStatus, string> = {
+  PENDIENTE: 'Pendiente',
+  PAGADO:    'Pagado',
+  VENCIDO:   'Vencido',
+  ANULADO:   'Anulado',
+};
+
+const BLANK_TRIBUTO = {
+  tipo: 'IGV',
+  periodo: new Date().toISOString().slice(0, 7),
+  monto: '',
+  baseImponible: '',
+  fechaVencimiento: '',
+  fechaPago: '',
+  status: 'PENDIENTE' as TributoStatus,
+  notas: '',
+};
+
+function TributosTab() {
+  const qc = useQueryClient();
+  const [showModal, setShowModal]     = useState(false);
+  const [editId, setEditId]           = useState<string | null>(null);
+  const [form, setForm]               = useState(BLANK_TRIBUTO);
+  const [filterStatus, setFilterStatus] = useState<TributoStatus | 'ALL'>('ALL');
+
+  const { data: tributos = [], isLoading } = useQuery<TributoObligation[]>({
+    queryKey: ['tributos'],
+    queryFn: () => api.get('/accounting/tributos').then(r => r.data),
+  });
+
+  const createMut = useMutation({
+    mutationFn: (body: object) => api.post('/accounting/tributos', body).then(r => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tributos'] }); toast.success('Obligación registrada'); closeModal(); },
+    onError:   () => toast.error('Error al registrar obligación'),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: object }) => api.patch(`/accounting/tributos/${id}`, body).then(r => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tributos'] }); toast.success('Obligación actualizada'); closeModal(); },
+    onError:   () => toast.error('Error al actualizar obligación'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/accounting/tributos/${id}`).then(r => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['tributos'] }); toast.success('Obligación eliminada'); },
+    onError:   () => toast.error('Error al eliminar obligación'),
+  });
+
+  const projectMut = useMutation({
+    mutationFn: () => api.post('/accounting/tributos/project').then(r => r.data),
+    onSuccess: (data: any) => { qc.invalidateQueries({ queryKey: ['tributos'] }); toast.success(`${data.created ?? 0} obligaciones proyectadas`); },
+    onError:   () => toast.error('Error al proyectar obligaciones'),
+  });
+
+  const closeModal = () => { setShowModal(false); setEditId(null); setForm(BLANK_TRIBUTO); };
+
+  const openCreate = () => { setForm(BLANK_TRIBUTO); setEditId(null); setShowModal(true); };
+
+  const openEdit = (t: TributoObligation) => {
+    setForm({
+      tipo: t.tipo,
+      periodo: t.periodo,
+      monto: String(t.monto),
+      baseImponible: t.baseImponible != null ? String(t.baseImponible) : '',
+      fechaVencimiento: t.fechaVencimiento.slice(0, 10),
+      fechaPago: t.fechaPago ? t.fechaPago.slice(0, 10) : '',
+      status: t.status,
+      notas: t.notas ?? '',
+    });
+    setEditId(t.id);
+    setShowModal(true);
+  };
+
+  const handleSubmit = () => {
+    if (!form.tipo || !form.periodo || !form.monto || !form.fechaVencimiento) {
+      toast.error('Completa los campos obligatorios'); return;
+    }
+    const body = {
+      tipo: form.tipo,
+      periodo: form.periodo,
+      monto: Number(form.monto),
+      baseImponible: form.baseImponible ? Number(form.baseImponible) : undefined,
+      fechaVencimiento: form.fechaVencimiento,
+      fechaPago: form.fechaPago || undefined,
+      status: form.status,
+      notas: form.notas || undefined,
+    };
+    if (editId) updateMut.mutate({ id: editId, body });
+    else createMut.mutate(body);
+  };
+
+  const filtered = filterStatus === 'ALL' ? tributos : tributos.filter(t => t.status === filterStatus);
+  const isBusy = createMut.isPending || updateMut.isPending;
+  const totalPendiente = tributos
+    .filter(t => t.status === 'PENDIENTE' || t.status === 'VENCIDO')
+    .reduce((s, t) => s + t.monto, 0);
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="font-semibold text-gray-800">Obligaciones Tributarias</h2>
+          <p className="text-xs text-gray-500 mt-0.5">IGV · Renta · Planilla · CTS · Gratificaciones</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => projectMut.mutate()}
+            disabled={projectMut.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-brand-200 rounded-xl text-sm font-medium text-brand-700 hover:bg-brand-50 transition-all shadow-sm disabled:opacity-60"
+          >
+            {projectMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+            Auto-proyectar
+          </button>
+          <button onClick={openCreate} className="btn-primary flex items-center gap-2 text-sm">
+            <Plus size={14} /> Nueva obligación
+          </button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {(['PENDIENTE', 'VENCIDO', 'PAGADO', 'ANULADO'] as TributoStatus[]).map(s => {
+          const count = tributos.filter(t => t.status === s).length;
+          const sum   = tributos.filter(t => t.status === s).reduce((a, t) => a + t.monto, 0);
+          return (
+            <div
+              key={s}
+              className={`card p-4 cursor-pointer transition-all hover:border-brand-300 ${filterStatus === s ? 'ring-2 ring-brand-400' : ''}`}
+              onClick={() => setFilterStatus(prev => prev === s ? 'ALL' : s)}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TRIBUTO_STATUS_COLORS[s]}`}>{TRIBUTO_STATUS_ES[s]}</span>
+                <span className="text-xs text-gray-400">{count}</span>
+              </div>
+              <p className="text-lg font-bold text-gray-900">S/ {sum.toLocaleString('es-PE', { minimumFractionDigits: 2 })}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Status filter chips */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => setFilterStatus('ALL')}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${filterStatus === 'ALL' ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-brand-50'}`}
+        >
+          Todas ({tributos.length})
+        </button>
+        {(['PENDIENTE', 'VENCIDO', 'PAGADO', 'ANULADO'] as TributoStatus[]).map(s => (
+          <button
+            key={s}
+            onClick={() => setFilterStatus(prev => prev === s ? 'ALL' : s)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${filterStatus === s ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-brand-50'}`}
+          >
+            {TRIBUTO_STATUS_ES[s]} ({tributos.filter(t => t.status === s).length})
+          </button>
+        ))}
+        {(filterStatus === 'PENDIENTE' || filterStatus === 'VENCIDO' || filterStatus === 'ALL') && totalPendiente > 0 && (
+          <span className="ml-auto text-sm font-semibold text-red-600">
+            Por pagar: S/ {totalPendiente.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
+          </span>
+        )}
+      </div>
+
+      {/* Table */}
+      {isLoading ? (
+        <div className="card p-12 text-center text-gray-400"><Loader2 size={24} className="animate-spin mx-auto" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="card p-12 text-center text-gray-400">
+          <Landmark size={36} className="mx-auto mb-3 text-gray-300" />
+          <p className="font-medium">No hay obligaciones tributarias</p>
+          <p className="text-sm mt-1">Registra manualmente o usa <strong>Auto-proyectar</strong> para generar obligaciones del período.</p>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-brand-50 text-brand-700 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="px-4 py-3 text-left">Tipo</th>
+                <th className="px-4 py-3 text-left">Período</th>
+                <th className="px-4 py-3 text-right">Base Imponible</th>
+                <th className="px-4 py-3 text-right">Monto</th>
+                <th className="px-4 py-3 text-left">Vencimiento</th>
+                <th className="px-4 py-3 text-left">Pago</th>
+                <th className="px-4 py-3 text-center">Estado</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map(t => (
+                <tr key={t.id} className="hover:bg-brand-50/40 transition-colors">
+                  <td className="px-4 py-3 font-medium text-gray-800">{t.tipo}</td>
+                  <td className="px-4 py-3 text-gray-600 font-mono text-xs">{t.periodo}</td>
+                  <td className="px-4 py-3 text-right text-gray-500 text-xs">
+                    {t.baseImponible != null ? `S/ ${t.baseImponible.toLocaleString('es-PE', { minimumFractionDigits: 2 })}` : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right font-semibold text-gray-900">
+                    S/ {t.monto.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">
+                    {new Date(t.fechaVencimiento).toLocaleDateString('es-PE')}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">
+                    {t.fechaPago ? new Date(t.fechaPago).toLocaleDateString('es-PE') : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${TRIBUTO_STATUS_COLORS[t.status]}`}>
+                      {TRIBUTO_STATUS_ES[t.status]}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1 justify-end">
+                      <button
+                        onClick={() => openEdit(t)}
+                        className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                        title="Editar"
+                      >
+                        <FileText size={14} />
+                      </button>
+                      <button
+                        onClick={() => { if (window.confirm('¿Eliminar esta obligación?')) deleteMut.mutate(t.id); }}
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Eliminar"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Create / Edit modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={closeModal} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">{editId ? 'Editar obligación' : 'Nueva obligación tributaria'}</h3>
+              <button onClick={closeModal} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Tipo *</label>
+                <select className="input" value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
+                  {TRIBUTO_TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Período * (YYYY-MM)</label>
+                <input className="input" type="month" value={form.periodo} onChange={e => setForm(f => ({ ...f, periodo: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Estado</label>
+                <select className="input" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as TributoStatus }))}>
+                  {(['PENDIENTE', 'PAGADO', 'VENCIDO', 'ANULADO'] as TributoStatus[]).map(s =>
+                    <option key={s} value={s}>{TRIBUTO_STATUS_ES[s]}</option>
+                  )}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Base Imponible (S/)</label>
+                <input className="input" type="number" min="0" step="0.01" placeholder="0.00"
+                  value={form.baseImponible} onChange={e => setForm(f => ({ ...f, baseImponible: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Monto *</label>
+                <input className="input" type="number" min="0" step="0.01" placeholder="0.00"
+                  value={form.monto} onChange={e => setForm(f => ({ ...f, monto: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Fecha Vencimiento *</label>
+                <input className="input" type="date" value={form.fechaVencimiento} onChange={e => setForm(f => ({ ...f, fechaVencimiento: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de Pago</label>
+                <input className="input" type="date" value={form.fechaPago} onChange={e => setForm(f => ({ ...f, fechaPago: e.target.value }))} />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
+                <textarea className="input resize-none" rows={2} placeholder="Observaciones opcionales..."
+                  value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))} />
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={handleSubmit} disabled={isBusy}>
+                {isBusy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {editId ? 'Guardar cambios' : 'Registrar'}
+              </button>
+              <button className="btn-secondary" onClick={closeModal} disabled={isBusy}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Accounting Component ────────────────────────────────────────────────
 export default function Accounting() {
   const [activeTab, setActiveTab] = useState<TopTab>('financials');
@@ -1097,6 +1425,7 @@ export default function Accounting() {
     { id: 'financials' as TopTab,     label: 'Estados Financieros', icon: BarChart3  },
     { id: 'entries' as TopTab,        label: 'Asientos',             icon: BookOpen   },
     { id: 'reconciliation' as TopTab, label: 'Conciliación',         icon: Building2  },
+    { id: 'tributos' as TopTab,       label: 'Tributos',             icon: Landmark   },
   ];
 
   const FIN_VIEWS = [
@@ -1655,6 +1984,9 @@ export default function Accounting() {
           </div>
         </>
       )}
+
+      {/* ── TRIBUTOS TAB ──────────────────────────────────────────────────────── */}
+      {activeTab === 'tributos' && <TributosTab />}
 
       {/* ── PDF password modal ──────────────────────────────────────────────── */}
       {pwdModal && (
