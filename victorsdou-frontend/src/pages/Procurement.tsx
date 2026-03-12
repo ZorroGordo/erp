@@ -12,13 +12,17 @@ interface SupForm {
   businessName: string; ruc: string; email: string; phone: string;
   contactName: string; address: string; paymentTermsDays: number;
   paymentMethod: string; currency: string; bankName: string;
-  bankAccount: string; notes: string;
+  bankAccount: string; cci: string; creditLimit: string;
+  paymentDayOfMonth: string; requiresDetraccion: boolean;
+  detraccionRate: string; notes: string;
 }
 
 const EMPTY: SupForm = {
   businessName: '', ruc: '', email: '', phone: '', contactName: '',
   address: '', paymentTermsDays: 30, paymentMethod: 'TRANSFERENCIA',
-  currency: 'PEN', bankName: '', bankAccount: '', notes: '',
+  currency: 'PEN', bankName: '', bankAccount: '', cci: '',
+  creditLimit: '', paymentDayOfMonth: '', requiresDetraccion: false,
+  detraccionRate: '', notes: '',
 };
 
 function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClose: () => void; onSaved: () => void }) {
@@ -35,6 +39,11 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
     currency: initial.currency ?? 'PEN',
     bankName: initial.bankName ?? '',
     bankAccount: initial.bankAccount ?? '',
+    cci: initial.cci ?? '',
+    creditLimit: initial.creditLimit != null ? String(initial.creditLimit) : '',
+    paymentDayOfMonth: initial.paymentDayOfMonth ?? '',
+    requiresDetraccion: initial.requiresDetraccion ?? false,
+    detraccionRate: initial.detraccionRate != null ? String(initial.detraccionRate) : '',
     notes: initial.notes ?? '',
   } : { ...EMPTY });
   const qc = useQueryClient();
@@ -82,25 +91,54 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
         <div className="grid grid-cols-2 gap-4">
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Días de crédito</label>
             <input className="input" type="number" min={0} value={form.paymentTermsDays} onChange={e => set('paymentTermsDays')(parseInt(e.target.value)||0)} /></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Día fijo de pago</label>
+            <input className="input" placeholder="ej. 15, fin de mes" value={form.paymentDayOfMonth} onChange={e => set('paymentDayOfMonth')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Método de pago</label>
             <select className="input" value={form.paymentMethod} onChange={e => set('paymentMethod')(e.target.value)}>
-              <option value="TRANSFERENCIA">Transferencia</option>
+              <option value="TRANSFERENCIA">Transferencia bancaria</option>
               <option value="CHEQUE">Cheque</option>
               <option value="EFECTIVO">Efectivo</option>
               <option value="OTRO">Otro</option>
             </select></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Límite de crédito (S/)</label>
+            <input className="input" type="number" min={0} step={0.01} placeholder="Sin límite" value={form.creditLimit} onChange={e => set('creditLimit')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
             <select className="input" value={form.currency} onChange={e => set('currency')(e.target.value)}>
               <option value="PEN">Soles (PEN)</option>
               <option value="USD">Dólares (USD)</option>
             </select></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Banco</label>
-            <input className="input" value={form.bankName} onChange={e => set('bankName')(e.target.value)} /></div>
-          <div className="col-span-2"><label className="block text-xs font-medium text-gray-600 mb-1">Cuenta / CCI</label>
-            <input className="input font-mono" value={form.bankAccount} onChange={e => set('bankAccount')(e.target.value)} /></div>
-          <div className="col-span-2"><label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
-            <textarea className="input" rows={2} value={form.notes} onChange={e => set('notes')(e.target.value)} /></div>
+            <input className="input" placeholder="BCP, Interbank, BBVA…" value={form.bankName} onChange={e => set('bankName')(e.target.value)} /></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">N° de cuenta</label>
+            <input className="input font-mono" placeholder="Número de cuenta" value={form.bankAccount} onChange={e => set('bankAccount')(e.target.value)} /></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">CCI (20 dígitos)</label>
+            <input className="input font-mono" placeholder="00200000000000000000" maxLength={20} value={form.cci} onChange={e => set('cci')(e.target.value.replace(/\D/g, ''))} /></div>
         </div>
+      </div>
+      <div className="border-t border-gray-100 pt-4">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Retenciones (Perú)</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => set('requiresDetraccion')(!form.requiresDetraccion)}
+              className={`w-10 h-5 rounded-full transition-colors relative flex-shrink-0 ${form.requiresDetraccion ? 'bg-brand-600' : 'bg-gray-200'}`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.requiresDetraccion ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            </button>
+            <label className="text-sm text-gray-700 cursor-pointer" onClick={() => set('requiresDetraccion')(!form.requiresDetraccion)}>
+              Sujeto a detracción (SPOT)
+            </label>
+          </div>
+          {form.requiresDetraccion && (
+            <div><label className="block text-xs font-medium text-gray-600 mb-1">Tasa de detracción (%)</label>
+              <input className="input" type="number" min={0} max={100} step={0.1} placeholder="ej. 12" value={form.detraccionRate} onChange={e => set('detraccionRate')(e.target.value)} /></div>
+          )}
+        </div>
+      </div>
+      <div className="border-t border-gray-100 pt-4">
+        <div><label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
+          <textarea className="input" rows={2} value={form.notes} onChange={e => set('notes')(e.target.value)} /></div>
       </div>
       <div className="flex gap-2">
         <button className="btn-primary" disabled={!form.businessName || !form.ruc} onClick={() => saveMut.mutate(form)}>

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useState, useMemo } from 'react';
-import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2, Search } from 'lucide-react';
+import { useState, useMemo, useRef } from 'react';
+import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2, Search, Globe, ImagePlus, Star } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
 
@@ -10,7 +10,11 @@ import { fmtNum } from '../lib/fmt';
 interface Ingredient { id: string; name: string; sku: string; baseUom: string; avgCostPen: string; }
 interface BOMLine { id: string; ingredientId: string; ingredient: Ingredient; qtyRequired: string; uom: string; wasteFactorPct: string; notes: string | null; }
 interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; bomLines: BOMLine[]; }
-interface Product { id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { name: string }; }
+interface Product {
+  id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { name: string };
+  ecommerceEnabled?: boolean; ecommercePrice?: string | null;
+  ecommerceImages?: string[]; ecommerceMainImageIndex?: number;
+}
 interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: number; stdUnit: string; avgCost: number; lineCost: number; }
 
 // ── Cost helpers ───────────────────────────────────────────────────────────
@@ -232,7 +236,12 @@ export default function Products() {
   const [showCreate, setShowCreate] = useState(false);
   const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '' });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', isActive: true });
+  const [editForm, setEditForm] = useState({
+    name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
+    ecommerceEnabled: false, ecommercePriceEnabled: false, ecommercePrice: '',
+    ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
+  });
+  const ecomImgRef = useRef<HTMLInputElement>(null);
   const [editingRecipe, setEditingRecipe] = useState<{ product: Product; recipe: Recipe | null } | null>(null);
   const [overheadRate, setOverheadRate] = useState(0.47);
   const [editingOverhead, setEditingOverhead] = useState(false);
@@ -298,8 +307,18 @@ export default function Products() {
   });
 
   const patchProduct = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: typeof editForm }) =>
-      api.patch('/v1/products/' + id, data),
+    mutationFn: ({ id, data }: { id: string; data: typeof editForm }) => {
+      const payload = {
+        name: data.name, sku: data.sku, basePricePen: data.basePricePen,
+        categoryId: data.categoryId, isActive: data.isActive,
+        ecommerceEnabled: data.ecommerceEnabled,
+        ecommercePrice: data.ecommerceEnabled && data.ecommercePriceEnabled && data.ecommercePrice
+          ? data.ecommercePrice : null,
+        ecommerceImages: data.ecommerceEnabled ? data.ecommerceImages : [],
+        ecommerceMainImageIndex: data.ecommerceEnabled ? data.ecommerceMainImageIndex : 0,
+      };
+      return api.patch('/v1/products/' + id, payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
@@ -309,6 +328,21 @@ export default function Products() {
     onError: () => toast.error('Error al actualizar producto'),
   });
 
+  async function handleEcomImgAdd(files: FileList | null) {
+    if (!files) return;
+    const current = editForm.ecommerceImages;
+    const slots = 5 - current.length;
+    if (slots <= 0) { toast.error('Máximo 5 imágenes'); return; }
+    const toAdd = Array.from(files).slice(0, slots);
+    const base64s = await Promise.all(toAdd.map(f => new Promise<string>((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = e => res(e.target?.result as string);
+      reader.onerror = rej;
+      reader.readAsDataURL(f);
+    })));
+    setEditForm(ef => ({ ...ef, ecommerceImages: [...ef.ecommerceImages, ...base64s] }));
+  }
+
   function openEdit(p: Product) {
     setEditForm({
       name: p.name,
@@ -316,6 +350,11 @@ export default function Products() {
       basePricePen: p.basePricePen,
       categoryId: p.category ? (categories.find((c: any) => c.name === p.category?.name)?.id ?? '') : '',
       isActive: p.isActive,
+      ecommerceEnabled: p.ecommerceEnabled ?? false,
+      ecommercePriceEnabled: !!p.ecommercePrice,
+      ecommercePrice: p.ecommercePrice ?? '',
+      ecommerceImages: p.ecommerceImages ?? [],
+      ecommerceMainImageIndex: p.ecommerceMainImageIndex ?? 0,
     });
     setEditingProduct(p);
   }
@@ -380,6 +419,116 @@ export default function Products() {
               >
                 {editForm.isActive ? <><CheckCircle2 size={12} /> Activo</> : <><Archive size={12} /> Inactivo</>}
               </button>
+            </div>
+
+            {/* ── Ecommerce ── */}
+            <div className="border-t border-gray-100 pt-4 space-y-4">
+              {/* Toggle */}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditForm(f => ({ ...f, ecommerceEnabled: !f.ecommerceEnabled }))}
+                  className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 focus:outline-none ${editForm.ecommerceEnabled ? 'bg-indigo-600' : 'bg-gray-200'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editForm.ecommerceEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+                <label
+                  className="flex items-center gap-1.5 text-sm font-medium text-gray-700 cursor-pointer select-none"
+                  onClick={() => setEditForm(f => ({ ...f, ecommerceEnabled: !f.ecommerceEnabled }))}
+                >
+                  <Globe size={14} className="text-indigo-600" />
+                  Disponible en ecommerce
+                </label>
+              </div>
+
+              {editForm.ecommerceEnabled && (
+                <div className="space-y-4 pl-1">
+                  {/* Image gallery */}
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                      Imágenes del producto <span className="font-normal normal-case text-gray-400">({editForm.ecommerceImages.length}/5) · Clic en ★ para seleccionar portada</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {editForm.ecommerceImages.map((src, idx) => (
+                        <div key={idx} className="relative w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200 group">
+                          <img src={src} alt={`img-${idx}`} className="w-full h-full object-cover" />
+                          {/* Main photo star */}
+                          <button
+                            type="button"
+                            onClick={() => setEditForm(f => ({ ...f, ecommerceMainImageIndex: idx }))}
+                            className={`absolute top-1 left-1 w-5 h-5 flex items-center justify-center rounded-full transition-all ${editForm.ecommerceMainImageIndex === idx ? 'bg-yellow-400 text-white' : 'bg-black/40 text-white/70 opacity-0 group-hover:opacity-100'}`}
+                            title="Usar como portada"
+                          >
+                            <Star size={11} fill={editForm.ecommerceMainImageIndex === idx ? 'currentColor' : 'none'} />
+                          </button>
+                          {/* Remove */}
+                          <button
+                            type="button"
+                            onClick={() => setEditForm(f => {
+                              const imgs = f.ecommerceImages.filter((_, i) => i !== idx);
+                              const main = f.ecommerceMainImageIndex >= imgs.length ? Math.max(0, imgs.length - 1) : f.ecommerceMainImageIndex;
+                              return { ...f, ecommerceImages: imgs, ecommerceMainImageIndex: main };
+                            })}
+                            className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity text-xs font-bold"
+                            title="Eliminar imagen"
+                          >×</button>
+                          {/* Main badge */}
+                          {editForm.ecommerceMainImageIndex === idx && (
+                            <span className="absolute bottom-0 left-0 right-0 text-center text-[9px] font-bold bg-yellow-400/90 text-yellow-900 py-0.5">PORTADA</span>
+                          )}
+                        </div>
+                      ))}
+                      {editForm.ecommerceImages.length < 5 && (
+                        <button
+                          type="button"
+                          onClick={() => ecomImgRef.current?.click()}
+                          className="w-20 h-20 rounded-lg border-2 border-dashed border-indigo-300 flex flex-col items-center justify-center gap-1 text-indigo-400 hover:border-indigo-500 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
+                          title="Agregar imagen"
+                        >
+                          <ImagePlus size={20} />
+                          <span className="text-[10px] font-medium">Agregar</span>
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      ref={ecomImgRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={e => handleEcomImgAdd(e.target.files)}
+                    />
+                  </div>
+
+                  {/* Price override */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={editForm.ecommercePriceEnabled}
+                        onChange={e => setEditForm(f => ({ ...f, ecommercePriceEnabled: e.target.checked, ecommercePrice: e.target.checked ? f.ecommercePrice : '' }))}
+                        className="w-4 h-4 rounded text-indigo-600 border-gray-300"
+                      />
+                      <span className="text-sm text-gray-700">Precio ecommerce diferente al precio base</span>
+                    </label>
+                    {editForm.ecommercePriceEnabled && (
+                      <div className="flex items-center gap-2 pl-6">
+                        <span className="text-sm text-gray-500 font-medium">S/</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          className="input w-40"
+                          value={editForm.ecommercePrice}
+                          onChange={e => setEditForm(f => ({ ...f, ecommercePrice: e.target.value }))}
+                          placeholder="0.00"
+                        />
+                        <span className="text-xs text-gray-400">Precio base: S/ {editForm.basePricePen || '—'}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">

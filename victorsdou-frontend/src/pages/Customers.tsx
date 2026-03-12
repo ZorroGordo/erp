@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import {
-  Plus, Users, Search, Building2, User, X, Loader2, AlertCircle,
+  Plus, Users, Search, Building2, User, X, Loader2,
   ChevronDown, ChevronRight, MapPin, Phone, Mail, Clock, Package,
   Edit2, Trash2, Store, CheckSquare, Square, Save, UserPlus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
+import { RucLookupInput } from '../components/RucLookupInput';
+import type { RucResult, DniResult } from '../components/RucLookupInput';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type DocType = 'DNI' | 'RUC' | 'CE' | 'PASAPORTE';
@@ -104,7 +106,6 @@ const EMPTY_SUCURSAL: SucursalForm = {
   deliveryFrequency: '', deliveryDays: [], deliveryUnitsQty: '', deliveryHour: '', deliveryNotes: '', notes: '',
 };
 
-type LookupStatus = 'idle' | 'loading' | 'found' | 'error';
 
 // ── Reusable address block ─────────────────────────────────────────────────────
 function AddressBlock({
@@ -721,9 +722,6 @@ export default function Customers() {
   const qc = useQueryClient();
   const [showForm, setShowForm]           = useState(false);
   const [form, setForm]                   = useState<FormState>(EMPTY_FORM);
-  const [lookupStatus, setLookupStatus]   = useState<LookupStatus>('idle');
-  const [lookupError, setLookupError]     = useState('');
-  const [lookupDismissed, setLookupDismissed] = useState(false);
   const [expandedId, setExpandedId]       = useState<string | null>(null);
   const [sucursalModal, setSucursalModal] = useState<{ customerId: string; sucursal?: any } | null>(null);
   const [searchText, setSearchText]       = useState('');
@@ -763,60 +761,14 @@ export default function Customers() {
   function closeForm() {
     setShowForm(false);
     setForm(EMPTY_FORM);
-    setLookupStatus('idle');
-    setLookupError('');
   }
   function handleTypeChange(t: CustomerType) {
     setForm({ ...EMPTY_FORM, type: t, category: '', docType: t === 'B2B' ? 'RUC' : 'DNI' });
-    setLookupStatus('idle');
-    setLookupError('');
   }
   function handleDocTypeChange(dt: DocType) {
     setForm(f => ({ ...f, docType: dt, docNumber: '' }));
-    setLookupStatus('idle');
-    setLookupError('');
   }
 
-  async function runLookup() {
-    const n = form.docNumber.trim();
-    if (!n) return;
-    setLookupStatus('loading');
-    setLookupError('');
-    setLookupDismissed(false);
-    try {
-      if (form.docType === 'RUC') {
-        const r = await api.get(`/v1/lookup/ruc?n=${n}`);
-        setForm(f => ({
-          ...f,
-          displayName: r.data.razonSocial || r.data.nombreComercial || f.displayName,
-          docNumber:   r.data.ruc || f.docNumber,
-          // Pre-fill address — all fields remain editable
-          address: {
-            addressLine1: r.data.direccion || f.address.addressLine1,
-            addressLine2: f.address.addressLine2,
-            district:     r.data.distrito  || f.address.district,
-            city:         r.data.provincia || f.address.city,
-          },
-        }));
-        setLookupStatus('found');
-        toast.success('Empresa encontrada en SUNAT');
-      } else if (form.docType === 'DNI') {
-        const r = await api.get(`/v1/lookup/dni?n=${n}`);
-        setForm(f => ({ ...f, displayName: r.data.fullName || f.displayName, docNumber: r.data.dni || f.docNumber }));
-        setLookupStatus('found');
-        toast.success('Persona encontrada en RENIEC');
-      }
-    } catch (e: any) {
-      const code = e.response?.data?.error;
-      if (code === 'APIS_TOKEN_MISSING' || code === 'APIS_TOKEN_INVALID')
-        setLookupError('Configura APIS_NET_PE_TOKEN en .env para activar la búsqueda automática.');
-      else if (code === 'NOT_FOUND')
-        setLookupError(`${form.docType} "${n}" no encontrado en el padrón oficial.`);
-      else
-        setLookupError('No se pudo conectar con el servicio de consulta. Ingresa los datos manualmente.');
-      setLookupStatus('error');
-    }
-  }
 
   function handleSubmit() {
     const finalDocNumber = form.docNumber.trim() || (form.type === 'B2C' ? `ANON-${Date.now()}` : '');
@@ -924,26 +876,27 @@ export default function Customers() {
 
             {/* ── B2B: RUC ── */}
             {form.type === 'B2B' && (
-              <div className="col-span-2 space-y-1">
-                <label className="block text-xs font-medium text-gray-600">RUC <span className="text-red-500">*</span></label>
-                <div className="flex gap-2">
-                  <input className="input flex-1 font-mono" value={form.docNumber} placeholder="20xxxxxxxxx (11 dígitos)"
-                    maxLength={11}
-                    onChange={e => { setForm(f => ({ ...f, docNumber: e.target.value.replace(/\D/g, '') })); setLookupStatus('idle'); setLookupDismissed(false); }}
-                    onKeyDown={e => e.key === 'Enter' && form.docNumber.length === 11 && runLookup()} />
-                  <button type="button" onClick={runLookup}
-                    disabled={lookupStatus === 'loading' || form.docNumber.length !== 11}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors">
-                    {lookupStatus === 'loading' ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                    Buscar en SUNAT
-                  </button>
-                </div>
-                {lookupStatus === 'error' && !lookupDismissed && (
-                  <div className="flex items-start justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-1">
-                    <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}</div>
-                    <button onClick={() => setLookupDismissed(true)} className="text-amber-500 hover:text-amber-700 shrink-0"><X size={13} /></button>
-                  </div>
-                )}
+              <div className="col-span-2">
+                <RucLookupInput
+                  docType="RUC"
+                  value={form.docNumber}
+                  onChange={v => setForm(f => ({ ...f, docNumber: v }))}
+                  onFound={data => {
+                    const r = data as RucResult;
+                    setForm(f => ({
+                      ...f,
+                      displayName: r.razonSocial || r.nombreComercial || f.displayName,
+                      docNumber:   r.ruc || f.docNumber,
+                      address: {
+                        addressLine1: r.direccion || f.address.addressLine1,
+                        addressLine2: f.address.addressLine2,
+                        district:     r.distrito  || f.address.district,
+                        city:         r.provincia || f.address.city,
+                      },
+                    }));
+                    toast.success('Empresa encontrada en SUNAT');
+                  }}
+                />
               </div>
             )}
 
@@ -961,32 +914,29 @@ export default function Customers() {
                     ))}
                   </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-xs font-medium text-gray-600">
-                    Número de {form.docType} <span className="ml-1 text-gray-400 font-normal">(opcional para boletas anónimas)</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input className="input flex-1 font-mono" value={form.docNumber}
-                      placeholder={form.docType === 'DNI' ? '12345678 (8 dígitos)' : form.docType === 'CE' ? 'Carnet de extranjería' : 'Número de pasaporte'}
-                      maxLength={form.docType === 'DNI' ? 8 : form.docType === 'CE' ? 12 : 20}
-                      onChange={e => { setForm(f => ({ ...f, docNumber: form.docType === 'DNI' ? e.target.value.replace(/\D/g, '') : e.target.value })); setLookupStatus('idle'); setLookupDismissed(false); }}
-                      onKeyDown={e => { if (e.key === 'Enter' && form.docType === 'DNI' && form.docNumber.length === 8) runLookup(); }} />
-                    {form.docType === 'DNI' && (
-                      <button type="button" onClick={runLookup}
-                        disabled={lookupStatus === 'loading' || form.docNumber.length !== 8}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium disabled:opacity-40 hover:bg-brand-700 transition-colors">
-                        {lookupStatus === 'loading' ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                        Buscar en RENIEC
-                      </button>
-                    )}
+                {form.docType === 'DNI' ? (
+                  <RucLookupInput
+                    docType="DNI"
+                    value={form.docNumber}
+                    onChange={v => setForm(f => ({ ...f, docNumber: v }))}
+                    onFound={data => {
+                      const d = data as DniResult;
+                      setForm(f => ({ ...f, displayName: d.fullName || f.displayName, docNumber: d.dni || f.docNumber }));
+                      toast.success('Persona encontrada en RENIEC');
+                    }}
+                    label="Número de DNI (opcional para boletas anónimas)"
+                  />
+                ) : (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Número de {form.docType} <span className="ml-1 text-gray-400 font-normal">(opcional)</span>
+                    </label>
+                    <input className="input font-mono" value={form.docNumber}
+                      placeholder={form.docType === 'CE' ? 'Carnet de extranjería' : 'Número de pasaporte'}
+                      maxLength={form.docType === 'CE' ? 12 : 20}
+                      onChange={e => setForm(f => ({ ...f, docNumber: e.target.value }))} />
                   </div>
-                  {lookupStatus === 'error' && !lookupDismissed && (
-                    <div className="flex items-start justify-between gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      <div className="flex items-start gap-1.5"><AlertCircle size={13} className="mt-0.5 shrink-0" />{lookupError}</div>
-                      <button onClick={() => setLookupDismissed(true)} className="text-amber-500 hover:text-amber-700 shrink-0"><X size={13} /></button>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             )}
 
