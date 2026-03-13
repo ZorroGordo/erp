@@ -802,6 +802,10 @@ model Product {
   isB2bVisible  Boolean         @default(true)
   minOrderQty   Decimal         @default(1) @db.Decimal(10, 2)
   metadata      Json?
+  ecommerceEnabled        Boolean  @default(false)
+  ecommercePrice          Decimal? @db.Decimal(12, 4)
+  ecommerceImages         Json     @default("[]")
+  ecommerceMainImageIndex Int      @default(0)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 

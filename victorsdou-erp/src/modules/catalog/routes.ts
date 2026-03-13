@@ -38,7 +38,12 @@ export async function catalogRoutes(app: FastifyInstance) {
 
   app.patch('/:id', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const product = await prisma.product.update({ where: { id }, data: req.body as never });
+    const { categoryId, ...rest } = req.body as { categoryId?: string; [key: string]: unknown };
+    const data: Record<string, unknown> = { ...rest };
+    if (categoryId !== undefined) {
+      data.category = { connect: { id: categoryId } };
+    }
+    const product = await prisma.product.update({ where: { id }, data: data as never });
     return reply.send({ data: product });
   });
 
