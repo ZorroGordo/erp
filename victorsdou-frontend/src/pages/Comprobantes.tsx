@@ -1210,9 +1210,17 @@ export default function Comprobantes() {
                               setRucLoading(true);
                               try {
                                 const res = await api.get(`/v1/lookup/ruc?n=${rucSearch}`);
-                                const d = res.data.data;
-                                setRucResult({ ruc: rucSearch, nombre: d.razonSocial ?? d.nombre ?? rucSearch });
-                              } catch { toast.error('RUC no encontrado'); } finally { setRucLoading(false); }
+                                const d = res.data.data ?? res.data;
+                                setRucResult({ ruc: rucSearch, nombre: d.razonSocial ?? d.nombreComercial ?? d.nombre ?? rucSearch });
+                              } catch (e: any) {
+                                const code = e.response?.data?.error;
+                                if (code === 'APIS_TOKEN_MISSING' || code === 'APIS_TOKEN_INVALID')
+                                  toast.error('Búsqueda automática no configurada — ingresa los datos manualmente');
+                                else if (code === 'NOT_FOUND')
+                                  toast.error('RUC no encontrado en el padrón de SUNAT');
+                                else
+                                  toast.error('Error al consultar SUNAT — intenta de nuevo');
+                              } finally { setRucLoading(false); }
                             }}>
                             {rucLoading ? <Loader2 size={12} className="animate-spin" /> : 'Buscar'}
                           </button>
@@ -1290,9 +1298,17 @@ export default function Comprobantes() {
                               setProvRucLoading(true);
                               try {
                                 const res = await api.get(`/v1/lookup/ruc?n=${provRucSearch}`);
-                                const d = res.data.data;
-                                setProvRucResult({ ruc: provRucSearch, nombre: d.razonSocial ?? d.nombre ?? provRucSearch });
-                              } catch { toast.error('RUC no encontrado'); } finally { setProvRucLoading(false); }
+                                const d = res.data.data ?? res.data;
+                                setProvRucResult({ ruc: provRucSearch, nombre: d.razonSocial ?? d.nombreComercial ?? d.nombre ?? provRucSearch });
+                              } catch (e: any) {
+                                const code = e.response?.data?.error;
+                                if (code === 'APIS_TOKEN_MISSING' || code === 'APIS_TOKEN_INVALID')
+                                  toast.error('Búsqueda automática no configurada — ingresa los datos manualmente');
+                                else if (code === 'NOT_FOUND')
+                                  toast.error('RUC no encontrado en el padrón de SUNAT');
+                                else
+                                  toast.error('Error al consultar SUNAT — intenta de nuevo');
+                              } finally { setProvRucLoading(false); }
                             }}>
                             {provRucLoading ? <Loader2 size={12} className="animate-spin" /> : 'Buscar'}
                           </button>
