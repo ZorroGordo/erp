@@ -239,6 +239,7 @@ export default function Products() {
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
     ecommerceEnabled: false, ecommercePriceEnabled: false, ecommercePrice: '',
+    ecommercePriceDisplay: '', // con-IGV display value (what user types)
     ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
   });
   const [filterEcommerce, setFilterEcommerce] = useState(false);
@@ -354,6 +355,7 @@ export default function Products() {
       ecommerceEnabled: p.ecommerceEnabled ?? false,
       ecommercePriceEnabled: !!p.ecommercePrice,
       ecommercePrice: p.ecommercePrice ?? '',
+      ecommercePriceDisplay: p.ecommercePrice ? (Math.round(Number(p.ecommercePrice) * 1.18 * 100) / 100).toFixed(2) : '',
       ecommerceImages: p.ecommerceImages ?? [],
       ecommerceMainImageIndex: p.ecommerceMainImageIndex ?? 0,
     });
@@ -508,7 +510,7 @@ export default function Products() {
                       <input
                         type="checkbox"
                         checked={editForm.ecommercePriceEnabled}
-                        onChange={e => setEditForm(f => ({ ...f, ecommercePriceEnabled: e.target.checked, ecommercePrice: e.target.checked ? f.ecommercePrice : '' }))}
+                        onChange={e => setEditForm(f => ({ ...f, ecommercePriceEnabled: e.target.checked, ecommercePrice: e.target.checked ? f.ecommercePrice : '', ecommercePriceDisplay: e.target.checked ? f.ecommercePriceDisplay : '' }))}
                         className="w-4 h-4 rounded text-indigo-600 border-gray-300"
                       />
                       <span className="text-sm text-gray-700">Precio ecommerce diferente al precio base</span>
@@ -527,7 +529,11 @@ export default function Products() {
                                 step={0.01}
                                 className="input w-28"
                                 value={editForm.ecommercePrice}
-                                onChange={e => setEditForm(f => ({ ...f, ecommercePrice: e.target.value }))}
+                                onChange={e => {
+                                  const sinIgv = e.target.value;
+                                  const display = sinIgv ? (Math.round(Number(sinIgv) * 1.18 * 100) / 100).toFixed(2) : '';
+                                  setEditForm(f => ({ ...f, ecommercePrice: sinIgv, ecommercePriceDisplay: display }));
+                                }}
                                 placeholder="0.00"
                               />
                             </div>
@@ -543,15 +549,12 @@ export default function Products() {
                                 min={0}
                                 step={0.01}
                                 className="input w-28 bg-indigo-50 border-indigo-200 text-indigo-700 font-semibold"
-                                value={editForm.ecommercePrice ? (Math.round(Number(editForm.ecommercePrice) * 1.18 * 100) / 100).toFixed(2) : ''}
+                                value={editForm.ecommercePriceDisplay}
                                 onChange={e => {
-                                  const finalPrice = parseFloat(e.target.value);
-                                  if (!isNaN(finalPrice)) {
-                                    const exIgv = Math.round(finalPrice / 1.18 * 100) / 100;
-                                    setEditForm(f => ({ ...f, ecommercePrice: String(exIgv) }));
-                                  } else {
-                                    setEditForm(f => ({ ...f, ecommercePrice: '' }));
-                                  }
+                                  const display = e.target.value;
+                                  const finalPrice = parseFloat(display);
+                                  const exIgv = !isNaN(finalPrice) ? String(Math.round(finalPrice / 1.18 * 100) / 100) : '';
+                                  setEditForm(f => ({ ...f, ecommercePriceDisplay: display, ecommercePrice: exIgv }));
                                 }}
                                 placeholder="0.00"
                               />
