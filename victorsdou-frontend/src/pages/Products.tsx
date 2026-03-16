@@ -241,6 +241,7 @@ export default function Products() {
     ecommerceEnabled: false, ecommercePriceEnabled: false, ecommercePrice: '',
     ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
   });
+  const [filterEcommerce, setFilterEcommerce] = useState(false);
   const ecomImgRef = useRef<HTMLInputElement>(null);
   const [editingRecipe, setEditingRecipe] = useState<{ product: Product; recipe: Recipe | null } | null>(null);
   const [overheadRate, setOverheadRate] = useState(0.47);
@@ -359,7 +360,8 @@ export default function Products() {
     setEditingProduct(p);
   }
 
-  const products: Product[] = productsData?.data ?? [];
+  const allProducts: Product[] = productsData?.data ?? [];
+  const products: Product[] = filterEcommerce ? allProducts.filter(p => p.ecommerceEnabled) : allProducts;
   const categories = categoriesData?.data ?? [];
   const activeRecipe: Recipe | null = recipeData?.data?.[0] ?? null;
   const expandedProduct = products.find(p => p.id === expandedId);
@@ -501,7 +503,7 @@ export default function Products() {
                   </div>
 
                   {/* Price override */}
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <label className="flex items-center gap-2 cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -511,19 +513,59 @@ export default function Products() {
                       />
                       <span className="text-sm text-gray-700">Precio ecommerce diferente al precio base</span>
                     </label>
-                    {editForm.ecommercePriceEnabled && (
-                      <div className="flex items-center gap-2 pl-6">
-                        <span className="text-sm text-gray-500 font-medium">S/</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.01}
-                          className="input w-40"
-                          value={editForm.ecommercePrice}
-                          onChange={e => setEditForm(f => ({ ...f, ecommercePrice: e.target.value }))}
-                          placeholder="0.00"
-                        />
-                        <span className="text-xs text-gray-400">Precio base: S/ {editForm.basePricePen || '—'}</span>
+                    {editForm.ecommercePriceEnabled ? (
+                      <div className="pl-6 space-y-2">
+                        {/* ex-IGV input */}
+                        <div className="flex items-center gap-2">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-gray-400 font-medium">Sin IGV (se guarda)</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm text-gray-500 font-medium">S/</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                className="input w-28"
+                                value={editForm.ecommercePrice}
+                                onChange={e => setEditForm(f => ({ ...f, ecommercePrice: e.target.value }))}
+                                placeholder="0.00"
+                              />
+                            </div>
+                          </div>
+                          <span className="text-gray-300 mt-4">→</span>
+                          {/* with-IGV computed input */}
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-indigo-500 font-medium">Con IGV 18% (precio final)</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm text-gray-500 font-medium">S/</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                className="input w-28 bg-indigo-50 border-indigo-200 text-indigo-700 font-semibold"
+                                value={editForm.ecommercePrice ? (Math.round(Number(editForm.ecommercePrice) * 1.18 * 100) / 100).toFixed(2) : ''}
+                                onChange={e => {
+                                  const finalPrice = parseFloat(e.target.value);
+                                  if (!isNaN(finalPrice)) {
+                                    const exIgv = Math.round(finalPrice / 1.18 * 100) / 100;
+                                    setEditForm(f => ({ ...f, ecommercePrice: String(exIgv) }));
+                                  } else {
+                                    setEditForm(f => ({ ...f, ecommercePrice: '' }));
+                                  }
+                                }}
+                                placeholder="0.00"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-400">Precio base sin IGV: S/ {editForm.basePricePen || '—'} → con IGV: S/ {editForm.basePricePen ? (Math.round(Number(editForm.basePricePen) * 1.18 * 100) / 100).toFixed(2) : '—'}</p>
+                      </div>
+                    ) : (
+                      <div className="pl-6">
+                        <p className="text-xs text-gray-400">
+                          Se usará el precio base: S/ {editForm.basePricePen || '—'} sin IGV
+                          {editForm.basePricePen ? <> → <span className="text-indigo-500 font-medium">S/ {(Math.round(Number(editForm.basePricePen) * 1.18 * 100) / 100).toFixed(2)} con IGV</span></> : null}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -577,6 +619,17 @@ export default function Products() {
               { key: 'category', label: 'Categoria', type: 'text' },
             ]}
           />
+          <button
+            onClick={() => setFilterEcommerce(f => !f)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-all ${filterEcommerce ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+            title={filterEcommerce ? 'Mostrando solo ecommerce' : 'Mostrar solo ecommerce'}
+          >
+            <Globe className="w-4 h-4" />
+            Solo ecommerce
+            {filterEcommerce && (
+              <span className="ml-1 bg-white/20 text-xs px-1.5 py-0.5 rounded-full font-bold">{allProducts.filter(p => p.ecommerceEnabled).length}</span>
+            )}
+          </button>
           <button onClick={() => setShowCreate(s => !s)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium">
             <Plus className="w-4 h-4" /> Nuevo producto
           </button>
@@ -717,7 +770,9 @@ export default function Products() {
             </tbody>
           </table>
         )}
-        <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100">{products.length} items</div>
+        <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100">
+          {products.length} producto{products.length !== 1 ? 's' : ''}{filterEcommerce ? ' · filtro: ecommerce' : ` · ${allProducts.length} en total`}
+        </div>
       </div>
     </div>
     </>
