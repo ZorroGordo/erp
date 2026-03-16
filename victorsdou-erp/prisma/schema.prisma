@@ -123,6 +123,9 @@ enum OrderStatus {
   PENDING_PAYMENT
   PAID
   CONFIRMED
+  ACCEPTED
+  READY
+  IN_DELIVERY
   IN_PRODUCTION
   READY_FOR_DISPATCH
   OUT_FOR_DELIVERY
@@ -132,6 +135,7 @@ enum OrderStatus {
   CANCELLED
   REFUND_PENDING
   REFUNDED
+  RETURNED
   DELIVERED_DISPUTE
 }
 
@@ -951,11 +955,16 @@ model SalesOrder {
   deliveryJobId     String?
   invoiceId         String?
   paymentStatus     PaymentStatus @default(UNPAID)
-  confirmedAt       DateTime?
-  notes             String?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
-  createdBy         String
+  confirmedAt              DateTime?
+  notes                    String?
+  ecommerceOrderId         String?
+  ecommerceCustomerName    String?
+  ecommerceCustomerEmail   String?
+  ecommerceCustomerPhone   String?
+  addressSnap              Json?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+  createdBy                String
 
   lines    SalesOrderLine[]
   payments PaymentRecord[]

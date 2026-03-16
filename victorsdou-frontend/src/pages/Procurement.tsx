@@ -230,7 +230,7 @@ export default function Procurement() {
       <div className="flex gap-2 border-b border-gray-200">
         {(['po', 'suppliers'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab===t ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-            {t === 'po' ? 'îrdenes de compra' : 'Proveedores'}
+            {t === 'po' ? 'Órdenes de compra' : 'Proveedores'}
           </button>
         ))}
       </div>
@@ -268,7 +268,7 @@ export default function Procurement() {
             </div>
           )}
           <div className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2"><ClipboardList size={18} className="text-gray-400" /><h2 className="font-semibold">îrdenes de compra</h2></div>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2"><ClipboardList size={18} className="text-gray-400" /><h2 className="font-semibold">Órdenes de compra</h2></div>
             {loadPO ? <div className="p-8 text-center text-gray-400">Cargando...</div> : (
               <div className="table-container">
                 <table className="w-full text-sm"><thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide"><tr>
