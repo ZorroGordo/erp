@@ -531,7 +531,7 @@ export default function Products() {
                                 value={editForm.ecommercePrice}
                                 onChange={e => {
                                   const sinIgv = e.target.value;
-                                  const display = sinIgv ? (Math.round(Number(sinIgv) * 1.18 * 100) / 100).toFixed(2) : '';
+                                  const display = sinIgv ? parseFloat((Number(sinIgv) * 1.18).toFixed(2)).toString() : '';
                                   setEditForm(f => ({ ...f, ecommercePrice: sinIgv, ecommercePriceDisplay: display }));
                                 }}
                                 placeholder="0.00"
@@ -553,7 +553,9 @@ export default function Products() {
                                 onChange={e => {
                                   const display = e.target.value;
                                   const finalPrice = parseFloat(display);
-                                  const exIgv = !isNaN(finalPrice) ? String(Math.round(finalPrice / 1.18 * 100) / 100) : '';
+                                  // Store sin-IGV to 4dp (matches Decimal(12,4) DB column)
+                                  // so that sinIgv × 1.18 rounds back to the exact con-IGV the user typed
+                                  const exIgv = !isNaN(finalPrice) ? String(parseFloat((finalPrice / 1.18).toFixed(4))) : '';
                                   setEditForm(f => ({ ...f, ecommercePriceDisplay: display, ecommercePrice: exIgv }));
                                 }}
                                 placeholder="0.00"

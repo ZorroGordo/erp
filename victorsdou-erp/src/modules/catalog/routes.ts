@@ -24,7 +24,9 @@ export async function catalogRoutes(app: FastifyInstance) {
     const products = await prisma.product.findMany({
       where: { isActive: true, isB2cVisible: true },
       select: { id: true, sku: true, name: true, basePricePen: true, taxClass: true,
-                unitOfSale: true, imageUrl: true, category: true, minOrderQty: true },
+                unitOfSale: true, imageUrl: true, category: true, minOrderQty: true,
+                ecommerceEnabled: true, ecommercePrice: true, ecommerceImages: true,
+                ecommerceMainImageIndex: true },
     });
     await setCache(CACHE_KEYS.catalog(), products, 30);
     return reply.send({ data: products });
