@@ -5,6 +5,82 @@ import * as SalesService from './service';
 import { notifySalesOrderConfirmed } from '../../services/notifications';
 import { sendEmail } from '../../lib/email';
 
+// ── Customer-facing email templates for order status changes ─────────────────
+const wrap = (content: string) => `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f9f5f0;font-family:Georgia,serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9f5f0;padding:32px 16px;">
+<tr><td align="center"><table width="600" cellpadding="0" cellspacing="0"
+  style="max-width:600px;width:100%;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);">
+<tr><td style="background:#1a1a1a;padding:28px 32px;text-align:center;">
+  <p style="margin:0;color:#c8b560;font-size:11px;letter-spacing:4px;text-transform:uppercase;font-family:Arial,sans-serif;">PAN DE MASA MADRE ARTESANAL</p>
+  <h1 style="margin:6px 0 0;color:#fff;font-size:26px;letter-spacing:2px;text-transform:uppercase;">Victorsdou</h1>
+</td></tr>
+<tr><td style="padding:32px 32px 8px;">${content}</td></tr>
+<tr><td style="background:#f9f5f0;padding:20px 32px;text-align:center;border-top:1px solid #ede9e1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#888;">
+    Victorsdou · Lima, Peru &nbsp;|&nbsp;
+    <a href="https://victorsdou.pe" style="color:#6b7c4b;text-decoration:none;">victorsdou.pe</a>
+  </p>
+</td></tr></table></td></tr></table></body></html>`;
+
+function buildAcceptedEmail(name: string, orderId: string, deliveryDate?: Date | null, addr?: any): string {
+  let dateStr = 'en breve';
+  if (deliveryDate) {
+    dateStr = new Date(deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  const ctaUrl = `https://tienda.victorsdou.pe/cuenta/pedidos/${orderId}`;
+  return wrap(`
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Pedido aceptado y programado</h2>
+    <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
+      Hola ${name}, tu pedido fue aceptado y está programado para su entrega.
+    </p>
+    <div style="background:#f0f4ea;border-left:4px solid #6b7c4b;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#6b7c4b;letter-spacing:1px;text-transform:uppercase;font-weight:600;">📅 Fecha de entrega</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;font-weight:600;">${dateStr}</p>
+    </div>
+    <p style="font-family:Arial,sans-serif;font-size:14px;color:#666;margin-bottom:24px;">
+      Nuestro equipo ya está preparando tu pedido. Te avisaremos cuando esté en camino.
+    </p>
+    <div style="text-align:center;padding-bottom:8px;">
+      <a href="${ctaUrl}" style="display:inline-block;background:#6b7c4b;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Ver mi pedido</a>
+    </div>`);
+}
+
+function buildDispatchEmail(name: string, orderId: string, addr?: any): string {
+  const addrLine = addr ? `${addr.street ?? ''}, ${addr.district ?? ''}` : '';
+  const ctaUrl = `https://tienda.victorsdou.pe/cuenta/pedidos/${orderId}`;
+  return wrap(`
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Tu pedido está en camino 🚚</h2>
+    <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
+      Hola ${name}, ¡tu pan ya salió a entregarse!
+    </p>
+    <div style="background:#fef9ec;border-left:4px solid #c8b560;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#c8b560;letter-spacing:1px;text-transform:uppercase;font-weight:600;">📦 En ruta</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">
+        ${addrLine ? `Entregando en <strong>${addrLine}</strong>. ` : ''}Por favor asegúrate de estar disponible.
+      </p>
+    </div>
+    <div style="text-align:center;padding-bottom:8px;">
+      <a href="https://wa.me/51944200333" style="display:inline-block;background:#25d366;color:#fff;text-decoration:none;padding:12px 20px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;margin-right:10px;">WhatsApp</a>
+      <a href="${ctaUrl}" style="display:inline-block;background:#6b7c4b;color:#fff;text-decoration:none;padding:12px 20px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;">Ver pedido</a>
+    </div>`);
+}
+
+function buildDeliveredEmail(name: string, orderId: string): string {
+  return wrap(`
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">¡Pedido entregado! 🎉</h2>
+    <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
+      Hola ${name}, tu pedido fue entregado exitosamente. ¡Esperamos que lo disfrutes!
+    </p>
+    <div style="background:#f9f5f0;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
+      <p style="margin:0 0 8px;font-size:32px;">🍞</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#666;">Gracias por confiar en Victorsdou.<br>Hecho con amor, masa madre y paciencia.</p>
+    </div>
+    <div style="text-align:center;padding-bottom:8px;">
+      <a href="https://victorsdou.pe/tienda" style="display:inline-block;background:#6b7c4b;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Comprar de nuevo</a>
+    </div>`);
+}
+
 // ── Email template for new ecommerce orders ───────────────────────────────────
 
 function buildEcommerceOrderEmail(order: any, body: any): string {
@@ -212,11 +288,35 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.send({ data: order });
   };
 
-  app.patch('/:id/accept',   { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('ACCEPTED'));
-  app.patch('/:id/ready',    { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('READY'));
-  app.patch('/:id/dispatch', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('IN_DELIVERY'));
-  app.patch('/:id/deliver',  { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('DELIVERED'));
-  app.patch('/:id/return',   { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('RETURNED'));
+  // Patch with customer email notification
+  const statusPatchWithEmail = (
+    newStatus: string,
+    buildEmail: (name: string, orderId: string, order: any) => string,
+    subject: string,
+  ) => async (req: any, reply: any) => {
+    const { id } = req.params as { id: string };
+    const order = await prisma.salesOrder.update({ where: { id }, data: { status: newStatus as never } });
+    const email = (order as any).ecommerceCustomerEmail;
+    const name  = (order as any).ecommerceCustomerName ?? email ?? 'Cliente';
+    if (email) {
+      sendEmail({ to: email, subject, html: buildEmail(name, id, order) }).catch(console.error);
+    }
+    return reply.send({ data: order });
+  };
+  app.patch('/:id/accept', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] },
+    statusPatchWithEmail('ACCEPTED',
+      (name, id, o) => buildAcceptedEmail(name, id, (o as any).deliveryDate, (o as any).addressSnap),
+      'Tu pedido fue aceptado - Victorsdou'));
+  app.patch('/:id/ready', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('READY'));
+  app.patch('/:id/dispatch', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] },
+    statusPatchWithEmail('IN_DELIVERY',
+      (name, id, o) => buildDispatchEmail(name, id, (o as any).addressSnap),
+      'Tu pedido esta en camino - Victorsdou'));
+  app.patch('/:id/deliver', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] },
+    statusPatchWithEmail('DELIVERED',
+      (name, id) => buildDeliveredEmail(name, id),
+      'Pedido entregado - Victorsdou'));
+  app.patch('/:id/return', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('RETURNED'));
 
   // ── Cancel ────────────────────────────────────────────────────────────────
   app.patch('/:id/cancel', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
