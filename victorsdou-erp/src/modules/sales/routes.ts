@@ -261,6 +261,19 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: order });
   });
 
+  // ── PUBLIC: get single ecommerce order by ID (no auth — ID is a secret UUID) ─
+  app.get('/ecommerce/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const order = await prisma.salesOrder.findUnique({
+      where: { id },
+      include: {
+        lines: { include: { product: true } },
+      },
+    });
+    if (!order) return reply.code(404).send({ error: 'ORDER_NOT_FOUND', message: 'Order not found' });
+    return reply.send({ data: order });
+  });
+
   // ── Confirm (legacy / B2B) ────────────────────────────────────────────────
   app.patch('/:id/confirm', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };

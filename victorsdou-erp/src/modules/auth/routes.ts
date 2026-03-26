@@ -20,6 +20,40 @@ const USER_SELECT = {
 };
 
 export async function authRoutes(app: FastifyInstance) {
+  // ── POST /v1/auth/register (customer B2C self-service) ──────────────────
+  app.post('/register', {
+    schema: { summary: 'Self-service registration for ecommerce customers', tags: ['Auth'] },
+  }, async (req, reply) => {
+    const { email, fullName, password, phone } = req.body as {
+      email: string; fullName: string; password: string; phone?: string;
+    };
+    if (!email || !fullName || !password) {
+      return reply.code(400).send({ error: 'MISSING_FIELDS', message: 'email, fullName and password are required' });
+    }
+    const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (existing) {
+      return reply.code(409).send({ error: 'EMAIL_TAKEN', message: 'Email already in use' });
+    }
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await prisma.user.create({
+      data: {
+        email:    email.toLowerCase(),
+        fullName,
+        passwordHash,
+        roles:    ['CUSTOMER_B2C'] as never,
+        isActive: true,
+        // phone is not on the User model — stored on Customer record if needed
+      },
+      select: USER_SELECT,
+    });
+    const { user: authUser, tokens, refreshToken } = await AuthService.login({
+      email: email.toLowerCase(),
+      password,
+    });
+    reply.setCookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTS);
+    return reply.code(201).send({ data: { user: authUser, tokens } });
+  });
+
   // ── POST /v1/auth/login ─────────────────────────────────────────────────
   app.post('/login', {
     schema: {
