@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ShoppingCart, Check, X, Globe, ChevronRight, Package, Truck, RotateCcw } from 'lucide-react';
+import { Plus, ShoppingCart, Check, X, Globe, ChevronRight, Package, Truck, RotateCcw, MapPin, Phone, Mail, StickyNote, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
@@ -68,6 +68,10 @@ export default function SalesOrders() {
   // Filters
   const [filterEcommerce, setFilterEcommerce] = useState(false);
   const [filterStatus, setFilterStatus]       = useState('');
+
+  // Detail panel
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const toggleDetail = (id: string) => setSelectedId(prev => prev === id ? null : id);
 
   // New order form
   const [showForm,    setShowForm]    = useState(false);
@@ -272,63 +276,153 @@ export default function SalesOrders() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {(orders?.data ?? []).map((o: any) => {
-                  const isEcom   = o.channel === 'ECOMMERCE';
-                  const name     = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
-                  const actions  = ECOMMERCE_ACTIONS[o.status] ?? [];
+                  const isEcom     = o.channel === 'ECOMMERCE';
+                  const name       = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
+                  const actions    = ECOMMERCE_ACTIONS[o.status] ?? [];
+                  const isExpanded = selectedId === o.id;
+                  const addr       = o.addressSnap ?? {};
 
                   return (
-                    <tr key={o.id} className={`table-row-hover ${isEcom ? 'bg-indigo-50/30' : ''}`}>
-                      <td className="px-5 py-3 font-mono text-gray-700">
-                        <div className="flex items-center gap-1.5">
-                          {isEcom && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}
-                          {o.orderNumber}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="font-medium text-gray-800">{name}</div>
-                        {isEcom && o.ecommerceCustomerEmail && (
-                          <div className="text-xs text-gray-400">{o.ecommerceCustomerEmail}</div>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-gray-500 text-xs">{o.channel}</td>
-                      <td className="px-5 py-3 text-gray-500 text-xs">
-                        {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : '—'}
-                        {isEcom && o.addressSnap?.district && (
-                          <div className="text-gray-400">{o.addressSnap.district}</div>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono font-semibold">
-                        S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}
-                      </td>
-                      <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center justify-center gap-1 flex-wrap">
-                          {/* Ecommerce flow buttons */}
-                          {isEcom && actions.map(act => (
-                            <button
-                              key={act.endpoint}
-                              onClick={() => statusAction.mutate({ id: o.id, action: act.endpoint })}
-                              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${act.color}`}
-                              title={act.label}
-                            >
-                              <act.icon size={12} />
-                              {act.label}
-                            </button>
-                          ))}
-                          {/* Legacy confirm for non-ecommerce */}
-                          {!isEcom && o.status === 'PENDING' && (
-                            <button onClick={() => statusAction.mutate({ id: o.id, action: 'confirm' })} className="p-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200" title="Confirmar">
-                              <Check size={14} />
-                            </button>
+                    <>
+                      <tr
+                        key={o.id}
+                        className={`cursor-pointer transition-colors ${isEcom ? 'bg-indigo-50/30' : ''} ${isExpanded ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+                        onClick={() => toggleDetail(o.id)}
+                      >
+                        <td className="px-5 py-3 font-mono text-gray-700">
+                          <div className="flex items-center gap-1.5">
+                            {isEcom && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}
+                            {o.orderNumber}
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="font-medium text-gray-800">{name}</div>
+                          {isEcom && o.ecommerceCustomerEmail && (
+                            <div className="text-xs text-gray-400">{o.ecommerceCustomerEmail}</div>
                           )}
-                          {!isEcom && ['PENDING', 'CONFIRMED'].includes(o.status) && (
-                            <button onClick={() => statusAction.mutate({ id: o.id, action: 'cancel' })} className="p-1.5 bg-red-100 text-red-700 rounded hover:bg-red-200" title="Cancelar">
-                              <X size={14} />
-                            </button>
+                        </td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">{o.channel}</td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">
+                          {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : '—'}
+                          {isEcom && addr.district && (
+                            <div className="text-gray-400">{addr.district}</div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono font-semibold">
+                          S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}
+                        </td>
+                        <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
+                        <td className="px-5 py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1 flex-wrap">
+                            {/* Ecommerce flow buttons */}
+                            {isEcom && actions.map(act => (
+                              <button
+                                key={act.endpoint}
+                                onClick={() => statusAction.mutate({ id: o.id, action: act.endpoint })}
+                                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${act.color}`}
+                                title={act.label}
+                              >
+                                <act.icon size={12} />
+                                {act.label}
+                              </button>
+                            ))}
+                            {/* Legacy confirm for non-ecommerce */}
+                            {!isEcom && o.status === 'PENDING' && (
+                              <button onClick={() => statusAction.mutate({ id: o.id, action: 'confirm' })} className="p-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200" title="Confirmar">
+                                <Check size={14} />
+                              </button>
+                            )}
+                            {!isEcom && ['PENDING', 'CONFIRMED'].includes(o.status) && (
+                              <button onClick={() => statusAction.mutate({ id: o.id, action: 'cancel' })} className="p-1.5 bg-red-100 text-red-700 rounded hover:bg-red-200" title="Cancelar">
+                                <X size={14} />
+                              </button>
+                            )}
+                            {/* Expand indicator */}
+                            <span className="ml-1 text-gray-300">
+                              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* ── Expanded detail row ─────────────────────────────── */}
+                      {isExpanded && (
+                        <tr key={`${o.id}-detail`} className="bg-indigo-50/60">
+                          <td colSpan={7} className="px-6 py-4">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+
+                              {/* Customer info */}
+                              <div className="space-y-1.5">
+                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Cliente</p>
+                                <div className="flex items-center gap-2 text-gray-700">
+                                  <Mail size={13} className="text-gray-400 flex-shrink-0" />
+                                  {o.ecommerceCustomerEmail ?? o.customer?.email ?? '—'}
+                                </div>
+                                {(o.ecommerceCustomerPhone ?? o.customer?.phone) && (
+                                  <div className="flex items-center gap-2 text-gray-700">
+                                    <Phone size={13} className="text-gray-400 flex-shrink-0" />
+                                    {o.ecommerceCustomerPhone ?? o.customer?.phone}
+                                  </div>
+                                )}
+                                {name && (
+                                  <div className="font-medium text-gray-800">{name}</div>
+                                )}
+                              </div>
+
+                              {/* Delivery address */}
+                              <div className="space-y-1.5">
+                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Entrega</p>
+                                {addr.street ? (
+                                  <div className="flex items-start gap-2 text-gray-700">
+                                    <MapPin size={13} className="text-gray-400 flex-shrink-0 mt-0.5" />
+                                    <div>
+                                      <div>{addr.street}</div>
+                                      {addr.district && <div className="text-gray-500">{addr.district}{addr.city ? `, ${addr.city}` : ''}</div>}
+                                      {addr.reference && <div className="text-xs text-gray-400 mt-0.5">Ref: {addr.reference}</div>}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400">Sin dirección</span>
+                                )}
+                                {o.deliveryDate && (
+                                  <div className="text-gray-600 text-xs mt-1">
+                                    📅 {new Date(o.deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Order lines */}
+                              <div className="space-y-1.5">
+                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Productos</p>
+                                {(o.lines ?? []).length > 0 ? (
+                                  <div className="space-y-1">
+                                    {(o.lines ?? []).map((line: any) => (
+                                      <div key={line.id} className="flex justify-between text-gray-700 text-xs">
+                                        <span>{line.product?.name ?? `Producto ${line.productId?.slice(-6)}`} × {line.qty}</span>
+                                        <span className="font-mono ml-2">S/ {fmtNum(line.lineTotalPen)}</span>
+                                      </div>
+                                    ))}
+                                    <div className="border-t border-indigo-200 mt-2 pt-2 flex justify-between font-semibold text-gray-800 text-xs">
+                                      <span>Total</span>
+                                      <span className="font-mono">S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400">Sin líneas</span>
+                                )}
+                                {o.notes && (
+                                  <div className="flex items-start gap-1.5 text-gray-500 text-xs mt-2">
+                                    <StickyNote size={12} className="flex-shrink-0 mt-0.5" />
+                                    {o.notes}
+                                  </div>
+                                )}
+                              </div>
+
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   );
                 })}
               </tbody>
