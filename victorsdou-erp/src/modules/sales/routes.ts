@@ -28,7 +28,7 @@ function buildAcceptedEmail(name: string, orderId: string, deliveryDate?: Date |
   if (deliveryDate) {
     dateStr = new Date(deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   }
-  const ctaUrl = `https://tienda.victorsdou.pe/cuenta/pedidos/${orderId}`;
+  const ctaUrl = `https://victorsdou.pe/tienda/cuenta/pedidos/${orderId}`;
   return wrap(`
     <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Pedido aceptado y programado</h2>
     <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
@@ -48,7 +48,7 @@ function buildAcceptedEmail(name: string, orderId: string, deliveryDate?: Date |
 
 function buildDispatchEmail(name: string, orderId: string, addr?: any): string {
   const addrLine = addr ? `${addr.street ?? ''}, ${addr.district ?? ''}` : '';
-  const ctaUrl = `https://tienda.victorsdou.pe/cuenta/pedidos/${orderId}`;
+  const ctaUrl = `https://victorsdou.pe/tienda/cuenta/pedidos/${orderId}`;
   return wrap(`
     <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Tu pedido está en camino 🚚</h2>
     <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
