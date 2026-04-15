@@ -832,6 +832,7 @@ model Customer {
   type                CustomerType
   category            CustomerCategory?           // required for B2B, null for B2C
   displayName         String
+  tradeName           String?                     // nombre comercial (e.g. Flora y Fauna)
   docType             DocType
   docNumber           String            @unique
   email               String?

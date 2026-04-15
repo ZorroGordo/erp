@@ -40,11 +40,14 @@ export async function customersRoutes(app: FastifyInstance) {
       type:        'B2B' | 'B2C';
       category?:   CustomerCategory;
       displayName: string;
+      tradeName?:  string;
       docType:     'DNI' | 'RUC' | 'CE' | 'PASAPORTE';
       docNumber:   string;
       email?:      string;
       phone?:      string;
       notes?:      string;
+      paymentTermsDays?: number;
+      creditLimitPen?:   number;
       // Main address (fiscal / physical)
       address?: {
         addressLine1: string;
@@ -106,11 +109,14 @@ export async function customersRoutes(app: FastifyInstance) {
         type:        body.type,
         category:    body.type === 'B2B' ? body.category : null,
         displayName: body.displayName,
+        tradeName:   body.tradeName ?? null,
         docType:     body.docType as never,
         docNumber:   body.docNumber,
         email:       body.email  ?? null,
         phone:       body.phone  ?? null,
         notes:       body.notes  ?? null,
+        paymentTermsDays: body.paymentTermsDays ?? 0,
+        creditLimitPen:   body.creditLimitPen   ?? 0,
         ...(addressRecords.length > 0 ? {
           addresses: { create: addressRecords },
         } : {}),
@@ -126,12 +132,15 @@ export async function customersRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
-      category?:    CustomerCategory;
-      displayName?: string;
-      email?:       string;
-      phone?:       string;
-      notes?:       string;
-      isActive?:    boolean;
+      category?:         CustomerCategory;
+      displayName?:      string;
+      tradeName?:        string;
+      email?:            string;
+      phone?:            string;
+      notes?:            string;
+      isActive?:         boolean;
+      paymentTermsDays?: number;
+      creditLimitPen?:   number;
     };
 
     const existing = await prisma.customer.findUnique({ where: { id } });
@@ -146,12 +155,15 @@ export async function customersRoutes(app: FastifyInstance) {
     const customer = await prisma.customer.update({
       where: { id },
       data: {
-        ...(body.category    !== undefined ? { category:    existing.type === 'B2B' ? body.category as never : null } : {}),
-        ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
-        ...(body.email       !== undefined ? { email:       body.email }       : {}),
-        ...(body.phone       !== undefined ? { phone:       body.phone }       : {}),
-        ...(body.notes       !== undefined ? { notes:       body.notes }       : {}),
-        ...(body.isActive    !== undefined ? { isActive:    body.isActive }    : {}),
+        ...(body.category         !== undefined ? { category:         existing.type === 'B2B' ? body.category as never : null } : {}),
+        ...(body.displayName      !== undefined ? { displayName:      body.displayName }      : {}),
+        ...(body.tradeName        !== undefined ? { tradeName:        body.tradeName || null } : {}),
+        ...(body.email            !== undefined ? { email:            body.email }             : {}),
+        ...(body.phone            !== undefined ? { phone:            body.phone }             : {}),
+        ...(body.notes            !== undefined ? { notes:            body.notes }             : {}),
+        ...(body.isActive         !== undefined ? { isActive:         body.isActive }          : {}),
+        ...(body.paymentTermsDays !== undefined ? { paymentTermsDays: body.paymentTermsDays }  : {}),
+        ...(body.creditLimitPen   !== undefined ? { creditLimitPen:   body.creditLimitPen }    : {}),
       },
     });
     return reply.send({ data: customer });
@@ -211,6 +223,15 @@ export async function customersRoutes(app: FastifyInstance) {
       },
     });
     return reply.code(201).send({ data: agreement });
+  });
+
+  // ── DELETE /v1/customers/:id/price-agreements/:agreementId ─────────────────
+  app.delete('/:id/price-agreements/:agreementId', {
+    preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { agreementId } = req.params as { id: string; agreementId: string };
+    await prisma.customerPriceAgreement.delete({ where: { id: agreementId } });
+    return reply.send({ ok: true });
   });
 
   // ════════════════════════════════════════════════════════════════════════════

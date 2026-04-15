@@ -66,9 +66,12 @@ interface FormState {
   docType:            DocType;
   docNumber:          string;
   displayName:        string;
+  tradeName:          string;
   email:              string;
   phone:              string;
   notes:              string;
+  paymentTermsDays:   string;
+  creditLimitPen:     string;
   // Main address
   address:            AddressFields;
   // Delivery address
@@ -77,7 +80,8 @@ interface FormState {
 }
 const EMPTY_FORM: FormState = {
   type: 'B2B', category: '', docType: 'RUC',
-  docNumber: '', displayName: '', email: '', phone: '', notes: '',
+  docNumber: '', displayName: '', tradeName: '', email: '', phone: '', notes: '',
+  paymentTermsDays: '', creditLimitPen: '',
   address: EMPTY_ADDRESS,
   deliverySameAsMain: true,
   deliveryAddress: EMPTY_ADDRESS,
@@ -481,12 +485,15 @@ function EditCustomerModal({
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
-    displayName: customer.displayName ?? '',
-    email:       customer.email       ?? '',
-    phone:       customer.phone       ?? '',
-    notes:       customer.notes       ?? '',
-    category:    customer.category    ?? '' as string,
-    isActive:    customer.isActive    ?? true,
+    displayName:      customer.displayName      ?? '',
+    tradeName:        customer.tradeName        ?? '',
+    email:            customer.email            ?? '',
+    phone:            customer.phone            ?? '',
+    notes:            customer.notes            ?? '',
+    category:         customer.category         ?? '' as string,
+    isActive:         customer.isActive         ?? true,
+    paymentTermsDays: String(customer.paymentTermsDays ?? 0),
+    creditLimitPen:   customer.creditLimitPen ? String(Number(customer.creditLimitPen)) : '',
   });
 
   // ── Address ────────────────────────────────────────────────────────────────
@@ -514,6 +521,54 @@ function EditCustomerModal({
     }))
   );
   const [ctSaving, setCtSaving] = useState(false);
+
+  // ── Price agreements (B2B) ────────────────────────────────────────────────
+  const { data: agreementsData, refetch: refetchAgreements } = useQuery({
+    queryKey: ['price-agreements', customer.id],
+    queryFn: () => api.get(`/v1/customers/${customer.id}/price-agreements`).then(r => r.data),
+    enabled: customer.type === 'B2B',
+  });
+  const agreements: any[] = agreementsData?.data ?? [];
+  const { data: productsData } = useQuery({
+    queryKey: ['products-list'],
+    queryFn: () => api.get('/v1/products/').then(r => r.data),
+    enabled: customer.type === 'B2B',
+  });
+  const productsList: any[] = productsData?.data ?? [];
+  const [paForm, setPaForm] = useState({ productId: '', pricingType: 'FIXED_PRICE' as string, value: '', effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: '' });
+  const [paSearch, setPaSearch] = useState('');
+  const [paSaving, setPaSaving] = useState(false);
+  const filteredProducts = productsList.filter(p => {
+    if (!paSearch.trim()) return true;
+    const q = paSearch.toLowerCase();
+    return (p.name ?? '').toLowerCase().includes(q) || (p.sku ?? '').toLowerCase().includes(q);
+  }).slice(0, 8);
+
+  async function addAgreement() {
+    if (!paForm.productId || !paForm.value) return toast.error('Selecciona un producto e ingresa un valor');
+    setPaSaving(true);
+    try {
+      await api.post(`/v1/customers/${customer.id}/price-agreements`, {
+        productId: paForm.productId,
+        pricingType: paForm.pricingType,
+        value: parseFloat(paForm.value),
+        effectiveFrom: paForm.effectiveFrom,
+        ...(paForm.effectiveTo ? { effectiveTo: paForm.effectiveTo } : {}),
+      });
+      toast.success('Precio negociado agregado');
+      refetchAgreements();
+      setPaForm({ productId: '', pricingType: 'FIXED_PRICE', value: '', effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: '' });
+      setPaSearch('');
+    } catch { toast.error('Error al guardar precio'); } finally { setPaSaving(false); }
+  }
+
+  async function deleteAgreement(agreementId: string) {
+    try {
+      await api.delete(`/v1/customers/${customer.id}/price-agreements/${agreementId}`);
+      toast.success('Precio eliminado');
+      refetchAgreements();
+    } catch { toast.error('Error al eliminar precio'); }
+  }
 
   function setA(k: string, v: string) { setAddr(a => ({ ...a, [k]: v })); setAddrDirty(true); }
   function addCt() { setContacts(cs => [...cs, { id: null, fullName: '', role: 'OTRO', email: '', phone: '', receivesFacturas: false }]); }
@@ -555,11 +610,14 @@ function EditCustomerModal({
 
   function handleSubmit() {
     const body: Record<string, any> = {
-      displayName: form.displayName.trim(),
-      email:       form.email.trim()  || null,
-      phone:       form.phone.trim()  || null,
-      notes:       form.notes.trim()  || null,
-      isActive:    form.isActive,
+      displayName:      form.displayName.trim(),
+      tradeName:        form.tradeName.trim() || null,
+      email:            form.email.trim()  || null,
+      phone:            form.phone.trim()  || null,
+      notes:            form.notes.trim()  || null,
+      isActive:         form.isActive,
+      paymentTermsDays: parseInt(form.paymentTermsDays, 10) || 0,
+      creditLimitPen:   parseFloat(form.creditLimitPen) || 0,
     };
     if (customer.type === 'B2B' && form.category) body.category = form.category;
     onSave(body);
@@ -590,6 +648,14 @@ function EditCustomerModal({
             </div>
             {customer.type === 'B2B' && (
               <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Nombre comercial</label>
+                <input className="input" value={form.tradeName} placeholder="Ej: Flora y Fauna"
+                  onChange={e => setForm(f => ({ ...f, tradeName: e.target.value }))} />
+                <p className="text-xs text-gray-400 mt-1">Si es diferente a la razón social</p>
+              </div>
+            )}
+            {customer.type === 'B2B' && (
+              <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Categoría</label>
                 <div className="flex flex-wrap gap-2">
                   {(Object.keys(CATEGORY_LABELS) as CustomerCategory[]).map(cat => (
@@ -607,6 +673,17 @@ function EditCustomerModal({
               <div><label className="block text-xs font-medium text-gray-600 mb-1">Teléfono</label>
                 <input className="input" type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
             </div>
+            {customer.type === 'B2B' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Días de crédito</label>
+                  <input className="input" type="number" min="0" value={form.paymentTermsDays}
+                    onChange={e => setForm(f => ({ ...f, paymentTermsDays: e.target.value }))} /></div>
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Límite de crédito (S/)</label>
+                  <input className="input" type="number" min="0" step="0.01" value={form.creditLimitPen}
+                    placeholder="0.00"
+                    onChange={e => setForm(f => ({ ...f, creditLimitPen: e.target.value }))} /></div>
+              </div>
+            )}
             <div><label className="block text-xs font-medium text-gray-600 mb-1">Notas internas</label>
               <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
             <div className="flex items-center gap-3">
@@ -649,6 +726,124 @@ function EditCustomerModal({
               <input className="input" placeholder="Ingresar por muelle trasero…" value={addr.deliveryNotes}
                 onChange={e => setA('deliveryNotes', e.target.value)} /></div>
           </section>
+
+          {/* ── Lista de precios negociados (B2B) ────────────────────────── */}
+          {customer.type === 'B2B' && (
+            <section className="space-y-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                <Package size={11} /> Lista de precios negociados
+              </p>
+
+              {/* Existing agreements */}
+              {agreements.length > 0 ? (
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-gray-500 uppercase tracking-wide">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Producto</th>
+                        <th className="px-3 py-2 text-left">Tipo</th>
+                        <th className="px-3 py-2 text-right">Valor</th>
+                        <th className="px-3 py-2 text-left">Vigencia</th>
+                        <th className="px-3 py-2 w-8"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {agreements.map((a: any) => (
+                        <tr key={a.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-gray-800">{a.product?.name ?? '—'}</div>
+                            <div className="text-gray-400">{a.product?.sku ?? ''}</div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                              a.pricingType === 'FIXED_PRICE' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {a.pricingType === 'FIXED_PRICE' ? 'Precio fijo' : '% Descuento'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono font-medium">
+                            {a.pricingType === 'FIXED_PRICE' ? `S/ ${Number(a.value).toFixed(2)}` : `${Number(a.value)}%`}
+                          </td>
+                          <td className="px-3 py-2 text-gray-500">
+                            {new Date(a.effectiveFrom).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: '2-digit' })}
+                            {a.effectiveTo ? ` → ${new Date(a.effectiveTo).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: '2-digit' })}` : ' → ∞'}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button onClick={() => deleteAgreement(a.id)}
+                              className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                              <Trash2 size={12} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 py-3 text-center border-2 border-dashed border-gray-200 rounded-xl">
+                  Sin precios negociados — agrega uno abajo.
+                </p>
+              )}
+
+              {/* Add new agreement */}
+              <div className="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50/50">
+                <p className="text-xs font-semibold text-gray-500">Agregar precio negociado</p>
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Producto</label>
+                    <input className="input text-xs" placeholder="Buscar por nombre o SKU..."
+                      value={paSearch}
+                      onChange={e => { setPaSearch(e.target.value); setPaForm(f => ({ ...f, productId: '' })); }}
+                    />
+                    {paSearch.trim() && !paForm.productId && (
+                      <div className="mt-1 border border-gray-200 rounded-lg bg-white max-h-40 overflow-y-auto shadow-sm">
+                        {filteredProducts.map(p => (
+                          <button key={p.id} type="button"
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-brand-50 flex justify-between items-center"
+                            onClick={() => { setPaForm(f => ({ ...f, productId: p.id })); setPaSearch(`${p.sku} — ${p.name}`); }}
+                          >
+                            <span><span className="font-mono text-gray-400 mr-2">{p.sku}</span>{p.name}</span>
+                            <span className="text-gray-400 font-mono">S/ {Number(p.basePricePen ?? 0).toFixed(2)}</span>
+                          </button>
+                        ))}
+                        {filteredProducts.length === 0 && (
+                          <p className="px-3 py-2 text-xs text-gray-400">Sin resultados</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
+                      <select className="input text-xs" value={paForm.pricingType}
+                        onChange={e => setPaForm(f => ({ ...f, pricingType: e.target.value }))}>
+                        <option value="FIXED_PRICE">Precio fijo (S/)</option>
+                        <option value="DISCOUNT_PCT">Descuento (%)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        {paForm.pricingType === 'FIXED_PRICE' ? 'Precio (S/)' : 'Descuento (%)'}
+                      </label>
+                      <input className="input text-xs font-mono" type="number" min="0" step="0.01"
+                        value={paForm.value} placeholder={paForm.pricingType === 'FIXED_PRICE' ? '0.00' : '10'}
+                        onChange={e => setPaForm(f => ({ ...f, value: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Desde</label>
+                      <input className="input text-xs" type="date" value={paForm.effectiveFrom}
+                        onChange={e => setPaForm(f => ({ ...f, effectiveFrom: e.target.value }))} />
+                    </div>
+                  </div>
+                  <button type="button" disabled={paSaving || !paForm.productId || !paForm.value}
+                    className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1 disabled:opacity-50"
+                    onClick={addAgreement}>
+                    {paSaving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Agregar
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* ── Contactos ────────────────────────────────────────────────── */}
           <section className="space-y-3">
@@ -763,7 +958,7 @@ export default function Customers() {
     setForm(EMPTY_FORM);
   }
   function handleTypeChange(t: CustomerType) {
-    setForm({ ...EMPTY_FORM, type: t, category: '', docType: t === 'B2B' ? 'RUC' : 'DNI' });
+    setForm({ ...EMPTY_FORM, type: t, category: '', docType: t === 'B2B' ? 'RUC' : 'DNI', tradeName: '', paymentTermsDays: '', creditLimitPen: '' });
   }
   function handleDocTypeChange(dt: DocType) {
     setForm(f => ({ ...f, docType: dt, docNumber: '' }));
@@ -784,10 +979,13 @@ export default function Customers() {
       docType:     form.docType,
       docNumber:   finalDocNumber,
       displayName: form.displayName.trim(),
+      ...(form.tradeName.trim() ? { tradeName: form.tradeName.trim() } : {}),
       ...(form.type === 'B2B' && form.category ? { category: form.category } : {}),
       ...(form.email.trim() ? { email: form.email.trim() } : {}),
       ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
       ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
+      ...(form.paymentTermsDays ? { paymentTermsDays: parseInt(form.paymentTermsDays, 10) } : {}),
+      ...(form.creditLimitPen   ? { creditLimitPen:   parseFloat(form.creditLimitPen) }     : {}),
       ...(hasAddress ? {
         address: {
           addressLine1: form.address.addressLine1.trim(),
@@ -886,6 +1084,7 @@ export default function Customers() {
                     setForm(f => ({
                       ...f,
                       displayName: r.razonSocial || r.nombreComercial || f.displayName,
+                      tradeName:   r.nombreComercial || f.tradeName,
                       docNumber:   r.ruc || f.docNumber,
                       address: {
                         addressLine1: r.direccion || f.address.addressLine1,
@@ -950,6 +1149,17 @@ export default function Customers() {
                 onChange={e => setForm(f => ({ ...f, displayName: e.target.value }))} />
             </div>
 
+            {/* Trade name (nombre comercial) — mainly for B2B */}
+            {form.type === 'B2B' && (
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Nombre comercial</label>
+                <input className="input" value={form.tradeName}
+                  placeholder="Ej: Flora y Fauna, Wong, etc."
+                  onChange={e => setForm(f => ({ ...f, tradeName: e.target.value }))} />
+                <p className="text-xs text-gray-400 mt-1">Si es diferente a la razón social</p>
+              </div>
+            )}
+
             {/* B2B category */}
             {form.type === 'B2B' && (
               <div className="col-span-2">
@@ -979,6 +1189,24 @@ export default function Customers() {
               <input className="input" type="tel" value={form.phone} placeholder="+51 9xx xxx xxx"
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
             </div>
+
+            {/* Credit terms (B2B) */}
+            {form.type === 'B2B' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Días de crédito</label>
+                  <input className="input" type="number" min="0" value={form.paymentTermsDays}
+                    placeholder="0"
+                    onChange={e => setForm(f => ({ ...f, paymentTermsDays: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Límite de crédito (S/)</label>
+                  <input className="input" type="number" min="0" step="0.01" value={form.creditLimitPen}
+                    placeholder="0.00"
+                    onChange={e => setForm(f => ({ ...f, creditLimitPen: e.target.value }))} />
+                </div>
+              </>
+            )}
 
             {/* ── Address section ── */}
             <div className="col-span-2 border-t border-gray-100 pt-4">
@@ -1098,9 +1326,11 @@ export default function Customers() {
                 <tr>
                   <th className="px-5 py-3 text-left w-8"></th>
                   <th className="px-5 py-3 text-left">Razón Social</th>
+                  <th className="px-5 py-3 text-left">N. Comercial</th>
                   <th className="px-5 py-3 text-left">Documento</th>
                   <th className="px-5 py-3 text-left">Tipo</th>
                   <th className="px-5 py-3 text-left">Categoría</th>
+                  <th className="px-5 py-3 text-right">Días crédito</th>
                   <th className="px-5 py-3 text-left">Email</th>
                   <th className="px-5 py-3 text-left">Dirección entrega</th>
                   <th className="px-5 py-3 text-center">Sucursales</th>
@@ -1111,7 +1341,7 @@ export default function Customers() {
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={9} className="px-5 py-8 text-center text-sm text-gray-400">
+                    <td colSpan={12} className="px-5 py-8 text-center text-sm text-gray-400">
                       {allCustomers.length === 0 ? 'Sin clientes aún' : 'No se encontraron clientes con esos filtros'}
                     </td>
                   </tr>
@@ -1138,6 +1368,7 @@ export default function Customers() {
                           }
                         </td>
                         <td className="px-5 py-3 font-medium">{c.displayName}</td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">{c.tradeName || <span className="text-gray-300">—</span>}</td>
                         <td className="px-5 py-3 text-gray-500 font-mono text-xs">
                           <span className="text-gray-400 text-xs mr-1">{c.docType}</span>
                           {c.docNumber?.startsWith('ANON-') ? <span className="text-gray-300">—</span> : c.docNumber}
@@ -1151,6 +1382,9 @@ export default function Customers() {
                           {c.category
                             ? <span className={`badge ${CATEGORY_COLORS[c.category as CustomerCategory] ?? 'bg-gray-100 text-gray-500'}`}>{CATEGORY_LABELS[c.category as CustomerCategory] ?? c.category}</span>
                             : <span className="text-gray-300 text-xs">—</span>}
+                        </td>
+                        <td className="px-5 py-3 text-right text-gray-500 text-xs font-mono">
+                          {c.paymentTermsDays > 0 ? `${c.paymentTermsDays}d` : <span className="text-gray-300">—</span>}
                         </td>
                         <td className="px-5 py-3 text-gray-500">{c.email ?? '—'}</td>
                         <td className="px-5 py-3 text-gray-500 text-xs max-w-[180px]">

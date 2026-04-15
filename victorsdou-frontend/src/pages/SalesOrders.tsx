@@ -1093,12 +1093,38 @@ export default function SalesOrders() {
   const customerList = customers?.data ?? [];
   const productList  = products?.data ?? [];
 
-  // When product selected, fill in base price
+  // Fetch negotiated price agreements for selected customer
+  const { data: customerAgreements } = useQuery({
+    queryKey: ['price-agreements', customerId],
+    queryFn: () => api.get(`/v1/customers/${customerId}/price-agreements`).then(r => r.data),
+    enabled: !!customerId,
+  });
+  const agreementsMap = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const a of (customerAgreements?.data ?? [])) {
+      map.set(a.productId, a);
+    }
+    return map;
+  }, [customerAgreements]);
+
+  // When product selected, fill in negotiated price (or base price)
   const handleProductChange = (index: number, productId: string) => {
     const product = productList.find((p: any) => p.id === productId);
+    const agreement = agreementsMap.get(productId);
+    let unitPrice = product ? String(Number(product.basePricePen)) : '';
+    let discountPct = 0;
+
+    if (agreement) {
+      if (agreement.pricingType === 'FIXED_PRICE') {
+        unitPrice = String(Number(agreement.value));
+      } else if (agreement.pricingType === 'DISCOUNT_PCT') {
+        discountPct = Number(agreement.value);
+      }
+    }
+
     setLines(ls => ls.map((x, j) =>
       j === index
-        ? { ...x, productId, unitPrice: product ? String(Number(product.basePricePen)) : '' }
+        ? { ...x, productId, unitPrice, discountPct }
         : x
     ));
   };
@@ -1359,6 +1385,9 @@ export default function SalesOrders() {
                         <option key={p.id} value={p.id}>{p.name} (S/ {fmtNum(p.basePricePen)})</option>
                       ))}
                     </select>
+                    {l.productId && agreementsMap.has(l.productId) && (
+                      <span className="text-xs text-green-600 mt-0.5 block">Precio negociado</span>
+                    )}
                   </div>
                   {/* Editable unit price */}
                   <div className="col-span-2">
