@@ -64,25 +64,51 @@ export async function previewOrderPricing(
 
 export async function createOrder(input: {
   customerId: string; channel: string; deliveryDate?: string;
-  deliveryAddressId?: string; lines: { productId: string; qty: number; notes?: string }[];
-  notes?: string; createdBy: string;
+  deliveryAddressId?: string; lines: { productId: string; qty: number; notes?: string; unitPriceOverride?: number; discountPct?: number }[];
+  notes?: string; createdBy: string; invoiceType?: string; masterDiscountPct?: number;
 }) {
   const pricing = await previewOrderPricing(input.customerId, input.lines);
   const orderNumber = `OV-${Date.now()}`;
 
+  // Apply master discount if present
+  const masterDisc = input.masterDiscountPct ?? 0;
+  const factor = masterDisc > 0 ? (100 - masterDisc) / 100 : 1;
+
+  // Apply per-line overrides and discounts
+  const finalLines = pricing.lines.map((l, i) => {
+    const lineInput = input.lines[i];
+    let unitPrice = lineInput?.unitPriceOverride ?? l.unitPrice;
+    const discPct = lineInput?.discountPct ?? 0;
+    if (discPct > 0) unitPrice = unitPrice * (100 - discPct) / 100;
+    unitPrice = unitPrice * factor; // apply master discount
+    const lineTotal = parseFloat((unitPrice * l.qty).toFixed(4));
+    const igvAmount = parseFloat((lineTotal * 0.18).toFixed(4));
+    return {
+      productId: l.productId, qty: l.qty,
+      unitPrice, lineTotalPen: lineTotal + igvAmount,
+      pricingSource: lineInput?.unitPriceOverride ? 'MANUAL_OVERRIDE' : l.pricingSource,
+      discountPct: discPct > 0 || masterDisc > 0 ? discPct + masterDisc : undefined,
+    };
+  });
+
+  const subtotalPen = parseFloat(finalLines.reduce((s, l) => s + l.unitPrice * l.qty, 0).toFixed(4));
+  const igvPen = parseFloat((subtotalPen * 0.18).toFixed(4));
+  const totalPen = parseFloat((subtotalPen + igvPen).toFixed(4));
+
   return prisma.salesOrder.create({
     data: {
       orderNumber, customerId: input.customerId, channel: input.channel as never,
-      status: 'DRAFT' as never, subtotalPen: pricing.subtotalPen,
-      igvPen: pricing.igvPen, totalPen: pricing.totalPen,
+      status: 'DRAFT' as never, subtotalPen, igvPen, totalPen,
+      invoiceType: input.invoiceType ?? null,
       deliveryAddressId: input.deliveryAddressId,
       deliveryDate: input.deliveryDate ? new Date(input.deliveryDate) : undefined,
       notes: input.notes, createdBy: input.createdBy,
       lines: {
-        create: pricing.lines.map((l) => ({
+        create: finalLines.map((l) => ({
           productId: l.productId, qty: l.qty,
-          unitPrice: l.unitPrice, lineTotalPen: l.lineTotal,
+          unitPrice: l.unitPrice, lineTotalPen: l.lineTotalPen,
           pricingSource: l.pricingSource,
+          discountPct: l.discountPct,
         })),
       },
     },

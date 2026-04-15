@@ -163,10 +163,47 @@ export async function salesRoutes(app: FastifyInstance) {
         ...(q.customerId ? { customerId: q.customerId } : {}),
         ...(q.channel   ? { channel:    q.channel   as never } : {}),
       },
-      include: { customer: true, lines: { include: { product: true } } },
+      include: { customer: true, lines: { include: { product: true } }, payments: true },
       orderBy: { createdAt: 'desc' },
     });
     return reply.send({ data: orders });
+  });
+
+  // ── Record payment on an order ──────────────────────────────────────────────
+  app.post('/:id/payments', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      method: string; amountPen: number; referenceNo?: string; notes?: string;
+    };
+    const order = await prisma.salesOrder.findUniqueOrThrow({ where: { id }, include: { payments: true } });
+    const payment = await prisma.paymentRecord.create({
+      data: {
+        salesOrderId: id,
+        method: body.method,
+        amountPen: body.amountPen,
+        referenceNo: body.referenceNo ?? null,
+        paidAt: new Date(),
+        notes: body.notes ?? null,
+        createdBy: req.actor!.sub,
+      },
+    });
+    // Update order payment status
+    const totalPaid = (order.payments ?? []).reduce((s: number, p: any) => s + Number(p.amountPen), 0) + body.amountPen;
+    const orderTotal = Number(order.totalPen);
+    const newStatus = totalPaid >= orderTotal ? 'PAID' : 'PARTIAL';
+    await prisma.salesOrder.update({
+      where: { id },
+      data: { paymentStatus: newStatus as never },
+    });
+    return reply.code(201).send({ data: payment });
+  });
+
+  // ── Update invoice type ──────────────────────────────────────────────────────
+  app.patch('/:id/invoice-type', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { invoiceType } = req.body as { invoiceType: string };
+    const order = await prisma.salesOrder.update({ where: { id }, data: { invoiceType } });
+    return reply.send({ data: order });
   });
 
   // ── Price preview ─────────────────────────────────────────────────────────
@@ -316,10 +353,31 @@ export async function salesRoutes(app: FastifyInstance) {
     }
     return reply.send({ data: order });
   };
-  app.patch('/:id/accept', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] },
-    statusPatchWithEmail('ACCEPTED',
-      (name, id, o) => buildAcceptedEmail(name, id, (o as any).deliveryDate, (o as any).addressSnap),
-      'Tu pedido fue aceptado - Victorsdou'));
+  app.patch('/:id/accept', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req: any, reply: any) => {
+    const { id } = req.params as { id: string };
+    // Check payment exists before accepting
+    const current = await prisma.salesOrder.findUniqueOrThrow({
+      where: { id },
+      include: { payments: true },
+    });
+    if ((current.payments ?? []).length === 0 && current.paymentStatus === 'UNPAID') {
+      return reply.code(400).send({
+        error: 'PAYMENT_REQUIRED',
+        message: 'Debe registrar un pago antes de aceptar el pedido',
+      });
+    }
+    const order = await prisma.salesOrder.update({ where: { id }, data: { status: 'ACCEPTED' as never } });
+    const email = (order as any).ecommerceCustomerEmail;
+    const name  = (order as any).ecommerceCustomerName ?? email ?? 'Cliente';
+    if (email) {
+      sendEmail({
+        to: email,
+        subject: 'Tu pedido fue aceptado - Victorsdou',
+        html: buildAcceptedEmail(name, id, (order as any).deliveryDate, (order as any).addressSnap),
+      }).catch(console.error);
+    }
+    return reply.send({ data: order });
+  });
   app.patch('/:id/ready', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('READY'));
   app.patch('/:id/dispatch', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] },
     statusPatchWithEmail('IN_DELIVERY',

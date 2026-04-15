@@ -955,6 +955,7 @@ model SalesOrder {
   deliveryJobId     String?
   invoiceId         String?
   paymentStatus     PaymentStatus @default(UNPAID)
+  invoiceType       String?       // BOLETA | FACTURA
   confirmedAt              DateTime?
   notes                    String?
   ecommerceOrderId         String?
