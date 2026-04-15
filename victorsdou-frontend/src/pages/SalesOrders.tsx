@@ -1,15 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Plus, ShoppingCart, Check, X, Globe, Package, Truck, RotateCcw,
   MapPin, Phone, Mail, StickyNote, ChevronDown, ChevronUp, Search,
   Upload, FileSpreadsheet, Download, DollarSign, CreditCard, Receipt,
-  UserPlus, Percent,
+  UserPlus, Percent, Settings2, Eye, EyeOff, Filter,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
-import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
+
 
 // ── Status config ─────────────────────────────────────────────────────────────
 
@@ -617,6 +617,415 @@ function BulkImportModal({
   );
 }
 
+// ── Column configuration ──────────────────────────────────────────────────────
+
+const STORAGE_KEY = 'ventas-visible-columns';
+
+interface ColumnDef {
+  id: string;
+  label: string;
+  group: string;
+  defaultVisible: boolean;
+  render: (o: any) => React.ReactNode;
+  align?: 'left' | 'right' | 'center';
+  width?: string;
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  SUPERMERCADO:     'Supermercado',
+  TIENDA_NATURISTA: 'Tienda Naturista',
+  CAFETERIA:        'Cafeteria',
+  RESTAURANTE:      'Restaurante',
+  HOTEL:            'Hotel',
+  EMPRESA:          'Empresa',
+  OTROS:            'Otros',
+};
+
+function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
+  return [
+    // ── Pedido
+    { id: 'orderNumber', label: 'Nro. Pedido', group: 'Pedido', defaultVisible: true,
+      render: (o) => <div className="flex items-center gap-1.5 font-mono text-gray-700">{o.channel === 'ECOMMERCE' && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}{o.orderNumber}</div> },
+    { id: 'createdAt', label: 'Fecha', group: 'Pedido', defaultVisible: false,
+      render: (o) => <span className="text-gray-500 text-xs">{o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '—'}</span> },
+    { id: 'channel', label: 'Canal', group: 'Pedido', defaultVisible: true,
+      render: (o) => <span className="text-gray-500 text-xs">{CHANNEL_LABEL[o.channel] ?? o.channel}</span> },
+    { id: 'status', label: 'Estado', group: 'Pedido', defaultVisible: true,
+      render: (o) => <StatusBadge status={o.status} /> },
+    { id: 'invoiceNumber', label: 'N° Factura', group: 'Pedido', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-500 font-mono">{o.invoiceId ?? '—'}</span> },
+    { id: 'invoiceType', label: 'Comprobante', group: 'Pedido', defaultVisible: true,
+      render: (o) => o.invoiceType
+        ? <span className={`px-2 py-0.5 rounded text-xs font-medium ${o.invoiceType === 'FACTURA' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{o.invoiceType}</span>
+        : <span className="text-gray-300">—</span> },
+    { id: 'notes', label: 'Notas', group: 'Pedido', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-500 truncate max-w-[120px] inline-block">{o.notes || '—'}</span> },
+
+    // ── Cliente
+    { id: 'clientName', label: 'Cliente', group: 'Cliente', defaultVisible: true,
+      render: (o) => {
+        const isEcom = o.channel === 'ECOMMERCE';
+        const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
+        return (<div><div className="font-medium text-gray-800">{name}</div>
+          {isEcom && o.ecommerceCustomerEmail && <div className="text-xs text-gray-400">{o.ecommerceCustomerEmail}</div>}
+        </div>);
+      }},
+    { id: 'ruc', label: 'RUC / DNI', group: 'Cliente', defaultVisible: false,
+      render: (o) => <span className="text-xs font-mono text-gray-600">{o.customer?.docNumber ?? '—'}</span> },
+    { id: 'razonSocial', label: 'Razon Social', group: 'Cliente', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-600">{o.customer?.displayName ?? o.customer?.businessName ?? '—'}</span> },
+    { id: 'category', label: 'Categoria', group: 'Cliente', defaultVisible: false,
+      render: (o) => {
+        const cat = o.customer?.category;
+        return cat ? <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{CATEGORY_LABEL[cat] ?? cat}</span> : <span className="text-gray-300">—</span>;
+      }},
+    { id: 'clientEmail', label: 'Email', group: 'Cliente', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerEmail ?? o.customer?.email ?? '—'}</span> },
+    { id: 'clientPhone', label: 'Telefono', group: 'Cliente', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerPhone ?? o.customer?.phone ?? '—'}</span> },
+
+    // ── Productos (summary)
+    { id: 'skus', label: 'SKUs', group: 'Productos', defaultVisible: false,
+      render: (o) => <span className="text-xs font-mono text-gray-500">{(o.lines ?? []).map((l: any) => l.product?.sku ?? '').filter(Boolean).join(', ') || '—'}</span> },
+    { id: 'products', label: 'Productos', group: 'Productos', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-600 truncate max-w-[180px] inline-block">{(o.lines ?? []).map((l: any) => l.product?.name ?? '').filter(Boolean).join(', ') || '—'}</span> },
+    { id: 'itemCount', label: 'Items', group: 'Productos', defaultVisible: false, align: 'center',
+      render: (o) => <span className="text-xs text-gray-500">{(o.lines ?? []).reduce((s: number, l: any) => s + Number(l.qty), 0)}</span> },
+
+    // ── Entrega
+    { id: 'deliveryDate', label: 'Entrega', group: 'Entrega', defaultVisible: true,
+      render: (o) => {
+        const addr = o.addressSnap ?? {};
+        return (<div className="text-xs text-gray-500">
+          {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : '—'}
+          {o.channel === 'ECOMMERCE' && addr.district && <div className="text-gray-400">{addr.district}</div>}
+        </div>);
+      }},
+
+    // ── Montos
+    { id: 'subtotal', label: 'Subtotal', group: 'Montos', defaultVisible: false, align: 'right',
+      render: (o) => <span className="font-mono text-xs">S/ {fmtNum(o.subtotalPen)}</span> },
+    { id: 'igv', label: 'IGV', group: 'Montos', defaultVisible: false, align: 'right',
+      render: (o) => <span className="font-mono text-xs">S/ {fmtNum(o.igvPen)}</span> },
+    { id: 'total', label: 'Total', group: 'Montos', defaultVisible: true, align: 'right',
+      render: (o) => <span className="font-mono font-semibold">S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}</span> },
+
+    // ── Pago
+    { id: 'paymentStatus', label: 'Estado pago', group: 'Pago', defaultVisible: true,
+      render: (o) => <PaymentBadge status={o.paymentStatus ?? 'UNPAID'} /> },
+    { id: 'paymentMethod', label: 'Forma pago', group: 'Pago', defaultVisible: true,
+      render: (o) => {
+        const methods = (o.payments ?? []).map((p: any) => paymentMethods.find(m => m.value === p.method)?.label ?? p.method);
+        return <span className="text-xs text-gray-500">{methods.length > 0 ? methods.join(', ') : '—'}</span>;
+      }},
+  ];
+}
+
+function ColumnPicker({
+  columns,
+  visibleIds,
+  onChange,
+  onClose,
+}: {
+  columns: ColumnDef[];
+  visibleIds: Set<string>;
+  onChange: (ids: Set<string>) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, ColumnDef[]>();
+    columns.forEach(c => {
+      if (!map.has(c.group)) map.set(c.group, []);
+      map.get(c.group)!.push(c);
+    });
+    return map;
+  }, [columns]);
+
+  const toggle = (id: string) => {
+    const next = new Set(visibleIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onChange(next);
+  };
+
+  const selectAll = () => onChange(new Set(columns.map(c => c.id)));
+  const selectDefaults = () => onChange(new Set(columns.filter(c => c.defaultVisible).map(c => c.id)));
+
+  return (
+    <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-72 max-h-96 overflow-y-auto">
+      <div className="p-3 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-sm font-semibold text-gray-700">Columnas visibles</span>
+        <div className="flex gap-1">
+          <button onClick={selectAll} className="text-xs text-brand-600 hover:underline">Todas</button>
+          <span className="text-gray-300">|</span>
+          <button onClick={selectDefaults} className="text-xs text-brand-600 hover:underline">Default</button>
+        </div>
+      </div>
+      {Array.from(groups.entries()).map(([group, cols]) => (
+        <div key={group} className="px-3 py-2">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">{group}</p>
+          {cols.map(c => (
+            <label key={c.id} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1">
+              <input
+                type="checkbox"
+                checked={visibleIds.has(c.id)}
+                onChange={() => toggle(c.id)}
+                className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              />
+              <span className="text-sm text-gray-700">{c.label}</span>
+            </label>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Reporte de Ventas Export Modal ─────────────────────────────────────────────
+
+function SalesReportExportModal({
+  orders,
+  onClose,
+}: {
+  orders: any[];
+  onClose: () => void;
+}) {
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [filterChannel, setFilterChannel] = useState('');
+  const [filterPayStatus, setFilterPayStatus] = useState('');
+  const [filterPayMethod, setFilterPayMethod] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterInvoiceType, setFilterInvoiceType] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [reportType, setReportType] = useState<'orders' | 'lines'>('lines');
+
+  const filtered = useMemo(() => {
+    return orders.filter((o: any) => {
+      if (dateFrom && new Date(o.createdAt) < new Date(dateFrom)) return false;
+      if (dateTo) { const to = new Date(dateTo); to.setHours(23, 59, 59); if (new Date(o.createdAt) > to) return false; }
+      if (filterChannel && o.channel !== filterChannel) return false;
+      if (filterStatus && o.status !== filterStatus) return false;
+      if (filterPayStatus && o.paymentStatus !== filterPayStatus) return false;
+      if (filterPayMethod) {
+        const methods = (o.payments ?? []).map((p: any) => p.method);
+        if (!methods.includes(filterPayMethod)) return false;
+      }
+      if (filterCategory && o.customer?.category !== filterCategory) return false;
+      if (filterInvoiceType && o.invoiceType !== filterInvoiceType) return false;
+      return true;
+    });
+  }, [orders, dateFrom, dateTo, filterChannel, filterStatus, filterPayStatus, filterPayMethod, filterCategory, filterInvoiceType]);
+
+  const lineCount = filtered.reduce((s: number, o: any) => s + (o.lines?.length ?? 0), 0);
+
+  const handleExport = async () => {
+    const XLSX = await import('xlsx');
+
+    if (reportType === 'lines') {
+      // Line-item level report (Reporte de Ventas)
+      const rows = filtered.flatMap((o: any) =>
+        (o.lines ?? []).map((line: any) => {
+          const unitPrice = Number(line.unitPrice ?? 0);
+          const qty = Number(line.qty ?? 0);
+          const lineSubtotal = unitPrice * qty;
+          const lineIgv = lineSubtotal * 0.18;
+          const lineTotal = lineSubtotal + lineIgv;
+          const methods = (o.payments ?? []).map((p: any) => PAYMENT_METHODS.find(m => m.value === p.method)?.label ?? p.method);
+          return {
+            'RUC': o.customer?.docNumber ?? '',
+            'Razon Social': o.customer?.displayName ?? o.ecommerceCustomerName ?? '',
+            'Categoria': CATEGORY_LABEL[o.customer?.category] ?? o.customer?.category ?? '',
+            'N° Pedido': o.orderNumber,
+            'Fecha': o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '',
+            'Canal': CHANNEL_LABEL[o.channel] ?? o.channel,
+            'Estado': STATUS_LABEL[o.status] ?? o.status,
+            'N° Factura': o.invoiceId ?? '',
+            'Comprobante': o.invoiceType ?? '',
+            'SKU': line.product?.sku ?? '',
+            'Producto': line.product?.name ?? '',
+            'Cantidad': qty,
+            'Precio Venta Unitario': Number(unitPrice.toFixed(2)),
+            'Subtotal': Number(lineSubtotal.toFixed(2)),
+            'IGV (18%)': Number(lineIgv.toFixed(2)),
+            'Total': Number(lineTotal.toFixed(2)),
+            'Estado Pago': PAYMENT_STATUS_LABEL[o.paymentStatus] ?? o.paymentStatus ?? '',
+            'Forma de Pago': methods.join(', '),
+            'Descuento %': line.discountPct ? Number(line.discountPct) : '',
+          };
+        })
+      );
+      const ws = XLSX.utils.json_to_sheet(rows);
+      // Column widths
+      ws['!cols'] = [
+        { wch: 14 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 12 },
+        { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 14 },
+        { wch: 28 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 14 },
+        { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 12 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Reporte de Ventas');
+
+      // Add meta sheet
+      const metaRows = [
+        ['Reporte de Ventas — Victorsdou'],
+        ['Exportado', new Date().toLocaleString('es-PE')],
+        ['Periodo', dateFrom || 'Inicio', dateTo || 'Hoy'],
+        ['Pedidos', filtered.length],
+        ['Lineas', lineCount],
+      ];
+      const metaWs = XLSX.utils.aoa_to_sheet(metaRows);
+      XLSX.utils.book_append_sheet(wb, metaWs, 'Info');
+
+      XLSX.writeFile(wb, `reporte-ventas-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } else {
+      // Order-level summary report
+      const rows = filtered.map((o: any) => {
+        const methods = (o.payments ?? []).map((p: any) => PAYMENT_METHODS.find(m => m.value === p.method)?.label ?? p.method);
+        const skus = (o.lines ?? []).map((l: any) => l.product?.sku).filter(Boolean).join(', ');
+        const products = (o.lines ?? []).map((l: any) => l.product?.name).filter(Boolean).join(', ');
+        return {
+          'N° Pedido': o.orderNumber,
+          'Fecha': o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '',
+          'RUC': o.customer?.docNumber ?? '',
+          'Razon Social': o.customer?.displayName ?? o.ecommerceCustomerName ?? '',
+          'Categoria': CATEGORY_LABEL[o.customer?.category] ?? '',
+          'Canal': CHANNEL_LABEL[o.channel] ?? o.channel,
+          'Estado': STATUS_LABEL[o.status] ?? o.status,
+          'SKUs': skus,
+          'Productos': products,
+          'Subtotal': Number(Number(o.subtotalPen ?? 0).toFixed(2)),
+          'IGV': Number(Number(o.igvPen ?? 0).toFixed(2)),
+          'Total': Number(Number(o.totalPen ?? 0).toFixed(2)),
+          'Estado Pago': PAYMENT_STATUS_LABEL[o.paymentStatus] ?? '',
+          'Forma de Pago': methods.join(', '),
+          'Comprobante': o.invoiceType ?? '',
+          'N° Factura': o.invoiceId ?? '',
+          'Email': o.ecommerceCustomerEmail ?? o.customer?.email ?? '',
+          'Telefono': o.ecommerceCustomerPhone ?? o.customer?.phone ?? '',
+          'Notas': o.notes ?? '',
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = Array(19).fill({ wch: 16 });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Pedidos');
+      XLSX.writeFile(wb, `pedidos-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    }
+    toast.success('Reporte exportado');
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold flex items-center gap-2"><FileSpreadsheet size={20} /> Exportar Reporte de Ventas</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
+        </div>
+
+        {/* Report type */}
+        <div className="flex gap-2">
+          {([
+            { value: 'lines' as const, label: 'Por producto (detallado)', desc: 'Una fila por SKU — ideal para contabilidad' },
+            { value: 'orders' as const, label: 'Por pedido (resumen)', desc: 'Una fila por pedido — resumen general' },
+          ]).map(t => (
+            <button
+              key={t.value}
+              onClick={() => setReportType(t.value)}
+              className={`flex-1 text-left px-3 py-2.5 rounded-lg border transition-all ${
+                reportType === t.value ? 'bg-brand-50 border-brand-300 ring-1 ring-brand-200' : 'bg-white border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <div className="text-sm font-medium">{t.label}</div>
+              <div className="text-xs text-gray-400">{t.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* Filters */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Desde</label>
+            <input type="date" className="input text-sm" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Hasta</label>
+            <input type="date" className="input text-sm" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Canal</label>
+            <select className="input text-sm" value={filterChannel} onChange={e => setFilterChannel(e.target.value)}>
+              <option value="">Todos</option>
+              {Object.entries(CHANNEL_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Estado</label>
+            <select className="input text-sm" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+              <option value="">Todos</option>
+              {Object.entries(STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Estado pago</label>
+            <select className="input text-sm" value={filterPayStatus} onChange={e => setFilterPayStatus(e.target.value)}>
+              <option value="">Todos</option>
+              {Object.entries(PAYMENT_STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Forma pago</label>
+            <select className="input text-sm" value={filterPayMethod} onChange={e => setFilterPayMethod(e.target.value)}>
+              <option value="">Todas</option>
+              {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Categoria</label>
+            <select className="input text-sm" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+              <option value="">Todas</option>
+              {Object.entries(CATEGORY_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Comprobante</label>
+            <select className="input text-sm" value={filterInvoiceType} onChange={e => setFilterInvoiceType(e.target.value)}>
+              <option value="">Todos</option>
+              <option value="BOLETA">Boleta</option>
+              <option value="FACTURA">Factura</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+          <div className="text-sm text-gray-600">
+            <span className="font-semibold text-gray-800">{filtered.length}</span> pedidos
+            {reportType === 'lines' && <> · <span className="font-semibold text-gray-800">{lineCount}</span> lineas de producto</>}
+          </div>
+          <div className="text-xs text-gray-400">
+            Total: S/ {fmtNum(filtered.reduce((s: number, o: any) => s + Number(o.totalPen ?? 0), 0))}
+          </div>
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={handleExport} disabled={filtered.length === 0}>
+            <Download size={14} /> Exportar Excel
+          </button>
+          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function SalesOrders() {
@@ -645,6 +1054,23 @@ export default function SalesOrders() {
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [paymentModalOrder, setPaymentModalOrder] = useState<any>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [showExportReport, setShowExportReport] = useState(false);
+
+  // Column configuration
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const allColumns = useMemo(() => buildColumns(PAYMENT_METHODS), []);
+  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) return new Set(JSON.parse(stored));
+    } catch {}
+    return new Set(allColumns.filter(c => c.defaultVisible).map(c => c.id));
+  });
+  const saveColumns = useCallback((ids: Set<string>) => {
+    setVisibleColumnIds(ids);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+  }, []);
+  const visibleColumns = useMemo(() => allColumns.filter(c => visibleColumnIds.has(c.id)), [allColumns, visibleColumnIds]);
 
   // Build query params
   const queryParams = new URLSearchParams();
@@ -775,44 +1201,31 @@ export default function SalesOrders() {
             className="btn-secondary flex items-center gap-2 text-sm"
             onClick={() => setShowBulkImport(true)}
           >
-            <FileSpreadsheet size={14} /> Importar
+            <Upload size={14} /> Importar
           </button>
-          <ExcelDownloadButton
-            filename="pedidos-venta"
-            sheetName="Pedidos"
-            data={orders?.data ?? []}
-            dateField="createdAt"
-            dateLabel="Fecha del pedido"
-            columns={[
-              { header: 'N Pedido',       key: 'orderNumber',             width: 14 },
-              { header: 'Cliente',        key: 'ecommerceCustomerName',   width: 24,
-                format: (v: any, row: any) => v ?? row?.customer?.displayName ?? '—' },
-              { header: 'Email',          key: 'ecommerceCustomerEmail',  width: 28 },
-              { header: 'Telefono',       key: 'ecommerceCustomerPhone',  width: 16 },
-              { header: 'Canal',          key: 'channel',                 width: 12,
-                format: (v: any) => CHANNEL_LABEL[v] ?? v },
-              { header: 'Estado',         key: 'status',                  width: 14,
-                format: (v: any) => STATUS_LABEL[v] ?? v },
-              { header: 'Estado pago',    key: 'paymentStatus',           width: 14,
-                format: (v: any) => PAYMENT_STATUS_LABEL[v] ?? v },
-              { header: 'Forma de pago',  key: 'payments',                width: 16,
-                format: (v: any) => {
-                  if (!v || !v.length) return '—';
-                  return v.map((p: any) => PAYMENT_METHODS.find(m => m.value === p.method)?.label ?? p.method).join(', ');
-                }},
-              { header: 'Comprobante',    key: 'invoiceType',             width: 14,
-                format: (v: any) => v ?? '—' },
-              { header: 'Total S/',       key: 'totalPen',                width: 14,
-                format: (v: any) => v != null ? Number(v) : 0 },
-              { header: 'Entrega',        key: 'deliveryDate',            width: 18,
-                format: (v: any) => v ? new Date(v).toLocaleDateString('es-PE') : '' },
-              { header: 'Notas',          key: 'notes',                   width: 28 },
-            ]}
-            extraFilters={[
-              { key: 'status', label: 'Estado', type: 'select', options: Object.entries(STATUS_LABEL).map(([v, l]) => ({ value: v, label: l })) },
-              { key: 'channel', label: 'Canal', type: 'select', options: Object.entries(CHANNEL_LABEL).map(([v, l]) => ({ value: v, label: l })) },
-            ]}
-          />
+          <button
+            className="btn-secondary flex items-center gap-2 text-sm"
+            onClick={() => setShowExportReport(true)}
+          >
+            <Download size={14} /> Exportar
+          </button>
+          <div className="relative">
+            <button
+              className="btn-secondary flex items-center gap-2 text-sm"
+              onClick={() => setShowColumnPicker(v => !v)}
+              title="Configurar columnas"
+            >
+              <Settings2 size={14} /> Columnas
+            </button>
+            {showColumnPicker && (
+              <ColumnPicker
+                columns={allColumns}
+                visibleIds={visibleColumnIds}
+                onChange={saveColumns}
+                onClose={() => setShowColumnPicker(false)}
+              />
+            )}
+          </div>
           <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
             <Plus size={16} /> Nuevo pedido
           </button>
@@ -1055,76 +1468,33 @@ export default function SalesOrders() {
             <table className="w-full text-sm">
               <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-4 py-3 text-left">Nro.</th>
-                  <th className="px-4 py-3 text-left">Cliente</th>
-                  <th className="px-4 py-3 text-left">Canal</th>
-                  <th className="px-4 py-3 text-left">Entrega</th>
-                  <th className="px-4 py-3 text-right">Total</th>
-                  <th className="px-4 py-3 text-left">Estado</th>
-                  <th className="px-4 py-3 text-left">Pago</th>
-                  <th className="px-4 py-3 text-left">Forma</th>
-                  <th className="px-4 py-3 text-left">Comprob.</th>
+                  {visibleColumns.map(col => (
+                    <th key={col.id} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'}`} style={col.width ? { minWidth: col.width } : undefined}>
+                      {col.label}
+                    </th>
+                  ))}
                   <th className="px-4 py-3 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {(orders?.data ?? []).map((o: any) => {
                   const isEcom     = o.channel === 'ECOMMERCE';
-                  const name       = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
                   const actions    = ECOMMERCE_ACTIONS[o.status] ?? [];
                   const isExpanded = selectedId === o.id;
-                  const addr       = o.addressSnap ?? {};
-                  const paymentMethods = (o.payments ?? []).map((p: any) =>
-                    PAYMENT_METHODS.find(m => m.value === p.method)?.label ?? p.method
-                  );
 
                   return (
-                    <>
+                    <React.Fragment key={o.id}>
                       <tr
-                        key={o.id}
                         className={`cursor-pointer transition-colors ${isEcom ? 'bg-indigo-50/30' : ''} ${isExpanded ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
                         onClick={() => toggleDetail(o.id)}
                       >
-                        <td className="px-4 py-3 font-mono text-gray-700">
-                          <div className="flex items-center gap-1.5">
-                            {isEcom && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}
-                            {o.orderNumber}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-gray-800">{name}</div>
-                          {isEcom && o.ecommerceCustomerEmail && (
-                            <div className="text-xs text-gray-400">{o.ecommerceCustomerEmail}</div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-gray-500 text-xs">{CHANNEL_LABEL[o.channel] ?? o.channel}</td>
-                        <td className="px-4 py-3 text-gray-500 text-xs">
-                          {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : '—'}
-                          {isEcom && addr.district && (
-                            <div className="text-gray-400">{addr.district}</div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono font-semibold">
-                          S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}
-                        </td>
-                        <td className="px-4 py-3"><StatusBadge status={o.status} /></td>
-                        {/* Fix 4: New columns */}
-                        <td className="px-4 py-3"><PaymentBadge status={o.paymentStatus ?? 'UNPAID'} /></td>
-                        <td className="px-4 py-3 text-xs text-gray-500">
-                          {paymentMethods.length > 0 ? paymentMethods.join(', ') : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">
-                          {o.invoiceType ? (
-                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                              o.invoiceType === 'FACTURA' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                            }`}>
-                              {o.invoiceType}
-                            </span>
-                          ) : '—'}
-                        </td>
+                        {visibleColumns.map(col => (
+                          <td key={col.id} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : ''}`}>
+                            {col.render(o)}
+                          </td>
+                        ))}
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-center gap-1 flex-wrap">
-                            {/* Ecommerce flow buttons — Fix 5: intercept Accept for payment check */}
                             {isEcom && actions.map(act => (
                               <button
                                 key={act.endpoint}
@@ -1142,7 +1512,6 @@ export default function SalesOrders() {
                                 {act.label}
                               </button>
                             ))}
-                            {/* Non-ecommerce actions — also respect payment check */}
                             {!isEcom && ['DRAFT', 'PENDING_PAYMENT'].includes(o.status) && (
                               <button
                                 onClick={() => handleAcceptClick(o)}
@@ -1157,7 +1526,6 @@ export default function SalesOrders() {
                                 <X size={14} />
                               </button>
                             )}
-                            {/* Expand indicator */}
                             <span className="ml-1 text-gray-300">
                               {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </span>
@@ -1168,7 +1536,7 @@ export default function SalesOrders() {
                       {/* ── Expanded detail row ─────────────────────────────── */}
                       {isExpanded && (
                         <tr key={`${o.id}-detail`} className="bg-indigo-50/60">
-                          <td colSpan={10} className="px-6 py-4">
+                          <td colSpan={visibleColumns.length + 1} className="px-6 py-4">
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
 
                               {/* Customer info */}
@@ -1184,26 +1552,30 @@ export default function SalesOrders() {
                                     {o.ecommerceCustomerPhone ?? o.customer?.phone}
                                   </div>
                                 )}
-                                {name && (
-                                  <div className="font-medium text-gray-800">{name}</div>
-                                )}
+                                {(() => {
+                                  const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
+                                  return name && <div className="font-medium text-gray-800">{name}</div>;
+                                })()}
                               </div>
 
                               {/* Delivery address */}
                               <div className="space-y-1.5">
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Entrega</p>
-                                {addr.street ? (
-                                  <div className="flex items-start gap-2 text-gray-700">
-                                    <MapPin size={13} className="text-gray-400 flex-shrink-0 mt-0.5" />
-                                    <div>
-                                      <div>{addr.street}</div>
-                                      {addr.district && <div className="text-gray-500">{addr.district}{addr.city ? `, ${addr.city}` : ''}</div>}
-                                      {addr.reference && <div className="text-xs text-gray-400 mt-0.5">Ref: {addr.reference}</div>}
+                                {(() => {
+                                  const addr = o.addressSnap ?? {};
+                                  return addr.street ? (
+                                    <div className="flex items-start gap-2 text-gray-700">
+                                      <MapPin size={13} className="text-gray-400 flex-shrink-0 mt-0.5" />
+                                      <div>
+                                        <div>{addr.street}</div>
+                                        {addr.district && <div className="text-gray-500">{addr.district}{addr.city ? `, ${addr.city}` : ''}</div>}
+                                        {addr.reference && <div className="text-xs text-gray-400 mt-0.5">Ref: {addr.reference}</div>}
+                                      </div>
                                     </div>
-                                  </div>
-                                ) : (
-                                  <span className="text-gray-400">Sin direccion</span>
-                                )}
+                                  ) : (
+                                    <span className="text-gray-400">Sin direccion</span>
+                                  );
+                                })()}
                                 {o.deliveryDate && (
                                   <div className="text-gray-600 text-xs mt-1">
                                     {new Date(o.deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -1234,7 +1606,6 @@ export default function SalesOrders() {
                                   <span className="text-gray-400">Sin lineas</span>
                                 )}
 
-                                {/* Payment records */}
                                 {(o.payments ?? []).length > 0 && (
                                   <div className="mt-3">
                                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Pagos</p>
@@ -1259,7 +1630,7 @@ export default function SalesOrders() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -1304,6 +1675,13 @@ export default function SalesOrders() {
             qc.invalidateQueries({ queryKey: ['sales-orders'] });
             setShowBulkImport(false);
           }}
+        />
+      )}
+
+      {showExportReport && (
+        <SalesReportExportModal
+          orders={orders?.data ?? []}
+          onClose={() => setShowExportReport(false)}
         />
       )}
     </div>
