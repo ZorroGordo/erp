@@ -29,6 +29,7 @@ import { aiRoutes }         from './modules/ai/routes';
 import { comprobantesRoutes }          from './modules/comprobantes/routes';
 import { lookupRoutes }                from './modules/lookup/routes';
 import { notificationsWebhookRoutes }  from './modules/notifications/routes';
+import { ecommerceRoutes } from './modules/ecommerce/routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -45,29 +46,29 @@ export async function buildApp() {
       (req.headers['x-request-id'] as string) ?? crypto.randomUUID(),
   });
 
-  // ── Security Headers ─────────────────────────────────────────────────────
+  // ââ Security Headers âââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(helmet, {
     contentSecurityPolicy: config.NODE_ENV === 'production',
   });
 
-  // ── CORS ─────────────────────────────────────────────────────────────────
+  // ââ CORS âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(cors, {
     origin: config.CORS_ALLOWED_ORIGINS.split(',').map((o) => o.trim()),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
-  // ── Cookie Parser ────────────────────────────────────────────────────────
+  // ââ Cookie Parser ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(cookie, {
     secret: config.JWT_PRIVATE_KEY,
   });
 
-  // ── Multipart (for email ingest webhook) ─────────────────────────────────
+  // ââ Multipart (for email ingest webhook) âââââââââââââââââââââââââââââââââ
   await app.register(multipart, {
     limits: { fileSize: 20 * 1024 * 1024, files: 10 },
   });
 
-  // ── Rate Limiting ────────────────────────────────────────────────────────
+  // ââ Rate Limiting ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(rateLimit, {
     redis,
     max: 1000,
@@ -76,13 +77,13 @@ export async function buildApp() {
       req.headers['x-user-id'] as string ?? req.ip,
   });
 
-  // ── Swagger / OpenAPI ─────────────────────────────────────────────────────
+  // ââ Swagger / OpenAPI âââââââââââââââââââââââââââââââââââââââââââââââââââââ
   if (config.NODE_ENV !== 'production') {
     await app.register(swagger, {
       openapi: {
         info: {
           title: 'VictorOS ERP API',
-          description: 'Victorsdou Bakery — Complete ERP REST API',
+          description: 'Victorsdou Bakery â Complete ERP REST API',
           version: '1.0.0',
         },
         servers: [{ url: `http://localhost:${config.PORT}` }],
@@ -100,13 +101,13 @@ export async function buildApp() {
     });
   }
 
-  // ── Auth Plugin (JWT verification, user injection) ──────────────────────
+  // ââ Auth Plugin (JWT verification, user injection) ââââââââââââââââââââââ
   await app.register(authPlugin);
 
-  // ── Audit Log Plugin ─────────────────────────────────────────────────────
+  // ââ Audit Log Plugin âââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(auditPlugin);
 
-  // ── Health Check ─────────────────────────────────────────────────────────
+  // ââ Health Check âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   app.get('/health', { logLevel: 'silent' }, async (_req, reply) => {
     return reply.send({
       status: 'ok',
@@ -116,7 +117,7 @@ export async function buildApp() {
     });
   });
 
-  // ── Internal API Routes ──────────────────────────────────────────────────
+  // ââ Internal API Routes ââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(async (api) => {
     await api.register(authRoutes,        { prefix: '/auth' });
     await api.register(inventoryRoutes,   { prefix: '/inventory' });
@@ -134,7 +135,7 @@ export async function buildApp() {
     await api.register(lookupRoutes,       { prefix: '/lookup' });
   }, { prefix: '/v1' });
 
-  // ── Public API Routes ─────────────────────────────────────────────────────
+  // ââ Public API Routes âââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(async (pub) => {
     pub.get('/catalog', async (_req, reply) => {
       // TODO: serve cached public catalog
@@ -146,7 +147,10 @@ export async function buildApp() {
     });
   }, { prefix: '/public/v1' });
 
-  // ── Webhook Routes ────────────────────────────────────────────────────────
+  // ── Ecommerce Public API (storefront) ───────────────────────────────────
+  await app.register(ecommerceRoutes, { prefix: '/api' });
+
+  // ââ Webhook Routes ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   await app.register(async (wh) => {
     wh.post('/payment-gateway', async (_req, reply) => {
       return reply.send({ received: true });
@@ -154,12 +158,12 @@ export async function buildApp() {
     await wh.register(notificationsWebhookRoutes);
   }, { prefix: '/webhooks' });
 
-  // ── 404 Handler ───────────────────────────────────────────────────────────
+  // ââ 404 Handler âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   app.setNotFoundHandler((_req, reply) => {
     reply.status(404).send({ error: 'NOT_FOUND', message: 'Route not found' });
   });
 
-  // ── Error Handler ─────────────────────────────────────────────────────────
+  // ââ Error Handler âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
   app.setErrorHandler((error, _req, reply) => {
     app.log.error({ err: error }, 'Unhandled error');
     const statusCode = error.statusCode ?? 500;
