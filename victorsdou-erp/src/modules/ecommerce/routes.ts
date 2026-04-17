@@ -1,8 +1,8 @@
 /**
- * Ecommerce public API routes — mounted at /api
+ * Ecommerce public API routes â mounted at /api
  *
  * These routes serve the victorsdou.pe storefront (Next.js).
- * They do NOT require ERP auth — the ecommerce frontend calls them
+ * They do NOT require ERP auth â the ecommerce frontend calls them
  * from the checkout flow and the customer account area.
  */
 import type { FastifyInstance } from 'fastify';
@@ -14,7 +14,7 @@ import { config } from '../../config';
 const CULQI_API = 'https://api.culqi.com/v2';
 
 export async function ecommerceRoutes(app: FastifyInstance) {
-  // ── POST /api/orders — create order from ecommerce checkout ───────────────
+  // ââ POST /api/orders â create order from ecommerce checkout âââââââââââââââ
   app.post('/orders', async (req, reply) => {
     const body = req.body as {
       email: string;
@@ -41,7 +41,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
     });
     const productMap = new Map(products.map((p) => [p.id, p]));
 
-    // Build line items — prices stored sin IGV in DB, display con IGV
+    // Build line items â prices stored sin IGV in DB, display con IGV
     const lines: Array<{
       productId: string;
       productName: string;
@@ -59,7 +59,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
           message: `Product ${item.productVariantId} not found`,
         });
       }
-      const basePriceSinIgv = Number(product.pricePen ?? 0);
+      const basePriceSinIgv = Number(product.basePricePen ?? 0);
       const priceConIgv = Math.round(basePriceSinIgv * 1.18 * 100) / 100;
 
       lines.push({
@@ -109,7 +109,6 @@ export async function ecommerceRoutes(app: FastifyInstance) {
         subtotalPen: subtotalSinIgv,
         igvPen: igv,
         totalPen: totalConIgv,
-        deliveryFeePen: body.deliveryFee,
         ecommerceCustomerName: body.email,
         ecommerceCustomerEmail: body.email,
         ecommerceCustomerPhone: body.phone ?? null,
@@ -140,7 +139,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
     });
   });
 
-  // ── POST /api/payments/init — return Culqi public key + order info ────────
+  // ââ POST /api/payments/init â return Culqi public key + order info ââââââââ
   app.post('/payments/init', async (req, reply) => {
     const { orderId, amount } = req.body as { orderId: string; amount: number };
 
@@ -166,7 +165,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
     });
   });
 
-  // ── POST /api/payments/finalize — charge via Culqi and update order ───────
+  // ââ POST /api/payments/finalize â charge via Culqi and update order âââââââ
   app.post('/payments/finalize', async (req, reply) => {
     const { orderId, culqiToken } = req.body as {
       orderId: string;
@@ -223,7 +222,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
         });
       }
 
-      // Payment successful — update order
+      // Payment successful â update order
       await prisma.salesOrder.update({
         where: { id: orderId },
         data: {
@@ -263,13 +262,15 @@ export async function ecommerceRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── POST /api/auth/refresh — refresh JWT tokens ───────────────────────────
+  // ââ POST /api/auth/refresh â refresh JWT tokens âââââââââââââââââââââââââââ
   app.post('/auth/refresh', async (req, reply) => {
     const { refreshToken } = req.body as { refreshToken: string };
     if (!refreshToken) {
       return reply.code(400).send({ error: 'MISSING_TOKEN', message: 'Refresh token required' });
     }
 
+    // @ts-ignore — jsonwebtoken is available at runtime
+    // @ts-expect-error jsonwebtoken has no type declarations
     const jwt = await import('jsonwebtoken');
     try {
       const decoded = jwt.verify(refreshToken, config.JWT_PUBLIC_KEY, {
@@ -293,13 +294,14 @@ export async function ecommerceRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── GET /api/orders — list user's orders (requires auth token) ────────────
+  // ââ GET /api/orders â list user's orders (requires auth token) ââââââââââââ
   app.get('/orders', async (req, reply) => {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
       return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Token required' });
     }
 
+    // @ts-expect-error jsonwebtoken has no type declarations
     const jwt = await import('jsonwebtoken');
     try {
       const token = authHeader.replace('Bearer ', '');
@@ -322,7 +324,7 @@ export async function ecommerceRoutes(app: FastifyInstance) {
   });
 }
 
-// ── Helper: order notification email for ops team ────────────────────────────
+// ââ Helper: order notification email for ops team ââââââââââââââââââââââââââââ
 function buildOrderNotificationEmail(order: any): string {
   const lines = (order.lines ?? [])
     .map(
