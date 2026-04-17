@@ -1,2 +1,2 @@
 -- AlterEnum
-ALTER TYPE "PaymentStatus" ADD VALUE 'REFUNDED';
+ALTER TYPE "PaymentStatus" ADD VALUE IF NOT EXISTS 'REFUNDED';
