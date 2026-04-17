@@ -117,107 +117,6 @@ const ECOMMERCE_ACTIONS: Record<string, { label: string; endpoint: string; icon:
   DELIVERED: [
     { label: 'Reembolsar', endpoint: 'refund', icon: DollarSign, color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
   ],
-};mport { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import {
-  Plus, ShoppingCart, Check, X, Globe, Package, Truck, RotateCcw,
-  MapPin, Phone, Mail, StickyNote, ChevronDown, ChevronUp, Search,
-  Upload, FileSpreadsheet, Download, DollarSign, CreditCard, Receipt,
-  UserPlus, Percent, Settings2, Eye, EyeOff, Filter,
-} from 'lucide-react';
-import toast from 'react-hot-toast';
-import { fmtMoney, fmtNum } from '../lib/fmt';
-
-
-// ââ Status config âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-
-const STATUS_LABEL: Record<string, string> = {
-  CART:             'Carrito',
-  DRAFT:            'Borrador',
-  PENDING_PAYMENT:  'Pendiente',
-  PAID:             'Pagado',
-  CONFIRMED:        'Confirmado',
-  ACCEPTED:         'Aceptado',
-  READY:            'Listo',
-  IN_DELIVERY:      'En camino',
-  DELIVERED:        'Entregado',
-  CANCELLED:        'Cancelado',
-  RETURNED:         'Devuelto',
-  COMPLETED:        'Completado',
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  DRAFT:            'bg-gray-100 text-gray-500',
-  PENDING_PAYMENT:  'bg-yellow-100 text-yellow-800',
-  CONFIRMED:        'bg-blue-100 text-blue-800',
-  ACCEPTED:         'bg-indigo-100 text-indigo-800',
-  READY:            'bg-purple-100 text-purple-800',
-  IN_DELIVERY:      'bg-orange-100 text-orange-800',
-  DELIVERED:        'bg-green-100 text-green-800',
-  CANCELLED:        'bg-red-100 text-red-800',
-  RETURNED:         'bg-gray-100 text-gray-600',
-  PAID:             'bg-teal-100 text-teal-800',
-  CART:             'bg-gray-100 text-gray-500',
-};
-
-const PAYMENT_STATUS_LABEL: Record<string, string> = {
-  UNPAID:  'Sin pagar',
-  PARTIAL: 'Parcial',
-  PAID:    'Pagado',
-};
-const PAYMENT_STATUS_COLOR: Record<string, string> = {
-  UNPAID:  'bg-red-100 text-red-700',
-  PARTIAL: 'bg-yellow-100 text-yellow-700',
-  PAID:    'bg-green-100 text-green-700',
-};
-
-const PAYMENT_METHODS = [
-  { value: 'YAPE',          label: 'Yape' },
-  { value: 'PLIN',          label: 'Plin' },
-  { value: 'CASH',          label: 'Efectivo' },
-  { value: 'CARD_CULQI',    label: 'Culqi (web)' },
-  { value: 'CARD_NIUBIZ',   label: 'POS Niubiz' },
-  { value: 'BANK_TRANSFER', label: 'Transferencia' },
-  { value: 'CREDIT',        label: 'Credito' },
-];
-
-const CHANNEL_LABEL: Record<string, string> = {
-  ECOMMERCE:     'Ecommerce',
-  B2B_PORTAL:    'B2B Portal',
-  SALES_AGENT:   'Agente',
-  IN_STORE:      'Tienda',
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const label = STATUS_LABEL[status] ?? status;
-  const color = STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600';
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{label}</span>;
-}
-
-function PaymentBadge({ status }: { status: string }) {
-  const label = PAYMENT_STATUS_LABEL[status] ?? status;
-  const color = PAYMENT_STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600';
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{label}</span>;
-}
-
-// Ecommerce flow: which action buttons to show per status
-const ECOMMERCE_ACTIONS: Record<string, { label: string; endpoint: string; icon: any; color: string }[]> = {
-  PENDING_PAYMENT: [
-    { label: 'Aceptar',   endpoint: 'accept',   icon: Check,        color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200' },
-    { label: 'Cancelar',  endpoint: 'cancel',   icon: X,            color: 'bg-red-100 text-red-700 hover:bg-red-200' },
-  ],
-  ACCEPTED: [
-    { label: 'Listo',     endpoint: 'ready',    icon: Package,      color: 'bg-purple-100 text-purple-700 hover:bg-purple-200' },
-    { label: 'Cancelar',  endpoint: 'cancel',   icon: X,            color: 'bg-red-100 text-red-700 hover:bg-red-200' },
-  ],
-  READY: [
-    { label: 'En camino', endpoint: 'dispatch', icon: Truck,        color: 'bg-orange-100 text-orange-700 hover:bg-orange-200' },
-  ],
-  IN_DELIVERY: [
-    { label: 'Entregado', endpoint: 'deliver',  icon: Check,        color: 'bg-green-100 text-green-700 hover:bg-green-200' },
-    { label: 'Devolver',  endpoint: 'return',   icon: RotateCcw,    color: 'bg-gray-100 text-gray-600 hover:bg-gray-200' },
-  ],
 };
 
 // ââ Searchable Client Combobox ââââââââââââââââââââââââââââââââââââââââââââââââ
@@ -1294,8 +1193,6 @@ export default function SalesOrders() {
       const labels: Record<string, string> = {
         accept: 'Pedido aceptado', ready: 'Pedido listo', dispatch: 'En camino',
         deliver: 'Entregado', return: 'Marcado como devuelto', cancel: 'Cancelado',
-        reject: 'Pedido rechazado',
-        refund: 'Reembolso procesado',
         reject: 'Pedido rechazado',
         refund: 'Reembolso procesado',
       };
