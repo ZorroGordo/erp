@@ -11,7 +11,126 @@ import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 
 
-// ── Status config ─────────────────────────────────────────────────────────────
+// ââ Status config âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+const STATUS_LABEL: Record<string, string> = {
+  CART:             'Carrito',
+  REFUND_PENDING:   'bg-amber-100 text-amber-800',
+  REFUNDED:         'bg-rose-100 text-rose-800',
+  DRAFT:            'Borrador',
+  PENDING_PAYMENT:  'Pendiente',
+  PAID:             'Pagado',
+  CONFIRMED:        'Confirmado',
+  ACCEPTED:         'Aceptado',
+  READY:            'Listo',
+  IN_DELIVERY:      'En camino',
+  DELIVERED:        'Entregado',
+  CANCELLED:        'Cancelado',
+  RETURNED:         'Devuelto',
+  COMPLETED:        'Completado',
+  REFUND_PENDING:   'Reembolso pendiente',
+  REFUNDED:         'Reembolsado',
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  DRAFT:            'bg-gray-100 text-gray-500',
+  PENDING_PAYMENT:  'bg-yellow-100 text-yellow-800',
+  CONFIRMED:        'bg-blue-100 text-blue-800',
+  ACCEPTED:         'bg-indigo-100 text-indigo-800',
+  READY:            'bg-purple-100 text-purple-800',
+  IN_DELIVERY:      'bg-orange-100 text-orange-800',
+  DELIVERED:        'bg-green-100 text-green-800',
+  CANCELLED:        'bg-red-100 text-red-800',
+  RETURNED:         'bg-gray-100 text-gray-600',
+  PAID:             'bg-teal-100 text-teal-800',
+  CART:             'bg-gray-100 text-gray-500',
+};
+
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  UNPAID:  'Sin pagar',
+  PARTIAL: 'Parcial',
+  PAID:    'Pagado',
+};
+const PAYMENT_STATUS_COLOR: Record<string, string> = {
+  UNPAID:  'bg-red-100 text-red-700',
+  PARTIAL: 'bg-yellow-100 text-yellow-700',
+  PAID:    'bg-green-100 text-green-700',
+};
+
+const PAYMENT_METHODS = [
+  { value: 'YAPE',          label: 'Yape' },
+  { value: 'PLIN',          label: 'Plin' },
+  { value: 'CASH',          label: 'Efectivo' },
+  { value: 'CARD_CULQI',    label: 'Culqi (web)' },
+  { value: 'CARD_NIUBIZ',   label: 'POS Niubiz' },
+  { value: 'BANK_TRANSFER', label: 'Transferencia' },
+  { value: 'CREDIT',        label: 'Credito' },
+];
+
+const CHANNEL_LABEL: Record<string, string> = {
+  ECOMMERCE:     'Ecommerce',
+  B2B_PORTAL:    'B2B Portal',
+  SALES_AGENT:   'Agente',
+  IN_STORE:      'Tienda',
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const label = STATUS_LABEL[status] ?? status;
+  const color = STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600';
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{label}</span>;
+}
+
+function PaymentBadge({ status }: { status: string }) {
+  const label = PAYMENT_STATUS_LABEL[status] ?? status;
+  const color = PAYMENT_STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600';
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{label}</span>;
+}
+
+// Ecommerce flow: which action buttons to show per status
+const ECOMMERCE_ACTIONS: Record<string, { label: string; endpoint: string; icon: any; color: string }[]> = {
+  PENDING_PAYMENT: [
+    { label: 'Aceptar', endpoint: 'accept', icon: Check, color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200' },
+    { label: 'Rechazar', endpoint: 'reject', icon: X, color: 'bg-red-100 text-red-700 hover:bg-red-200' },
+  ],
+  PAID: [
+    { label: 'Aceptar', endpoint: 'accept', icon: Check, color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200' },
+    { label: 'Rechazar', endpoint: 'reject', icon: X, color: 'bg-red-100 text-red-700 hover:bg-red-200' },
+    { label: 'Reembolsar', endpoint: 'refund', icon: DollarSign, color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+  CONFIRMED: [
+    { label: 'Aceptar', endpoint: 'accept', icon: Check, color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200' },
+    { label: 'Rechazar', endpoint: 'reject', icon: X, color: 'bg-red-100 text-red-700 hover:bg-red-200' },
+    { label: 'Reembolsar', endpoint: 'refund', icon: DollarSign, color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+  ACCEPTED: [
+    { label: 'Listo', endpoint: 'ready', icon: Package, color: 'bg-purple-100 text-purple-700 hover:bg-purple-200' },
+    { label: 'Rechazar', endpoint: 'reject', icon: X, color: 'bg-red-100 text-red-700 hover:bg-red-200' },
+    { label: 'Reembolsar', endpoint: 'refund', icon: DollarSign, color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+  READY: [
+    { label: 'En camino', endpoint: 'dispatch', icon: Truck, color: 'bg-orange-100 text-orange-700 hover:bg-orange-200' },
+  ],
+  IN_DELIVERY: [
+    { label: 'Entregado', endpoint: 'deliver', icon: Check, color: 'bg-green-100 text-green-700 hover:bg-green-200' },
+    { label: 'Devolver', endpoint: 'return', icon: RotateCcw, color: 'bg-gray-100 text-gray-600 hover:bg-gray-200' },
+  ],
+  DELIVERED: [
+    { label: 'Reembolsar', endpoint: 'refund', icon: DollarSign, color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+};mport { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../lib/api';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import {
+  Plus, ShoppingCart, Check, X, Globe, Package, Truck, RotateCcw,
+  MapPin, Phone, Mail, StickyNote, ChevronDown, ChevronUp, Search,
+  Upload, FileSpreadsheet, Download, DollarSign, CreditCard, Receipt,
+  UserPlus, Percent, Settings2, Eye, EyeOff, Filter,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+import { fmtMoney, fmtNum } from '../lib/fmt';
+
+
+// ââ Status config âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 const STATUS_LABEL: Record<string, string> = {
   CART:             'Carrito',
@@ -101,7 +220,7 @@ const ECOMMERCE_ACTIONS: Record<string, { label: string; endpoint: string; icon:
   ],
 };
 
-// ── Searchable Client Combobox ────────────────────────────────────────────────
+// ââ Searchable Client Combobox ââââââââââââââââââââââââââââââââââââââââââââââââ
 
 function ClientCombobox({
   customers,
@@ -184,8 +303,8 @@ function ClientCombobox({
                 <div>
                   <div className="font-medium">{c.displayName ?? c.businessName ?? c.fullName}</div>
                   <div className="text-xs text-gray-400">
-                    {c.type === 'B2B' ? 'B2B' : 'B2C'} · {c.docType}: {c.docNumber ?? '—'}
-                    {c.email ? ` · ${c.email}` : ''}
+                    {c.type === 'B2B' ? 'B2B' : 'B2C'} Â· {c.docType}: {c.docNumber ?? 'â'}
+                    {c.email ? ` Â· ${c.email}` : ''}
                   </div>
                 </div>
                 {c.id === value && <Check size={14} className="text-brand-600" />}
@@ -198,7 +317,7 @@ function ClientCombobox({
   );
 }
 
-// ── Create Customer Modal ─────────────────────────────────────────────────────
+// ââ Create Customer Modal âââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 function CreateCustomerModal({
   onClose,
@@ -304,7 +423,7 @@ function CreateCustomerModal({
   );
 }
 
-// ── Payment Confirmation Modal ────────────────────────────────────────────────
+// ââ Payment Confirmation Modal ââââââââââââââââââââââââââââââââââââââââââââââââ
 
 function PaymentModal({
   order,
@@ -365,7 +484,7 @@ function PaymentModal({
 
         <div className="bg-gray-50 rounded-lg p-3 text-sm">
           <div className="font-medium text-gray-800">{name}</div>
-          <div className="text-gray-500">Pedido #{order.orderNumber} · Total: S/ {fmtNum(order.totalPen)}</div>
+          <div className="text-gray-500">Pedido #{order.orderNumber} Â· Total: S/ {fmtNum(order.totalPen)}</div>
         </div>
 
         <div className="space-y-3">
@@ -399,7 +518,7 @@ function PaymentModal({
             </div>
           </div>
 
-          {/* Screenshot upload — especially for Yape/Plin */}
+          {/* Screenshot upload â especially for Yape/Plin */}
           {['YAPE', 'PLIN', 'BANK_TRANSFER'].includes(method) && (
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Comprobante (captura)</label>
@@ -443,7 +562,7 @@ function PaymentModal({
   );
 }
 
-// ── Bulk Import Modal ─────────────────────────────────────────────────────────
+// ââ Bulk Import Modal âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 function BulkImportModal({
   products,
@@ -568,7 +687,7 @@ function BulkImportModal({
 
         {preview && (
           <div className="text-sm">
-            <p className="text-gray-600 mb-2">{preview.length} fila(s) encontradas · {new Set(preview.map(r => r.cliente_id)).size} pedido(s)</p>
+            <p className="text-gray-600 mb-2">{preview.length} fila(s) encontradas Â· {new Set(preview.map(r => r.cliente_id)).size} pedido(s)</p>
             <div className="max-h-48 overflow-auto border rounded">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
@@ -586,7 +705,7 @@ function BulkImportModal({
                       <td className="px-2 py-1">{r.cliente_nombre || r.cliente_id?.slice(-6)}</td>
                       <td className="px-2 py-1">{r.producto_nombre || r.producto_id?.slice(-6)}</td>
                       <td className="px-2 py-1 text-right">{r.cantidad}</td>
-                      <td className="px-2 py-1 text-right">{r.precio_unitario ?? '—'}</td>
+                      <td className="px-2 py-1 text-right">{r.precio_unitario ?? 'â'}</td>
                       <td className="px-2 py-1 text-right">{r.descuento_pct ?? 0}%</td>
                     </tr>
                   ))}
@@ -617,7 +736,7 @@ function BulkImportModal({
   );
 }
 
-// ── Column configuration ──────────────────────────────────────────────────────
+// ââ Column configuration ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 const STORAGE_KEY = 'ventas-visible-columns';
 
@@ -643,66 +762,66 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
   return [
-    // ── Pedido
+    // ââ Pedido
     { id: 'orderNumber', label: 'Nro. Pedido', group: 'Pedido', defaultVisible: true,
       render: (o) => <div className="flex items-center gap-1.5 font-mono text-gray-700">{o.channel === 'ECOMMERCE' && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}{o.orderNumber}</div> },
     { id: 'createdAt', label: 'Fecha', group: 'Pedido', defaultVisible: false,
-      render: (o) => <span className="text-gray-500 text-xs">{o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '—'}</span> },
+      render: (o) => <span className="text-gray-500 text-xs">{o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : 'â'}</span> },
     { id: 'channel', label: 'Canal', group: 'Pedido', defaultVisible: true,
       render: (o) => <span className="text-gray-500 text-xs">{CHANNEL_LABEL[o.channel] ?? o.channel}</span> },
     { id: 'status', label: 'Estado', group: 'Pedido', defaultVisible: true,
       render: (o) => <StatusBadge status={o.status} /> },
-    { id: 'invoiceNumber', label: 'N° Factura', group: 'Pedido', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-500 font-mono">{o.invoiceId ?? '—'}</span> },
+    { id: 'invoiceNumber', label: 'NÂ° Factura', group: 'Pedido', defaultVisible: false,
+      render: (o) => <span className="text-xs text-gray-500 font-mono">{o.invoiceId ?? 'â'}</span> },
     { id: 'invoiceType', label: 'Comprobante', group: 'Pedido', defaultVisible: true,
       render: (o) => o.invoiceType
         ? <span className={`px-2 py-0.5 rounded text-xs font-medium ${o.invoiceType === 'FACTURA' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{o.invoiceType}</span>
-        : <span className="text-gray-300">—</span> },
+        : <span className="text-gray-300">â</span> },
     { id: 'notes', label: 'Notas', group: 'Pedido', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-500 truncate max-w-[120px] inline-block">{o.notes || '—'}</span> },
+      render: (o) => <span className="text-xs text-gray-500 truncate max-w-[120px] inline-block">{o.notes || 'â'}</span> },
 
-    // ── Cliente
+    // ââ Cliente
     { id: 'clientName', label: 'Cliente', group: 'Cliente', defaultVisible: true,
       render: (o) => {
         const isEcom = o.channel === 'ECOMMERCE';
-        const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
+        const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? 'â');
         return (<div><div className="font-medium text-gray-800">{name}</div>
           {isEcom && o.ecommerceCustomerEmail && <div className="text-xs text-gray-400">{o.ecommerceCustomerEmail}</div>}
         </div>);
       }},
     { id: 'ruc', label: 'RUC / DNI', group: 'Cliente', defaultVisible: false,
-      render: (o) => <span className="text-xs font-mono text-gray-600">{o.customer?.docNumber ?? '—'}</span> },
+      render: (o) => <span className="text-xs font-mono text-gray-600">{o.customer?.docNumber ?? 'â'}</span> },
     { id: 'razonSocial', label: 'Razon Social', group: 'Cliente', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-600">{o.customer?.displayName ?? o.customer?.businessName ?? '—'}</span> },
+      render: (o) => <span className="text-xs text-gray-600">{o.customer?.displayName ?? o.customer?.businessName ?? 'â'}</span> },
     { id: 'category', label: 'Categoria', group: 'Cliente', defaultVisible: false,
       render: (o) => {
         const cat = o.customer?.category;
-        return cat ? <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{CATEGORY_LABEL[cat] ?? cat}</span> : <span className="text-gray-300">—</span>;
+        return cat ? <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{CATEGORY_LABEL[cat] ?? cat}</span> : <span className="text-gray-300">â</span>;
       }},
     { id: 'clientEmail', label: 'Email', group: 'Cliente', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerEmail ?? o.customer?.email ?? '—'}</span> },
+      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerEmail ?? o.customer?.email ?? 'â'}</span> },
     { id: 'clientPhone', label: 'Telefono', group: 'Cliente', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerPhone ?? o.customer?.phone ?? '—'}</span> },
+      render: (o) => <span className="text-xs text-gray-500">{o.ecommerceCustomerPhone ?? o.customer?.phone ?? 'â'}</span> },
 
-    // ── Productos (summary)
+    // ââ Productos (summary)
     { id: 'skus', label: 'SKUs', group: 'Productos', defaultVisible: false,
-      render: (o) => <span className="text-xs font-mono text-gray-500">{(o.lines ?? []).map((l: any) => l.product?.sku ?? '').filter(Boolean).join(', ') || '—'}</span> },
+      render: (o) => <span className="text-xs font-mono text-gray-500">{(o.lines ?? []).map((l: any) => l.product?.sku ?? '').filter(Boolean).join(', ') || 'â'}</span> },
     { id: 'products', label: 'Productos', group: 'Productos', defaultVisible: false,
-      render: (o) => <span className="text-xs text-gray-600 truncate max-w-[180px] inline-block">{(o.lines ?? []).map((l: any) => l.product?.name ?? '').filter(Boolean).join(', ') || '—'}</span> },
+      render: (o) => <span className="text-xs text-gray-600 truncate max-w-[180px] inline-block">{(o.lines ?? []).map((l: any) => l.product?.name ?? '').filter(Boolean).join(', ') || 'â'}</span> },
     { id: 'itemCount', label: 'Items', group: 'Productos', defaultVisible: false, align: 'center',
       render: (o) => <span className="text-xs text-gray-500">{(o.lines ?? []).reduce((s: number, l: any) => s + Number(l.qty), 0)}</span> },
 
-    // ── Entrega
+    // ââ Entrega
     { id: 'deliveryDate', label: 'Entrega', group: 'Entrega', defaultVisible: true,
       render: (o) => {
         const addr = o.addressSnap ?? {};
         return (<div className="text-xs text-gray-500">
-          {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : '—'}
+          {o.deliveryDate ? new Date(o.deliveryDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' }) : 'â'}
           {o.channel === 'ECOMMERCE' && addr.district && <div className="text-gray-400">{addr.district}</div>}
         </div>);
       }},
 
-    // ── Montos
+    // ââ Montos
     { id: 'subtotal', label: 'Subtotal', group: 'Montos', defaultVisible: false, align: 'right',
       render: (o) => <span className="font-mono text-xs">S/ {fmtNum(o.subtotalPen)}</span> },
     { id: 'igv', label: 'IGV', group: 'Montos', defaultVisible: false, align: 'right',
@@ -710,18 +829,18 @@ function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
     { id: 'total', label: 'Total', group: 'Montos', defaultVisible: true, align: 'right',
       render: (o) => <span className="font-mono font-semibold">S/ {fmtNum(o.totalPen ?? o.totalAmountPen)}</span> },
 
-    // ── Pago
+    // ââ Pago
     { id: 'paymentStatus', label: 'Estado pago', group: 'Pago', defaultVisible: true,
       render: (o) => <PaymentBadge status={o.paymentStatus ?? 'UNPAID'} /> },
     { id: 'paymentMethod', label: 'Forma pago', group: 'Pago', defaultVisible: true,
       render: (o) => {
         const methods = (o.payments ?? []).map((p: any) => paymentMethods.find(m => m.value === p.method)?.label ?? p.method);
-        return <span className="text-xs text-gray-500">{methods.length > 0 ? methods.join(', ') : '—'}</span>;
+        return <span className="text-xs text-gray-500">{methods.length > 0 ? methods.join(', ') : 'â'}</span>;
       }},
     { id: 'invoiceStatus', label: 'Factura', group: 'Pago', defaultVisible: false,
       render: (o) => o.invoiceId
         ? <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Facturado</span>
-        : <span className="text-xs text-gray-300">—</span>,
+        : <span className="text-xs text-gray-300">â</span>,
     },
   ];
 }
@@ -792,7 +911,7 @@ function ColumnPicker({
   );
 }
 
-// ── Reporte de Ventas Export Modal ─────────────────────────────────────────────
+// ââ Reporte de Ventas Export Modal âââââââââââââââââââââââââââââââââââââââââââââ
 
 function SalesReportExportModal({
   orders,
@@ -847,11 +966,11 @@ function SalesReportExportModal({
             'RUC': o.customer?.docNumber ?? '',
             'Razon Social': o.customer?.displayName ?? o.ecommerceCustomerName ?? '',
             'Categoria': CATEGORY_LABEL[o.customer?.category] ?? o.customer?.category ?? '',
-            'N° Pedido': o.orderNumber,
+            'NÂ° Pedido': o.orderNumber,
             'Fecha': o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '',
             'Canal': CHANNEL_LABEL[o.channel] ?? o.channel,
             'Estado': STATUS_LABEL[o.status] ?? o.status,
-            'N° Factura': o.invoiceId ?? '',
+            'NÂ° Factura': o.invoiceId ?? '',
             'Comprobante': o.invoiceType ?? '',
             'SKU': line.product?.sku ?? '',
             'Producto': line.product?.name ?? '',
@@ -879,7 +998,7 @@ function SalesReportExportModal({
 
       // Add meta sheet
       const metaRows = [
-        ['Reporte de Ventas — Victorsdou'],
+        ['Reporte de Ventas â Victorsdou'],
         ['Exportado', new Date().toLocaleString('es-PE')],
         ['Periodo', dateFrom || 'Inicio', dateTo || 'Hoy'],
         ['Pedidos', filtered.length],
@@ -896,7 +1015,7 @@ function SalesReportExportModal({
         const skus = (o.lines ?? []).map((l: any) => l.product?.sku).filter(Boolean).join(', ');
         const products = (o.lines ?? []).map((l: any) => l.product?.name).filter(Boolean).join(', ');
         return {
-          'N° Pedido': o.orderNumber,
+          'NÂ° Pedido': o.orderNumber,
           'Fecha': o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '',
           'RUC': o.customer?.docNumber ?? '',
           'Razon Social': o.customer?.displayName ?? o.ecommerceCustomerName ?? '',
@@ -911,7 +1030,7 @@ function SalesReportExportModal({
           'Estado Pago': PAYMENT_STATUS_LABEL[o.paymentStatus] ?? '',
           'Forma de Pago': methods.join(', '),
           'Comprobante': o.invoiceType ?? '',
-          'N° Factura': o.invoiceId ?? '',
+          'NÂ° Factura': o.invoiceId ?? '',
           'Email': o.ecommerceCustomerEmail ?? o.customer?.email ?? '',
           'Telefono': o.ecommerceCustomerPhone ?? o.customer?.phone ?? '',
           'Notas': o.notes ?? '',
@@ -938,8 +1057,8 @@ function SalesReportExportModal({
         {/* Report type */}
         <div className="flex gap-2">
           {([
-            { value: 'lines' as const, label: 'Por producto (detallado)', desc: 'Una fila por SKU — ideal para contabilidad' },
-            { value: 'orders' as const, label: 'Por pedido (resumen)', desc: 'Una fila por pedido — resumen general' },
+            { value: 'lines' as const, label: 'Por producto (detallado)', desc: 'Una fila por SKU â ideal para contabilidad' },
+            { value: 'orders' as const, label: 'Por pedido (resumen)', desc: 'Una fila por pedido â resumen general' },
           ]).map(t => (
             <button
               key={t.value}
@@ -1013,7 +1132,7 @@ function SalesReportExportModal({
         <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
           <div className="text-sm text-gray-600">
             <span className="font-semibold text-gray-800">{filtered.length}</span> pedidos
-            {reportType === 'lines' && <> · <span className="font-semibold text-gray-800">{lineCount}</span> lineas de producto</>}
+            {reportType === 'lines' && <> Â· <span className="font-semibold text-gray-800">{lineCount}</span> lineas de producto</>}
           </div>
           <div className="text-xs text-gray-400">
             Total: S/ {fmtNum(filtered.reduce((s: number, o: any) => s + Number(o.totalPen ?? 0), 0))}
@@ -1031,7 +1150,7 @@ function SalesReportExportModal({
   );
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
+// ââ Main Component ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 export default function SalesOrders() {
   const qc = useQueryClient();
@@ -1175,6 +1294,10 @@ export default function SalesOrders() {
       const labels: Record<string, string> = {
         accept: 'Pedido aceptado', ready: 'Pedido listo', dispatch: 'En camino',
         deliver: 'Entregado', return: 'Marcado como devuelto', cancel: 'Cancelado',
+        reject: 'Pedido rechazado',
+        refund: 'Reembolso procesado',
+        reject: 'Pedido rechazado',
+        refund: 'Reembolso procesado',
       };
       toast.success(labels[action] ?? 'Actualizado');
     },
@@ -1328,7 +1451,7 @@ export default function SalesOrders() {
         </div>
       </div>
 
-      {/* ── New order form ─────────────────────────────────────────────────── */}
+      {/* ââ New order form âââââââââââââââââââââââââââââââââââââââââââââââââââ */}
       {showForm && (
         <div className="card p-5 space-y-4">
           <h3 className="font-semibold">Nuevo pedido</h3>
@@ -1439,7 +1562,7 @@ export default function SalesOrders() {
                   </div>
                   {/* Final price (read-only) */}
                   <div className="col-span-2 text-right text-sm font-mono text-gray-600 pr-2">
-                    {l.productId ? `S/ ${finalPrice.toFixed(2)}` : '—'}
+                    {l.productId ? `S/ ${finalPrice.toFixed(2)}` : 'â'}
                   </div>
                   {/* Quantity */}
                   <div className="col-span-1">
@@ -1512,7 +1635,7 @@ export default function SalesOrders() {
         </div>
       )}
 
-      {/* ── Orders table ───────────────────────────────────────────────────── */}
+      {/* ââ Orders table âââââââââââââââââââââââââââââââââââââââââââââââââââââ */}
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
           <ShoppingCart size={18} className="text-gray-400" />
@@ -1559,7 +1682,11 @@ export default function SalesOrders() {
                                     handleAcceptClick(o);
                                   } else if (act.endpoint === 'dispatch') {
                                     handleDispatchClick(o);
-                                  } else {
+                                  } else if (act.endpoint === 'refund') {
+                      if (window.confirm(`¿Reembolsar S/ ${Number(o.totalPen).toFixed(2)} del pedido #${o.orderNumber}? Esta acción no se puede deshacer.`)) {
+                        statusAction.mutate({ id: o.id, action: 'refund' });
+                      }
+                    } else {
                                     statusAction.mutate({ id: o.id, action: act.endpoint });
                                   }
                                 }}
@@ -1591,7 +1718,7 @@ export default function SalesOrders() {
                         </td>
                       </tr>
 
-                      {/* ── Expanded detail row ─────────────────────────────── */}
+                      {/* ââ Expanded detail row âââââââââââââââââââââââââââââââ */}
                       {isExpanded && (
                         <tr key={`${o.id}-detail`} className="bg-indigo-50/60">
                           <td colSpan={visibleColumns.length + 1} className="px-6 py-4">
@@ -1602,7 +1729,7 @@ export default function SalesOrders() {
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Cliente</p>
                                 <div className="flex items-center gap-2 text-gray-700">
                                   <Mail size={13} className="text-gray-400 flex-shrink-0" />
-                                  {o.ecommerceCustomerEmail ?? o.customer?.email ?? '—'}
+                                  {o.ecommerceCustomerEmail ?? o.customer?.email ?? 'â'}
                                 </div>
                                 {(o.ecommerceCustomerPhone ?? o.customer?.phone) && (
                                   <div className="flex items-center gap-2 text-gray-700">
@@ -1611,7 +1738,7 @@ export default function SalesOrders() {
                                   </div>
                                 )}
                                 {(() => {
-                                  const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? '—');
+                                  const name = isEcom ? (o.ecommerceCustomerName ?? 'Cliente web') : (o.customer?.displayName ?? 'â');
                                   return name && <div className="font-medium text-gray-800">{name}</div>;
                                 })()}
                               </div>
@@ -1700,7 +1827,7 @@ export default function SalesOrders() {
         )}
       </div>
 
-      {/* ── Modals ─────────────────────────────────────────────────────────── */}
+      {/* ââ Modals âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */}
       {showCreateCustomer && (
         <CreateCustomerModal
           onClose={() => setShowCreateCustomer(false)}
