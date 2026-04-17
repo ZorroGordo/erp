@@ -17,10 +17,29 @@ export async function invoicingRoutes(app: FastifyInstance) {
       ...(q.from || q.to  ? { issueDate: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lte: new Date(q.to) } : {}) } } : {}),
     };
     const [invoices, total] = await Promise.all([
-      prisma.invoice.findMany({ where, orderBy: { issueDate: 'desc' }, skip: (page-1)*pageSize, take: pageSize, include: { lines: true } }),
+      prisma.invoice.findMany({
+        where, orderBy: { issueDate: 'desc' }, skip: (page-1)*pageSize, take: pageSize,
+        include: { lines: true, salesOrder: { select: { orderNumber: true, id: true } }, customer: { select: { id: true, displayName: true, docNumber: true, category: true, paymentTermsDays: true, tradeName: true } } },
+      }),
       prisma.invoice.count({ where }),
     ]);
     return reply.send({ data: invoices, meta: { total, page, pageSize, totalPages: Math.ceil(total/pageSize) } });
+  });
+
+  // ── GET pending orders (not yet invoiced) ────────────────────────────────
+  app.get('/pending-orders', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const orders = await prisma.salesOrder.findMany({
+      where: {
+        status: { in: ['ACCEPTED', 'CONFIRMED', 'READY', 'IN_DELIVERY', 'DELIVERED'] as never[] },
+        invoiceId: null,
+      },
+      include: {
+        customer: { select: { id: true, displayName: true, docNumber: true, docType: true, email: true, category: true, paymentTermsDays: true, tradeName: true } },
+        lines: { include: { product: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return reply.send({ data: orders });
   });
 
   // ── Monthly income summary ────────────────────────────────────────────────
@@ -89,6 +108,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
       entityEmail?: string;   // optional: for Factpro delivery + CRM
       currency?:    string;
       paymentDueDays?: number;
+      salesOrderId?:  string;
       items: {
         description:  string;
         productId?:   string;
@@ -156,6 +176,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
         totalPen,
         currency,
         status:       'DRAFT' as never,
+        salesOrderId: body.salesOrderId ?? null,
         paymentDueDate: dueDate,
         createdBy:    (req as any).user?.sub ?? 'system',
         lines: {
@@ -175,6 +196,187 @@ export async function invoicingRoutes(app: FastifyInstance) {
     });
 
     return reply.code(201).send({ data: invoice });
+  });
+
+  // ── PATCH /:id — edit draft invoice ──────────────────────────────────────
+  app.patch('/:id', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { lines: true } });
+    if (!invoice) return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (invoice.status !== 'DRAFT') return reply.code(422).send({ error: 'ONLY_DRAFT_EDITABLE', message: 'Solo se pueden editar facturas en borrador' });
+
+    const body = req.body as {
+      entityDocNo?: string;
+      entityName?: string;
+      entityEmail?: string;
+      entityId?: string;
+      paymentDueDays?: number;
+      salesOrderId?: string;
+      items?: { description: string; productId?: string; qty: number; unitPrice: number; igvRate?: number }[];
+    };
+
+    const igvRate = 0.18;
+    let lineData: any = undefined;
+
+    if (body.items?.length) {
+      // Delete existing lines and recreate
+      await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+      const computedLines = body.items.map(item => {
+        const rate = item.igvRate ?? igvRate;
+        const subtotal = Math.round(item.unitPrice * item.qty * 100) / 100;
+        const igv = Math.round(subtotal * rate * 100) / 100;
+        const total = Math.round((subtotal + igv) * 100) / 100;
+        return { description: item.description, productId: item.productId ?? null, qty: item.qty, unitPrice: item.unitPrice, igvRate: rate, subtotal, igv, total };
+      });
+      lineData = { create: computedLines };
+      const subtotalPen = computedLines.reduce((s, l) => s + l.subtotal, 0);
+      const igvPen = computedLines.reduce((s, l) => s + l.igv, 0);
+      const totalPen = computedLines.reduce((s, l) => s + l.total, 0);
+      const dueDate = body.paymentDueDays != null ? new Date(Date.now() + body.paymentDueDays * 86400_000) : undefined;
+
+      const updated = await prisma.invoice.update({
+        where: { id },
+        data: {
+          ...(body.entityDocNo !== undefined ? { entityDocNo: body.entityDocNo } : {}),
+          ...(body.entityName  !== undefined ? { entityName:  body.entityName }  : {}),
+          ...(body.entityEmail !== undefined ? { entityEmail: body.entityEmail }  : {}),
+          ...(body.entityId    !== undefined ? { entityId:    body.entityId }     : {}),
+          ...(body.salesOrderId !== undefined ? { salesOrderId: body.salesOrderId } : {}),
+          ...(dueDate ? { paymentDueDate: dueDate } : {}),
+          subtotalPen, igvPen, totalPen,
+          lines: lineData,
+        },
+        include: { lines: true },
+      });
+      return reply.send({ data: updated });
+    }
+
+    // Update metadata only (no line changes)
+    const dueDate = body.paymentDueDays != null ? new Date(Date.now() + body.paymentDueDays * 86400_000) : undefined;
+    const updated = await prisma.invoice.update({
+      where: { id },
+      data: {
+        ...(body.entityDocNo !== undefined ? { entityDocNo: body.entityDocNo } : {}),
+        ...(body.entityName  !== undefined ? { entityName:  body.entityName }  : {}),
+        ...(body.entityEmail !== undefined ? { entityEmail: body.entityEmail }  : {}),
+        ...(body.entityId    !== undefined ? { entityId:    body.entityId }     : {}),
+        ...(body.salesOrderId !== undefined ? { salesOrderId: body.salesOrderId } : {}),
+        ...(dueDate ? { paymentDueDate: dueDate } : {}),
+      },
+      include: { lines: true },
+    });
+    return reply.send({ data: updated });
+  });
+
+  // ── POST /from-orders — create invoices from sales orders (bulk) ─────────
+  app.post('/from-orders', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const body = req.body as { orderIds: string[]; emitAfter?: boolean };
+    if (!body.orderIds?.length) return reply.code(400).send({ error: 'orderIds required' });
+
+    const orders = await prisma.salesOrder.findMany({
+      where: { id: { in: body.orderIds } },
+      include: { customer: true, lines: { include: { product: true } } },
+    });
+
+    const results: any[] = [];
+    for (const order of orders) {
+      if (order.invoiceId) { results.push({ orderId: order.id, error: 'ALREADY_INVOICED' }); continue; }
+
+      const docType = order.invoiceType === 'BOLETA' ? 'BOLETA' : 'FACTURA';
+      const series = docType === 'BOLETA' ? config.FACTPRO_SERIE_BOLETA : config.FACTPRO_SERIE_FACTURA;
+      const lastInvoice = await prisma.invoice.findFirst({ where: { series }, orderBy: { correlative: 'desc' }, select: { correlative: true } });
+      const correlative = String((parseInt(lastInvoice?.correlative ?? '0') || 0) + 1).padStart(8, '0');
+
+      const igvRate = 0.18;
+      const computedLines = order.lines.map(line => {
+        const unitPrice = Number(line.unitPrice);
+        const qty = line.qty;
+        const subtotal = Math.round(unitPrice * qty * 100) / 100;
+        const igv = Math.round(subtotal * igvRate * 100) / 100;
+        const total = Math.round((subtotal + igv) * 100) / 100;
+        return {
+          description: line.product?.name ?? `Producto ${line.productId?.slice(-6)}`,
+          productId: line.productId,
+          qty, unitPrice, igvRate, subtotal, igv, total,
+        };
+      });
+
+      const subtotalPen = computedLines.reduce((s, l) => s + l.subtotal, 0);
+      const igvPen = computedLines.reduce((s, l) => s + l.igv, 0);
+      const totalPen = computedLines.reduce((s, l) => s + l.total, 0);
+
+      const dueDate = order.customer?.paymentTermsDays
+        ? new Date(Date.now() + order.customer.paymentTermsDays * 86400_000)
+        : undefined;
+
+      const invoice = await prisma.invoice.create({
+        data: {
+          docType: docType as never,
+          series, correlative,
+          issueDate: new Date(),
+          entityType: 'CUSTOMER' as never,
+          entityId: order.customerId,
+          entityDocNo: order.customer?.docNumber ?? '',
+          entityName: order.customer?.displayName ?? '',
+          entityEmail: order.customer?.email ?? null,
+          subtotalPen, igvPen, totalPen,
+          currency: order.currency,
+          status: 'DRAFT' as never,
+          salesOrderId: order.id,
+          paymentDueDate: dueDate,
+          createdBy: (req as any).user?.sub ?? 'system',
+          lines: { create: computedLines.map(l => ({ description: l.description, productId: l.productId, qty: l.qty, unitPrice: l.unitPrice, igvRate: l.igvRate, subtotal: l.subtotal, igv: l.igv, total: l.total })) },
+        },
+        include: { lines: true },
+      });
+
+      // Link invoice back to order
+      await prisma.salesOrder.update({ where: { id: order.id }, data: { invoiceId: invoice.id } });
+
+      // Emit if requested
+      if (body.emitAfter) {
+        try {
+          const tipoDocumento = docType === 'BOLETA' ? '03' : '01';
+          const serie = tipoDocumento === '01' ? config.FACTPRO_SERIE_FACTURA : config.FACTPRO_SERIE_BOLETA;
+          const payload = buildFacturaPayload({
+            tipoDocumento, serie,
+            entityDocType: (order.customer?.docNumber?.length === 11 ? 'RUC' : order.customer?.docNumber?.length === 8 ? 'DNI' : 'CE') as any,
+            entityDocNo: order.customer?.docNumber ?? '',
+            entityName: order.customer?.displayName ?? '',
+            entityEmail: order.customer?.email ?? undefined,
+            issueDate: new Date(),
+            currency: order.currency,
+            items: computedLines.map(l => ({ descripcion: l.description, cantidad: l.qty, valorUnitario: l.unitPrice, igvRate: l.igvRate })),
+          });
+          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'SENT' as never } });
+          const factproRes = await emitirDocumento(payload);
+          const accepted = factproRes.success && factproRes.state_description?.toLowerCase().includes('aceptado');
+          await prisma.invoice.update({
+            where: { id: invoice.id },
+            data: {
+              status: accepted ? 'ACCEPTED' : 'REJECTED',
+              series: factproRes.number?.split('-')[0] ?? invoice.series,
+              correlative: factproRes.number?.split('-')[1] ?? invoice.correlative,
+              hashCpe: factproRes.hash ?? null,
+              qrCodeUrl: factproRes.qr ?? null,
+              pdfUrl: factproRes.links?.pdf ?? null,
+              xmlUrl: factproRes.links?.xml ?? null,
+              nubefactId: factproRes.external_id ?? null,
+              cdrResponse: factproRes as never,
+              rejectionReason: !accepted ? (factproRes.message ?? 'Rechazado') : null,
+            },
+          });
+          results.push({ orderId: order.id, invoiceId: invoice.id, status: accepted ? 'ACCEPTED' : 'REJECTED' });
+        } catch (err: any) {
+          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'REJECTED', rejectionReason: err.message } });
+          results.push({ orderId: order.id, invoiceId: invoice.id, status: 'ERROR', error: err.message });
+        }
+      } else {
+        results.push({ orderId: order.id, invoiceId: invoice.id, status: 'DRAFT' });
+      }
+    }
+
+    return reply.send({ data: results });
   });
 
   // ── Emit to SUNAT via Factpro ─────────────────────────────────────────────

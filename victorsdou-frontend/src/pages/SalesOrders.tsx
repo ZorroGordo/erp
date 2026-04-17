@@ -718,6 +718,11 @@ function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
         const methods = (o.payments ?? []).map((p: any) => paymentMethods.find(m => m.value === p.method)?.label ?? p.method);
         return <span className="text-xs text-gray-500">{methods.length > 0 ? methods.join(', ') : '—'}</span>;
       }},
+    { id: 'invoiceStatus', label: 'Factura', group: 'Pago', defaultVisible: false,
+      render: (o) => o.invoiceId
+        ? <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Facturado</span>
+        : <span className="text-xs text-gray-300">—</span>,
+    },
   ];
 }
 
@@ -1053,6 +1058,7 @@ export default function SalesOrders() {
   // Modals
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [paymentModalOrder, setPaymentModalOrder] = useState<any>(null);
+  const [dispatchConfirmOrder, setDispatchConfirmOrder] = useState<any>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showExportReport, setShowExportReport] = useState(false);
 
@@ -1191,6 +1197,27 @@ export default function SalesOrders() {
       statusAction.mutate({ id: order.id, action: 'accept' });
     }
   };
+
+  const handleDispatchClick = (order: any) => {
+    // If no invoice linked, warn before dispatch
+    if (!order.invoiceId) {
+      setDispatchConfirmOrder(order);
+    } else {
+      statusAction.mutate({ id: order.id, action: 'dispatch' });
+    }
+  };
+
+  // Bulk create invoice for a single order from the dispatch confirmation dialog
+  const createInvoiceAndDispatch = useMutation({
+    mutationFn: (orderId: string) => api.post('/v1/invoices/from-orders', { orderIds: [orderId], emitAfter: false }),
+    onSuccess: (_d, orderId) => {
+      qc.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.success('Factura creada como borrador');
+      statusAction.mutate({ id: orderId, action: 'dispatch' });
+      setDispatchConfirmOrder(null);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error al crear factura'),
+  });
 
   const ecommerceOrderCount = (orders?.data ?? []).filter((o: any) => o.channel === 'ECOMMERCE').length;
 
@@ -1530,6 +1557,8 @@ export default function SalesOrders() {
                                 onClick={() => {
                                   if (act.endpoint === 'accept') {
                                     handleAcceptClick(o);
+                                  } else if (act.endpoint === 'dispatch') {
+                                    handleDispatchClick(o);
                                   } else {
                                     statusAction.mutate({ id: o.id, action: act.endpoint });
                                   }
@@ -1712,6 +1741,44 @@ export default function SalesOrders() {
           orders={orders?.data ?? []}
           onClose={() => setShowExportReport(false)}
         />
+      )}
+
+      {/* Dispatch without invoice confirmation */}
+      {dispatchConfirmOrder && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h3 className="font-semibold text-gray-900">Pedido sin factura</h3>
+            <p className="text-sm text-gray-600">
+              El pedido <strong>{dispatchConfirmOrder.orderNumber}</strong> no tiene factura vinculada.
+              Se recomienda facturar antes de despachar.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+                disabled={createInvoiceAndDispatch.isPending}
+                onClick={() => createInvoiceAndDispatch.mutate(dispatchConfirmOrder.id)}
+              >
+                <Receipt size={14} />
+                {createInvoiceAndDispatch.isPending ? 'Creando factura...' : 'Crear factura y despachar'}
+              </button>
+              <button
+                className="btn-secondary w-full text-sm"
+                onClick={() => {
+                  statusAction.mutate({ id: dispatchConfirmOrder.id, action: 'dispatch' });
+                  setDispatchConfirmOrder(null);
+                }}
+              >
+                Despachar sin factura
+              </button>
+              <button
+                className="text-sm text-gray-400 hover:text-gray-600 py-1"
+                onClick={() => setDispatchConfirmOrder(null)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

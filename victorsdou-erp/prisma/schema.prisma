@@ -970,6 +970,7 @@ model SalesOrder {
 
   lines    SalesOrderLine[]
   payments PaymentRecord[]
+  invoices Invoice[]
 
   @@index([status, deliveryDate])
   @@index([customerId, createdAt])
@@ -1044,6 +1045,7 @@ model Invoice {
   pdfUrl               String?
   xmlUrl               String?
   salesOrderId         String?
+  salesOrder           SalesOrder?       @relation(fields: [salesOrderId], references: [id])
   voidedAt             DateTime?
   createdAt            DateTime          @default(now())
   createdBy            String
