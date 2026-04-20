@@ -37,6 +37,8 @@ export async function inventoryRoutes(app: FastifyInstance) {
       isPerishable?: boolean;
       shelfLifeDays?: number;
       allergenFlags?: string[];
+      productType?: string;
+      family?: string;
     };
     const { prisma } = await import('../../lib/prisma');
     const ingredient = await prisma.ingredient.create({
@@ -49,6 +51,8 @@ export async function inventoryRoutes(app: FastifyInstance) {
         isPerishable:  body.isPerishable ?? false,
         shelfLifeDays: body.shelfLifeDays ?? null,
         allergenFlags: body.allergenFlags ?? [],
+        productType:   body.productType ? (body.productType as never) : null,
+        family:        body.family ? (body.family as never) : null,
       },
     });
     return reply.code(201).send({ data: ingredient });
@@ -104,7 +108,7 @@ export async function inventoryRoutes(app: FastifyInstance) {
 
   // ── POST /v1/inventory/receipts — register incoming stock with invoice/PO ref
   app.post('/receipts', {
-    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PROCUREMENT', 'SUPER_ADMIN')],
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PROCUREMENT', 'PRODUCTION', 'SUPER_ADMIN')],
   }, async (req, reply) => {
     const body = req.body as {
       ingredientId: string;
@@ -113,13 +117,21 @@ export async function inventoryRoutes(app: FastifyInstance) {
       unitCost:     number;
       invoiceRef?:  string;
       poRef?:       string;
+      productionOrderRef?: string;
       notes?:       string;
     };
 
     setAuditContext(req, 'inventory', 'PURCHASE_RECEIPT', body.ingredientId);
 
+    // Include productionOrderRef in notes if provided
+    const notesWithPO = [
+      body.notes,
+      body.productionOrderRef ? `[OP: ${body.productionOrderRef}]` : null,
+    ].filter(Boolean).join(' | ') || undefined;
+
     await InventoryService.registerReceipt({
       ...body,
+      notes: notesWithPO,
       createdBy: req.actor!.sub,
     });
 
@@ -160,13 +172,14 @@ export async function inventoryRoutes(app: FastifyInstance) {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'SUPER_ADMIN')],
   }, async (req, reply) => {
     const body = req.body as {
-      type:         'ADJUSTMENT' | 'OPENING_BALANCE';
+      type:         'ADJUSTMENT' | 'OPENING_BALANCE' | 'PRODUCTION_OUTPUT';
       ingredientId: string;
       warehouseId:  string;
       direction:    'IN' | 'OUT';
       qty:          number;
       unitCost:     number;
       notes?:       string;
+      productionOrderRef?: string;
     };
 
     setAuditContext(req, 'inventory', 'ADJUSTMENT', body.ingredientId);

@@ -32,9 +32,14 @@ interface IngredientDashItem {
   totalReserved: number;
   available:     number;
   status:        AlertStatus;
+  productType?:  'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED' | null;
+  family?:       'CONGELADO' | 'SECO' | null;
   alertConfig:   AlertConfig | null;
   warehouses:    { warehouseId: string; warehouseName: string; qty: number; reserved: number }[];
 }
+
+const INGREDIENT_TYPE_LABELS: Record<string, string> = { RAW_MATERIAL: 'MP', INTERMEDIATE: 'PI', FINISHED: 'PT' };
+const INGREDIENT_FAMILY_LABELS: Record<string, string> = { CONGELADO: 'Congelado', SECO: 'Seco' };
 
 interface Warehouse { id: string; name: string; type: string; }
 
@@ -197,6 +202,7 @@ function ReceiveModal({
   const [unitCost,     setUnitCost]     = useState('');
   const [invoiceRef,   setInvoiceRef]   = useState('');
   const [poRef,        setPoRef]        = useState('');
+  const [productionOrderRef, setProductionOrderRef] = useState('');
   const [notes,        setNotes]        = useState('');
 
   const create = useMutation({
@@ -279,6 +285,15 @@ function ReceiveModal({
               onChange={e => setPoRef(e.target.value)} />
           </div>
 
+          {/* Production Order ref */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              <Package size={11} className="inline mr-1" />Orden de Producción
+            </label>
+            <input className="input font-mono" value={productionOrderRef} placeholder="OP-2026-001"
+              onChange={e => setProductionOrderRef(e.target.value)} />
+          </div>
+
           {/* Notes */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
@@ -302,6 +317,7 @@ function ReceiveModal({
               qty: Number(qty), unitCost: Number(unitCost),
               invoiceRef: invoiceRef.trim() || undefined,
               poRef:      poRef.trim()      || undefined,
+              productionOrderRef: productionOrderRef.trim() || undefined,
               notes:      notes.trim()      || undefined,
             })}>
             {create.isPending && <Loader2 size={14} className="animate-spin" />}
@@ -565,6 +581,8 @@ export default function Inventory() {
   const [receiveItem,  setReceiveItem]  = useState<IngredientDashItem | undefined>();
   const [settingsItem, setSettingsItem] = useState<IngredientDashItem | null>(null);
   const [historyItem,  setHistoryItem]  = useState<IngredientDashItem | null>(null);
+  const [filterWarehouse, setFilterWarehouse] = useState<string>('');
+  const [filterType,      setFilterType]      = useState<string>('');
 
   const { data: dashData, isLoading } = useQuery({
     queryKey: ['inventory-dashboard'],
@@ -584,8 +602,16 @@ export default function Inventory() {
     queryFn:  () => api.get('/v1/inventory/batches/expiry-alerts').then(r => r.data),
   });
 
-  const ingredients: IngredientDashItem[] = dashData?.data        ?? [];
+  const allIngredients: IngredientDashItem[] = dashData?.data        ?? [];
   const warehouses:  Warehouse[]          = warehouseData?.data   ?? [];
+
+  // Apply filters
+  const ingredients = allIngredients.filter(i => {
+    if (filterType && i.productType !== filterType) return false;
+    if (filterWarehouse && !i.warehouses?.some(w => w.warehouseId === filterWarehouse)) return false;
+    return true;
+  });
+
   const criticalCount = ingredients.filter(i => i.status === 'critical').length;
   const alertCount    = ingredients.filter(i => i.status === 'alert').length;
 
@@ -601,12 +627,27 @@ export default function Inventory() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Inventario</h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            {ingredients.length} ingredientes activos
+            {ingredients.length} ingrediente{ingredients.length !== 1 ? 's' : ''}{(filterWarehouse || filterType) ? ' (filtrado)' : ' activos'}
             {criticalCount > 0 && <span className="text-red-600 ml-2 font-medium">· {criticalCount} crítico(s)</span>}
             {alertCount    > 0 && <span className="text-amber-600 ml-2 font-medium">· {alertCount} con alerta</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Warehouse filter */}
+          <select className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 bg-white" value={filterWarehouse} onChange={e => setFilterWarehouse(e.target.value)}>
+            <option value="">Todos los almacenes</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          {/* Type filter */}
+          <select className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 bg-white" value={filterType} onChange={e => setFilterType(e.target.value)}>
+            <option value="">Todos los tipos</option>
+            <option value="RAW_MATERIAL">Materia prima</option>
+            <option value="INTERMEDIATE">Intermedio</option>
+            <option value="FINISHED">Terminado</option>
+          </select>
+          {(filterWarehouse || filterType) && (
+            <button onClick={() => { setFilterWarehouse(''); setFilterType(''); }} className="text-xs text-gray-400 hover:text-gray-600 underline">Limpiar filtros</button>
+          )}
           {/* View toggle */}
           <div className="flex bg-gray-100 rounded-xl p-1">
             {(['dashboard', 'list'] as const).map(v => (
@@ -625,11 +666,16 @@ export default function Inventory() {
               data={ingredients}
               columns={[
                 { header: 'Ingrediente', key: 'name', width: 28 },
-                { header: 'Unidad', key: 'unit', width: 10 },
-                { header: 'Stock actual', key: 'currentStock', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
-                { header: 'Stock minimo', key: 'minStock', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
-                { header: 'Punto reorden', key: 'reorderPoint', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
-                { header: 'Costo unit. S/', key: 'averageCost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'SKU', key: 'sku', width: 14 },
+                { header: 'Tipo', key: 'productType', width: 10, format: (v: any) => v ? (INGREDIENT_TYPE_LABELS[v] ?? v) : '—' },
+                { header: 'Familia', key: 'family', width: 12, format: (v: any) => v ? (INGREDIENT_FAMILY_LABELS[v] ?? v) : '—' },
+                { header: 'Categoría', key: 'category', width: 16 },
+                { header: 'Unidad', key: 'baseUom', width: 10 },
+                { header: 'Stock disponible', key: 'available', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Stock total', key: 'totalQty', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Umbral alerta', key: 'alertConfig.alertThreshold', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Umbral mínimo', key: 'alertConfig.minThreshold', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+                { header: 'Costo prom. S/', key: 'avgCostPen', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
                 { header: 'Estado', key: 'status', width: 12 },
               ]}
               extraFilters={[
@@ -637,6 +683,11 @@ export default function Inventory() {
                   { value: 'ok', label: 'OK' },
                   { value: 'alert', label: 'Alerta' },
                   { value: 'critical', label: 'Critico' },
+                ]},
+                { key: 'productType', label: 'Tipo', type: 'select', options: [
+                  { value: 'RAW_MATERIAL', label: 'Materia prima' },
+                  { value: 'INTERMEDIATE', label: 'Intermedio' },
+                  { value: 'FINISHED', label: 'Terminado' },
                 ]},
               ]}
             />
@@ -728,6 +779,7 @@ export default function Inventory() {
                 <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
                   <tr>
                     <th className="px-5 py-3 text-left">Ingrediente</th>
+                    <th className="px-5 py-3 text-left">Tipo</th>
                     <th className="px-5 py-3 text-left">Categoría</th>
                     <th className="px-5 py-3 text-right">Disponible</th>
                     <th className="px-5 py-3 text-right">Alerta 🟡</th>
@@ -744,6 +796,11 @@ export default function Inventory() {
                     return (
                       <tr key={item.id} className="hover:bg-gray-50">
                         <td className="px-5 py-3 font-medium text-gray-900">{item.name}</td>
+                        <td className="px-5 py-3 text-xs">
+                          {item.productType && <span className="inline-block bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{INGREDIENT_TYPE_LABELS[item.productType] ?? item.productType}</span>}
+                          {item.family && <span className="inline-block bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded ml-1">{INGREDIENT_FAMILY_LABELS[item.family] ?? item.family}</span>}
+                          {!item.productType && !item.family && <span className="text-gray-300">—</span>}
+                        </td>
                         <td className="px-5 py-3 text-gray-500">{item.category}</td>
                         <td className="px-5 py-3 text-right font-mono">{item.available.toFixed(2)}</td>
                         <td className="px-5 py-3 text-right font-mono text-amber-600">

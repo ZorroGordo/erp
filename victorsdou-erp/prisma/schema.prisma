@@ -1,7 +1,7 @@
-// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-//  VictorOS ERP â Prisma Schema
-//  PostgreSQL 16 Â· PCGE-aligned accounting Â· Peru compliance
-// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ─────────────────────────────────────────────────────────────
+//  VictorOS ERP — Prisma Schema
+//  PostgreSQL 16 · PCGE-aligned accounting · Peru compliance
+// ─────────────────────────────────────────────────────────────
 
 generator client {
   provider = "prisma-client-js"
@@ -12,9 +12,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  ENUMS
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 enum UserRole {
   SUPER_ADMIN
@@ -34,14 +34,27 @@ enum UserRole {
 
 enum WarehouseType {
   RAW_MATERIAL
+  INTERMEDIATE
   FINISHED_GOODS
   PACKAGING
   GENERAL
 }
 
+enum ProductType {
+  RAW_MATERIAL
+  INTERMEDIATE
+  FINISHED
+}
+
+enum ProductFamily {
+  CONGELADO
+  SECO
+}
+
 enum StockMovementType {
   PURCHASE_RECEIPT
   PRODUCTION_CONSUMPTION
+  PRODUCTION_OUTPUT
   WASTE
   ADJUSTMENT
   TRANSFER_IN
@@ -93,10 +106,10 @@ enum CustomerType {
 enum CustomerCategory {
   SUPERMERCADO      // SPSA, Cencosud, Tottus
   TIENDA_NATURISTA  // Tiendas naturistas
-  CAFETERIA         // CafeterÃ­as
+  CAFETERIA         // Cafeterías
   RESTAURANTE       // Restaurantes
   HOTEL             // Hoteles
-  EMPRESA           // Empresa genÃ©rica
+  EMPRESA           // Empresa genérica
   OTROS             // Otros
 }
 
@@ -202,8 +215,8 @@ enum PensionSystem {
 }
 
 enum EmploymentType {
-  PLANILLA   // On payroll â ESSALUD, CTS, vacations, gratificaciÃ³n apply
-  RXH        // Recibo por Honorarios â 8% IR retention only (if > S/1500/month)
+  PLANILLA   // On payroll — ESSALUD, CTS, vacations, gratificación apply
+  RXH        // Recibo por Honorarios — 8% IR retention only (if > S/1500/month)
 }
 
 enum PayPeriodType {
@@ -302,9 +315,9 @@ enum ComprobanteSource {
   EMAIL
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  SHARED / SYSTEM
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model User {
   id               String    @id @default(uuid())
@@ -360,23 +373,25 @@ model SystemConfig {
   @@map("system_config")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  INVENTORY
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Ingredient {
-  id             String   @id @default(uuid())
-  sku            String   @unique
+  id             String         @id @default(uuid())
+  sku            String         @unique
   name           String
-  category       String   // flour|sugar|fat|dairy|egg|flavoring|packaging|other
-  baseUom        String   // kg|litre|unit|g|ml
-  avgCostPen     Decimal  @default(0) @db.Decimal(14, 6)
-  isPerishable   Boolean  @default(false)
+  category       String         // flour|sugar|fat|dairy|egg|flavoring|packaging|other
+  productType    ProductType?   // RAW_MATERIAL | INTERMEDIATE | FINISHED
+  family         ProductFamily? // CONGELADO | SECO
+  baseUom        String         // kg|litre|unit|g|ml
+  avgCostPen     Decimal        @default(0) @db.Decimal(14, 6)
+  isPerishable   Boolean        @default(false)
   shelfLifeDays  Int?
-  isActive       Boolean  @default(true)
+  isActive       Boolean        @default(true)
   allergenFlags  String[]
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   // Relations
   stockLevels      StockLevel[]
@@ -450,10 +465,11 @@ model StockMovement {
   unitCostPen    Decimal           @db.Decimal(14, 6)
   totalCostPen   Decimal           @db.Decimal(14, 4)
   balanceAfter   Decimal           @db.Decimal(14, 4)
-  notes          String?
-  journalEntryId String?
-  createdAt      DateTime          @default(now())
-  createdBy      String
+  notes               String?
+  productionOrderRef  String?           // free-text production order reference
+  journalEntryId      String?
+  createdAt           DateTime          @default(now())
+  createdBy           String
 
   @@index([ingredientId, createdAt])
   @@index([refDocType, refDocId])
@@ -511,9 +527,9 @@ model IngredientAlert {
   @@map("ingredient_alerts")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  PRODUCTION
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Recipe {
   id            String       @id @default(uuid())
@@ -609,9 +625,9 @@ model WasteLog {
   @@map("waste_logs")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  SUPPLIERS & PROCUREMENT
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Supplier {
   id                 String   @id @default(uuid())
@@ -772,9 +788,9 @@ model SupplierInvoice {
   @@map("supplier_invoices")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  PRODUCT CATALOG
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model ProductCategory {
   id          String  @id @default(uuid())
@@ -794,6 +810,8 @@ model Product {
   sku           String          @unique
   name          String
   description   String?
+  productType   ProductType?    // RAW_MATERIAL | INTERMEDIATE | FINISHED
+  family        ProductFamily?  // CONGELADO | SECO
   categoryId    String
   category      ProductCategory @relation(fields: [categoryId], references: [id])
   basePricePen  Decimal         @db.Decimal(12, 4)
@@ -824,9 +842,9 @@ model Product {
   @@map("products")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  CUSTOMERS & SALES
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Customer {
   id                  String            @id @default(uuid())
@@ -887,7 +905,7 @@ model CustomerContact {
   @@map("customer_contacts")
 }
 
-// Branch / store for B2B customers â one customer can have many delivery points
+// Branch / store for B2B customers — one customer can have many delivery points
 model Sucursal {
   id              String   @id @default(uuid())
   customerId      String
@@ -1013,9 +1031,9 @@ model PaymentRecord {
   @@map("payment_records")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  INVOICING (MASTER TRANSACTION TABLE)
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Invoice {
   id                   String            @id @default(uuid())
@@ -1080,9 +1098,9 @@ model InvoiceLineItem {
   @@map("invoice_line_items")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  ACCOUNTING (DOUBLE-ENTRY GL)
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model ChartOfAccount {
   id              String   @id @default(uuid())
@@ -1196,9 +1214,9 @@ model BankTransaction {
   @@map("bank_transactions")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  DELIVERY
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Driver {
   id          String  @id @default(uuid())
@@ -1272,9 +1290,9 @@ model DeliveryIncident {
   @@map("delivery_incidents")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  PAYROLL
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Employee {
   id              String         @id @default(uuid())
@@ -1284,7 +1302,7 @@ model Employee {
   apellidoMaterno String?
   seguroSalud     String?        // ESSALUD | EPS | ESSALUD_EPS | SIS | SCTR
   dni             String         @unique
-  cuspp           String?        // AFP code (CUSPP = CÃ³digo Ãnico de Sistema de Pensiones)
+  cuspp           String?        // AFP code (CUSPP = Código Único de Sistema de Pensiones)
   contractType    ContractType   @default(INDEFINIDO)
   hireDate        DateTime       @default(now())
   birthDate       DateTime?
@@ -1397,9 +1415,9 @@ model OvertimeRecord {
   @@map("overtime_records")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  AI FORECASTING & PRODUCTION PLANNING
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model ForecastRun {
   id           String         @id @default(uuid())
@@ -1519,11 +1537,11 @@ model PurchaseRecommendation {
   @@map("purchase_recommendations")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-//  COMPROBANTES â DOCUMENT REGISTRY (SUSTENTO)
-//  Stores facturas, boletas, OC, guÃ­as, etc. linked to any
+// ══════════════════════════════════════════════════════════════
+//  COMPROBANTES — DOCUMENT REGISTRY (SUSTENTO)
+//  Stores facturas, boletas, OC, guías, etc. linked to any
 //  business event.  Files are kept as base64 inside the DB.
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model Comprobante {
   id              String            @id @default(uuid())
@@ -1608,9 +1626,9 @@ model ComprobanteArchivo {
   @@map("comprobante_archivos")
 }
 
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 //  COMMUNICATIONS LOG
-// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ══════════════════════════════════════════════════════════════
 
 model CommunicationLog {
   id          String   @id @default(uuid())

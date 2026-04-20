@@ -11,10 +11,16 @@ interface Ingredient { id: string; name: string; sku: string; baseUom: string; a
 interface BOMLine { id: string; ingredientId: string; ingredient: Ingredient; qtyRequired: string; uom: string; wasteFactorPct: string; notes: string | null; }
 interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; bomLines: BOMLine[]; }
 interface Product {
-  id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { name: string };
+  id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { id: string; name: string };
+  productType?: 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED' | null;
+  family?: 'CONGELADO' | 'SECO' | null;
+  costs?: { rawCost: number; overheadCost: number; totalCost: number } | null;
   ecommerceEnabled?: boolean; ecommercePrice?: string | null;
   ecommerceImages?: string[]; ecommerceMainImageIndex?: number;
 }
+
+const PRODUCT_TYPE_LABELS: Record<string, string> = { RAW_MATERIAL: 'Materia prima', INTERMEDIATE: 'Intermedio', FINISHED: 'Terminado' };
+const FAMILY_LABELS: Record<string, string> = { CONGELADO: 'Congelado', SECO: 'Seco' };
 interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: number; stdUnit: string; avgCost: number; lineCost: number; }
 
 // ── Cost helpers ───────────────────────────────────────────────────────────
@@ -234,10 +240,11 @@ export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '' });
+  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, autoCode: false });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
+    productType: '' as string, family: '' as string,
     ecommerceEnabled: false, ecommercePriceEnabled: false, ecommercePrice: '',
     ecommercePriceDisplay: '', // con-IGV display value (what user types)
     ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
@@ -287,13 +294,25 @@ export default function Products() {
   }, [allRecipesData, productsData, overheadRate]);
 
   const createProduct = useMutation({
-    mutationFn: (data: typeof productForm) => api.post('/v1/products', data),
+    mutationFn: (data: typeof productForm) => {
+      const payload: any = { name: data.name, basePricePen: data.basePricePen, categoryId: data.categoryId };
+      if (data.productType) payload.productType = data.productType;
+      if (data.family) payload.family = data.family;
+      if (data.autoCode && data.productType && data.family) {
+        payload.autoCode = true;
+        const cat = categories.find((c: any) => c.id === data.categoryId);
+        payload.categoryCode = cat ? cat.name.substring(0, 2).toUpperCase() : 'XX';
+      } else {
+        payload.sku = data.sku;
+      }
+      return api.post('/v1/products', payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
       toast.success('Producto creado');
       setShowCreate(false);
-      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '' });
+      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', autoCode: false });
     },
     onError: () => toast.error('Error al crear producto'),
   });
@@ -313,6 +332,8 @@ export default function Products() {
       const payload = {
         name: data.name, sku: data.sku, basePricePen: data.basePricePen,
         categoryId: data.categoryId, isActive: data.isActive,
+        productType: data.productType || null,
+        family: data.family || null,
         ecommerceEnabled: data.ecommerceEnabled,
         ecommercePrice: data.ecommerceEnabled && data.ecommercePriceEnabled && data.ecommercePrice
           ? data.ecommercePrice : null,
@@ -350,8 +371,10 @@ export default function Products() {
       name: p.name,
       sku: p.sku,
       basePricePen: p.basePricePen,
-      categoryId: p.category ? (categories.find((c: any) => c.name === p.category?.name)?.id ?? '') : '',
+      categoryId: p.category ? (categories.find((c: any) => c.name === p.category?.name)?.id ?? p.category?.id ?? '') : '',
       isActive: p.isActive,
+      productType: p.productType ?? '',
+      family: p.family ?? '',
       ecommerceEnabled: p.ecommerceEnabled ?? false,
       ecommercePriceEnabled: !!p.ecommercePrice,
       ecommercePrice: p.ecommercePrice ?? '',
@@ -413,6 +436,25 @@ export default function Products() {
                 <option value="">Sin categoría</option>
                 {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Tipo</label>
+                <select className="input w-full" value={editForm.productType ?? ''} onChange={e => setEditForm(f => ({ ...f, productType: e.target.value || '' }))}>
+                  <option value="">— Sin tipo —</option>
+                  <option value="RAW_MATERIAL">Materia prima (MP)</option>
+                  <option value="INTERMEDIATE">Intermedio (PI)</option>
+                  <option value="FINISHED">Terminado (PT)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Familia</label>
+                <select className="input w-full" value={editForm.family ?? ''} onChange={e => setEditForm(f => ({ ...f, family: e.target.value || '' }))}>
+                  <option value="">— Sin familia —</option>
+                  <option value="CONGELADO">Congelado</option>
+                  <option value="SECO">Seco</option>
+                </select>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</label>
@@ -613,15 +655,24 @@ export default function Products() {
             data={productsData?.data ?? []}
             columns={[
               { header: 'Nombre', key: 'name', width: 28 },
-              { header: 'Categoria', key: 'category', width: 18 },
-              { header: 'SKU', key: 'sku', width: 14 },
-              { header: 'Precio venta S/', key: 'price', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
-              { header: 'Costo S/', key: 'cost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
-              { header: 'Unidad', key: 'unit', width: 10 },
+              { header: 'SKU', key: 'sku', width: 16 },
+              { header: 'Tipo', key: 'productType', width: 14, format: (v: any) => v ? (PRODUCT_TYPE_LABELS[v] ?? v) : '—' },
+              { header: 'Familia', key: 'family', width: 12, format: (v: any) => v ? (FAMILY_LABELS[v] ?? v) : '—' },
+              { header: 'Categoría', key: 'category.name', width: 18, format: (v: any) => v ?? '—' },
+              { header: 'Precio venta S/', key: 'basePricePen', width: 16, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Costo MP S/', key: 'costs.rawCost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Overhead S/', key: 'costs.overheadCost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Costo total S/', key: 'costs.totalCost', width: 14, format: (v: any) => v != null ? Number(v) : 0 },
+              { header: 'Unidad', key: 'unitOfSale', width: 10, format: (v: any) => v ?? 'unit' },
               { header: 'Activo', key: 'isActive', width: 8, format: (v: any) => v ? 'Si' : 'No' },
             ]}
             extraFilters={[
-              { key: 'category', label: 'Categoria', type: 'text' },
+              { key: 'category.name', label: 'Categoría', type: 'text' },
+              { key: 'productType', label: 'Tipo', type: 'select', options: [
+                { value: 'RAW_MATERIAL', label: 'Materia prima' },
+                { value: 'INTERMEDIATE', label: 'Intermedio' },
+                { value: 'FINISHED', label: 'Terminado' },
+              ]},
             ]}
           />
           <button
@@ -673,15 +724,21 @@ export default function Products() {
               <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" type="text" placeholder="ej. Bagel Clasico" value={productForm.name} onChange={e => setProductForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                SKU <span className="font-normal text-gray-400">(formato: CAT-ITEM-SIZE)</span>
-              </label>
-              <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" type="text" placeholder="ej. BRD-BGL-MED" value={productForm.sku} onChange={e => setProductForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))} />
-              <p className="text-xs text-gray-400 mt-1">Categoria (3-4 letras) - Producto (3-4 letras) - Tamano (3 letras) - ej: PSTY-CROI-MED</p>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de producto</label>
+              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.productType} onChange={e => setProductForm(f => ({ ...f, productType: e.target.value }))}>
+                <option value="">— Seleccionar —</option>
+                <option value="RAW_MATERIAL">Materia prima (MP)</option>
+                <option value="INTERMEDIATE">Producto intermedio (PI)</option>
+                <option value="FINISHED">Producto terminado (PT)</option>
+              </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Precio base (S/.)</label>
-              <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" type="number" step="0.01" placeholder="0.00" value={productForm.basePricePen} onChange={e => setProductForm(f => ({ ...f, basePricePen: e.target.value }))} />
+              <label className="block text-xs font-medium text-gray-600 mb-1">Familia</label>
+              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.family} onChange={e => setProductForm(f => ({ ...f, family: e.target.value }))}>
+                <option value="">— Seleccionar —</option>
+                <option value="CONGELADO">Congelado (CO)</option>
+                <option value="SECO">Seco (SE)</option>
+              </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Categoria</label>
@@ -690,9 +747,34 @@ export default function Products() {
                 {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                SKU
+                {productForm.autoCode
+                  ? <span className="font-normal text-green-600 ml-1">(auto: TT-FF-CC-NNN)</span>
+                  : <span className="font-normal text-gray-400 ml-1">(manual)</span>}
+              </label>
+              {productForm.autoCode ? (
+                <div className="w-full px-3 py-2 border border-green-200 bg-green-50 rounded-lg text-sm font-mono text-green-700">
+                  Se generará automáticamente
+                </div>
+              ) : (
+                <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" type="text" placeholder="ej. PT-CO-PA-001" value={productForm.sku} onChange={e => setProductForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))} />
+              )}
+              <label className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 cursor-pointer">
+                <input type="checkbox" checked={productForm.autoCode} onChange={e => setProductForm(f => ({ ...f, autoCode: e.target.checked }))}
+                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" disabled={!productForm.productType || !productForm.family} />
+                Auto-generar código
+                {(!productForm.productType || !productForm.family) && <span className="text-amber-500">(selecciona tipo y familia)</span>}
+              </label>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Precio base (S/.)</label>
+              <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" type="number" step="0.01" placeholder="0.00" value={productForm.basePricePen} onChange={e => setProductForm(f => ({ ...f, basePricePen: e.target.value }))} />
+            </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => createProduct.mutate(productForm)} disabled={!productForm.name || !productForm.sku} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40">Crear</button>
+            <button onClick={() => createProduct.mutate(productForm)} disabled={!productForm.name || (!productForm.sku && !productForm.autoCode)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40">Crear</button>
             <button onClick={() => setShowCreate(false)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
           </div>
         </div>
@@ -710,10 +792,12 @@ export default function Products() {
                 <th className="text-left px-4 py-3 font-medium text-gray-500 w-6"></th>
                 <th className="text-left px-4 py-3 font-medium text-gray-500">Nombre</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-500">SKU</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-500">Tipo</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-500">Precio base</th>
+                <th className="text-right px-4 py-3 font-medium text-gray-500">Costo MP</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-500">Costo total</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-500">Margen bruto</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">Categoria</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-500">Categoría</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-500">Estado</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -722,18 +806,27 @@ export default function Products() {
               {products.map((product: Product) => {
                 const isExpanded = expandedId === product.id;
                 const costInfo = productCostMap[product.id];
+                const serverCost = product.costs;
+                const displayCost = serverCost ?? (costInfo ? { rawCost: costInfo.totalProductCost - (costInfo.totalProductCost * overheadRate / (1 + overheadRate)), totalCost: costInfo.totalProductCost } : null);
+                const grossMarginVal = displayCost ? Number(product.basePricePen) - displayCost.totalCost : null;
                 return (
                   <>
                     <tr key={product.id} className={'border-b border-gray-100 hover:bg-gray-50 cursor-pointer ' + (isExpanded ? 'bg-indigo-50' : '')} onClick={() => setExpandedId(isExpanded ? null : product.id)}>
                       <td className="px-4 py-3 text-gray-400">{isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</td>
                       <td className="px-4 py-3 font-medium text-gray-900">{product.name}</td>
                       <td className="px-4 py-3 font-mono text-gray-500 text-xs">{product.sku}</td>
-                      <td className="px-4 py-3 text-right text-gray-700">S/ {fmtNum(product.basePricePen)}</td>
-                      <td className="px-4 py-3 text-right text-gray-700">{costInfo ? 'S/ ' + costInfo.totalProductCost.toFixed(2) : '-'}</td>
-                      <td className={'px-4 py-3 text-right font-medium ' + (costInfo ? (costInfo.grossMargin >= 0 ? 'text-green-600' : 'text-red-500') : 'text-gray-400')}>
-                        {costInfo ? 'S/ ' + costInfo.grossMargin.toFixed(2) : '-'}
+                      <td className="px-4 py-3 text-xs">
+                        {product.productType && <span className="inline-block bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{PRODUCT_TYPE_LABELS[product.productType] ?? product.productType}</span>}
+                        {product.family && <span className="inline-block bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded ml-1">{FAMILY_LABELS[product.family] ?? product.family}</span>}
+                        {!product.productType && !product.family && <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-4 py-3 text-gray-500">{product.category?.name ?? '-'}</td>
+                      <td className="px-4 py-3 text-right text-gray-700">S/ {fmtNum(product.basePricePen)}</td>
+                      <td className="px-4 py-3 text-right text-gray-500 text-xs">{displayCost ? 'S/ ' + displayCost.rawCost.toFixed(2) : '—'}</td>
+                      <td className="px-4 py-3 text-right text-gray-700">{displayCost ? 'S/ ' + displayCost.totalCost.toFixed(2) : '—'}</td>
+                      <td className={'px-4 py-3 text-right font-medium ' + (grossMarginVal != null ? (grossMarginVal >= 0 ? 'text-green-600' : 'text-red-500') : 'text-gray-400')}>
+                        {grossMarginVal != null ? 'S/ ' + grossMarginVal.toFixed(2) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{product.category?.name ?? '—'}</td>
                       <td className="px-4 py-3">
                         {product.isActive
                           ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs"><CheckCircle2 className="w-3 h-3" /> Activo</span>
@@ -752,7 +845,7 @@ export default function Products() {
                     </tr>
                     {isExpanded && (
                       <tr key={product.id + '-detail'}>
-                        <td colSpan={9} className="px-6 py-5 bg-indigo-50">
+                        <td colSpan={11} className="px-6 py-5 bg-indigo-50">
                           <RecipePanel
                             product={product}
                             recipe={activeRecipe}
