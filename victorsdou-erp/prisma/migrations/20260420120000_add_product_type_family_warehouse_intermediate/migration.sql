@@ -26,15 +26,6 @@ ALTER TABLE "ingredients" ADD COLUMN IF NOT EXISTS "family" "ProductFamily";
 -- AlterTable: add productionOrderRef to stock_movements (idempotent)
 ALTER TABLE "stock_movements" ADD COLUMN IF NOT EXISTS "productionOrderRef" TEXT;
 
--- Seed default warehouses (idempotent)
-INSERT INTO "warehouses" (id, name, type, "isActive", "createdAt")
-SELECT gen_random_uuid(), 'Almacén Materias Primas', 'RAW_MATERIAL', true, now()
-WHERE NOT EXISTS (SELECT 1 FROM "warehouses" WHERE type = 'RAW_MATERIAL');
-
-INSERT INTO "warehouses" (id, name, type, "isActive", "createdAt")
-SELECT gen_random_uuid(), 'Almacén Productos Intermedios', 'INTERMEDIATE', true, now()
-WHERE NOT EXISTS (SELECT 1 FROM "warehouses" WHERE type = 'INTERMEDIATE');
-
-INSERT INTO "warehouses" (id, name, type, "isActive", "createdAt")
-SELECT gen_random_uuid(), 'Almacén Productos Terminados', 'FINISHED_GOODS', true, now()
-WHERE NOT EXISTS (SELECT 1 FROM "warehouses" WHERE type = 'FINISHED_GOODS');
+-- NOTE: Warehouse seeds moved to a separate migration (20260420120001)
+-- because ALTER TYPE ADD VALUE must be committed before new values can be
+-- used in DML within the same transaction (PostgreSQL restriction).
