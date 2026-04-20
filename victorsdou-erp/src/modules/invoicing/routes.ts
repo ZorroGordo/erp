@@ -26,7 +26,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: invoices, meta: { total, page, pageSize, totalPages: Math.ceil(total/pageSize) } });
   });
 
-  // ââ GET pending orders (not yet invoiced) ââââââââââââââââââââââââââââââââ
+  // ── GET pending orders (not yet invoiced) ────────────────────────────────
   app.get('/pending-orders', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const orders = await prisma.salesOrder.findMany({
       where: {
@@ -42,7 +42,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: orders });
   });
 
-  // ââ Monthly income summary ââââââââââââââââââââââââââââââââââââââââââââââââ
+  // ── Monthly income summary ────────────────────────────────────────────────
   // GET /v1/invoices/summary?month=2026-02&customerType=B2B
   app.get('/summary', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const q = req.query as { month?: string; customerType?: 'B2B' | 'B2C' };
@@ -56,7 +56,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     const from = new Date(year, month - 1, 1);
     const to   = new Date(year, month, 1);   // first day of next month (exclusive upper bound)
 
-    // B2B â FACTURA (empresa con RUC), B2C â BOLETA (persona natural)
+    // B2B ≈ FACTURA (empresa con RUC), B2C ≈ BOLETA (persona natural)
     const docTypeFilter =
       q.customerType === 'B2B' ? { docType: { in: ['FACTURA'] as never[] } }
     : q.customerType === 'B2C' ? { docType: { in: ['BOLETA']  as never[] } }
@@ -98,7 +98,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: invoice });
   });
 
-  // ââ Create draft invoice ââââââââââââââââââââââââââââââââââââââââââââââââââ
+  // ── Create draft invoice ──────────────────────────────────────────────────
   app.post('/', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const body = req.body as {
       docType:      'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO';
@@ -145,8 +145,8 @@ export async function invoicingRoutes(app: FastifyInstance) {
     // Compute line totals
     const computedLines = body.items.map(item => {
       const rate     = item.igvRate ?? igvRate;
-      const qty      = Number(item.qty);
-      const subtotal = Math.round(Number(item.unitPrice) * qty * 100) / 100;
+      const qty      = item.qty;
+      const subtotal = Math.round(item.unitPrice * qty * 100) / 100;
       const igv      = Math.round(subtotal * rate * 100) / 100;
       const total    = Math.round((subtotal + igv) * 100) / 100;
       return { ...item, subtotal, igv, total, igvRate: rate };
@@ -198,7 +198,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: invoice });
   });
 
-  // ââ PATCH /:id â edit draft invoice ââââââââââââââââââââââââââââââââââââââ
+  // ── PATCH /:id — edit draft invoice ──────────────────────────────────────
   app.patch('/:id', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const invoice = await prisma.invoice.findUnique({ where: { id }, include: { lines: true } });
@@ -268,7 +268,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: updated });
   });
 
-  // ââ POST /from-orders â create invoices from sales orders (bulk) âââââââââ
+  // ── POST /from-orders — create invoices from sales orders (bulk) ─────────
   app.post('/from-orders', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const body = req.body as { orderIds: string[]; emitAfter?: boolean };
     if (!body.orderIds?.length) return reply.code(400).send({ error: 'orderIds required' });
@@ -346,7 +346,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
             entityEmail: order.customer?.email ?? undefined,
             issueDate: new Date(),
             currency: order.currency,
-            items: computedLines.map(l => ({ descripcion: l.description, cantidad: Number(l.qty), valorUnitario: l.unitPrice, igvRate: l.igvRate })),
+            items: computedLines.map(l => ({ descripcion: l.description, cantidad: l.qty, valorUnitario: l.unitPrice, igvRate: l.igvRate })),
           });
           await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'SENT' as never } });
           const factproRes = await emitirDocumento(payload);
@@ -379,7 +379,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: results });
   });
 
-  // ââ Emit to SUNAT via Factpro âââââââââââââââââââââââââââââââââââââââââââââ
+  // ── Emit to SUNAT via Factpro ─────────────────────────────────────────────
   app.post('/:id/emit', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
 
