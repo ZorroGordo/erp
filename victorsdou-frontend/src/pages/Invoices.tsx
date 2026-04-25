@@ -3,15 +3,15 @@ import { api } from '../lib/api';
 import {
   Receipt, Send, CheckCircle2, XCircle, Clock, FileDown, AlertCircle,
   Loader2, Plus, Trash2, Search, X, UserPlus, Building2, User, Download,
-  Filter,
+  Filter, Eye, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 import { RucLookupInput } from '../components/RucLookupInput';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type DocType = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO';
+type DocType = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
 type InvoiceStatus = 'DRAFT' | 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'VOIDED';
 type TabType = 'invoices' | 'pending-orders';
 
@@ -99,6 +99,7 @@ const DOC_LABEL: Record<string, string> = {
   BOLETA: 'Boleta (03)',
   NOTA_CREDITO: 'Nota Crédito (07)',
   NOTA_DEBITO: 'Nota Débito (08)',
+  GUIA_REMISION: 'Guía Remisión (09)',
 };
 
 function calculateOrderTotals(order: PendingOrder) {
@@ -231,11 +232,14 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
     total: round2(lines.reduce((s, l) => s + calcLine(l).total, 0)),
   };
   const masterFactor = 1 - (masterDiscountPct > 0 ? masterDiscountPct / 100 : 0);
+  // Apply master discount to subtotal first, then recalculate IGV from discounted subtotal
+  const discountedSub = round2(rawTotals.sub * masterFactor);
+  const recalcIgv = round2(discountedSub * 0.18);
   const totals = {
-    sub: round2(rawTotals.sub * masterFactor),
-    igv: round2(rawTotals.igv * masterFactor),
-    total: round2(rawTotals.total * masterFactor),
-    masterDisc: masterDiscountPct > 0 ? round2(rawTotals.total * (masterDiscountPct / 100)) : 0,
+    sub: discountedSub,
+    igv: recalcIgv,
+    total: round2(discountedSub + recalcIgv),
+    masterDisc: masterDiscountPct > 0 ? round2(rawTotals.sub * (masterDiscountPct / 100)) : 0,
   };
 
   const updateLine = (i: number, patch: Partial<LineItem>) =>
@@ -306,16 +310,27 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tipo de documento</label>
             <div className="flex gap-2 flex-wrap">
-              {(['FACTURA', 'BOLETA', 'NOTA_CREDITO'] as DocType[]).map(dt => (
-                <button key={dt} onClick={() => { setDocType(dt); clearEntity(); setClientMode('search'); }}
-                  className={`px-4 py-2 rounded-xl text-sm font-medium border transition-all ${docType === dt ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-brand-200 hover:bg-brand-50'}`}>
-                  {dt === 'FACTURA' ? '📄 Factura (01)' : dt === 'BOLETA' ? '🧾 Boleta (03)' : '📋 Nota Crédito (07)'}
-                </button>
-              ))}
+              {(['FACTURA', 'BOLETA', 'NOTA_CREDITO', 'NOTA_DEBITO', 'GUIA_REMISION'] as DocType[]).map(dt => {
+                const label: Record<string, string> = {
+                  FACTURA: '📄 Factura (01)',
+                  BOLETA: '🧾 Boleta (03)',
+                  NOTA_CREDITO: '📋 Nota Crédito (07)',
+                  NOTA_DEBITO: '📋 Nota Débito (08)',
+                  GUIA_REMISION: '🚚 Guía Remisión (09)',
+                };
+                return (
+                  <button key={dt} onClick={() => { setDocType(dt); clearEntity(); setClientMode('search'); }}
+                    className={`px-4 py-2 rounded-xl text-sm font-medium border transition-all ${docType === dt ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-brand-200 hover:bg-brand-50'}`}>
+                    {label[dt] ?? dt}
+                  </button>
+                );
+              })}
             </div>
             {isFactura && <p className="text-xs text-amber-600 mt-1.5">Factura: requiere RUC del receptor. Otorga crédito fiscal IGV al cliente.</p>}
             {docType === 'BOLETA' && <p className="text-xs text-blue-500 mt-1.5">Boleta: para consumidores finales. El receptor es opcional (anónimo).</p>}
             {docType === 'NOTA_CREDITO' && <p className="text-xs text-purple-600 mt-1.5">Nota de Crédito: anula o reduce el monto de una factura o boleta emitida.</p>}
+            {docType === 'NOTA_DEBITO' && <p className="text-xs text-orange-600 mt-1.5">Nota de Débito: incrementa el monto de una factura o boleta por cargos adicionales.</p>}
+            {docType === 'GUIA_REMISION' && <p className="text-xs text-teal-600 mt-1.5">Guía de Remisión: documento de transporte requerido para el traslado de bienes.</p>}
           </div>
 
           <div className="bg-brand-50/60 rounded-2xl p-5 space-y-4 border border-brand-100">
@@ -806,6 +821,15 @@ export default function Invoices() {
   const [showExport, setShowExport] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
+  const toggleInvoiceDetail = (id: string) => setExpandedInvoiceId(prev => prev === id ? null : id);
+
+  // Fetch detail for expanded invoice
+  const { data: invoiceDetailData } = useQuery({
+    queryKey: ['invoice-detail', expandedInvoiceId],
+    queryFn: () => api.get(`/v1/invoices/${expandedInvoiceId}`).then(r => r.data),
+    enabled: !!expandedInvoiceId,
+  });
 
   const { data: invoicesData, isLoading: invoicesLoading } = useQuery<{ data: Invoice[] }>({
     queryKey: ['invoices'],
@@ -930,20 +954,99 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {invoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-brand-50/30 transition-colors">
-                      <td className="px-5 py-3 text-xs text-gray-600">{inv.salesOrder?.orderNumber || '—'}</td>
-                      <td className="px-5 py-3 font-mono text-xs text-gray-700">{inv.series}-{String(inv.correlative).padStart(8, '0')}</td>
-                      <td className="px-5 py-3 text-gray-600 text-xs">{DOC_LABEL[inv.docType] ?? inv.docType}</td>
-                      <td className="px-5 py-3"><p className="font-medium text-gray-800 truncate max-w-[160px]">{inv.entityName || <span className="italic text-gray-300">Anónimo</span>}</p><p className="text-xs text-gray-400 font-mono">{inv.entityDocNo}</p></td>
-                      <td className="px-5 py-3 text-xs text-gray-500">{new Date(inv.issueDate).toLocaleDateString('es-PE')}</td>
-                      <td className="px-5 py-3 text-xs text-gray-600">{inv.paymentDueDays ? `${inv.paymentDueDays}d` : inv.paymentDueDate ? new Date(inv.paymentDueDate).toLocaleDateString('es-PE') : 'Al contado'}</td>
-                      <td className="px-5 py-3 text-right font-mono text-xs text-gray-500">S/ {fmtNum(inv.igvPen)}</td>
-                      <td className="px-5 py-3 text-right font-mono font-semibold text-gray-800">S/ {fmtNum(inv.totalPen)}</td>
-                      <td className="px-5 py-3"><StatusBadge status={inv.status} reason={inv.rejectionReason ?? undefined} /></td>
-                      <td className="px-5 py-3"><div className="flex items-center justify-center gap-2">{inv.status === 'DRAFT' && (<><button onClick={() => setEditingInvoice(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all">Edit</button><button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">{emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}Emitir</button></>) } {inv.status === 'REJECTED' && (<button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">{emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}Reintentar</button>)} {inv.status === 'ACCEPTED' && inv.pdfUrl && (<a href={inv.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-medium hover:bg-green-100 transition-all"><FileDown size={12} /> PDF</a>)} {inv.status === 'ACCEPTED' && !inv.pdfUrl && (<span className="text-xs text-gray-300 italic">Procesando…</span>)}</div></td>
-                    </tr>
-                  ))}
+                  {invoices.map((inv) => {
+                    const isExpanded = expandedInvoiceId === inv.id;
+                    const detail = isExpanded ? invoiceDetailData?.data : null;
+                    return (
+                      <React.Fragment key={inv.id}>
+                        <tr className={`cursor-pointer transition-colors ${isExpanded ? 'bg-brand-50' : 'hover:bg-brand-50/30'}`} onClick={() => toggleInvoiceDetail(inv.id)}>
+                          <td className="px-5 py-3 text-xs text-gray-600">{inv.salesOrder?.orderNumber || '—'}</td>
+                          <td className="px-5 py-3 font-mono text-xs text-gray-700">{inv.series}-{String(inv.correlative).padStart(8, '0')}</td>
+                          <td className="px-5 py-3 text-gray-600 text-xs">{DOC_LABEL[inv.docType] ?? inv.docType}</td>
+                          <td className="px-5 py-3"><p className="font-medium text-gray-800 truncate max-w-[160px]">{inv.entityName || <span className="italic text-gray-300">Anónimo</span>}</p><p className="text-xs text-gray-400 font-mono">{inv.entityDocNo}</p></td>
+                          <td className="px-5 py-3 text-xs text-gray-500">{new Date(inv.issueDate).toLocaleDateString('es-PE')}</td>
+                          <td className="px-5 py-3 text-xs text-gray-600">{inv.paymentDueDays ? `${inv.paymentDueDays}d` : inv.paymentDueDate ? new Date(inv.paymentDueDate).toLocaleDateString('es-PE') : 'Al contado'}</td>
+                          <td className="px-5 py-3 text-right font-mono text-xs text-gray-500">S/ {fmtNum(inv.igvPen)}</td>
+                          <td className="px-5 py-3 text-right font-mono font-semibold text-gray-800">S/ {fmtNum(inv.totalPen)}</td>
+                          <td className="px-5 py-3"><StatusBadge status={inv.status} reason={inv.rejectionReason ?? undefined} /></td>
+                          <td className="px-5 py-3" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-center gap-2">
+                              <button onClick={() => toggleInvoiceDetail(inv.id)} className="flex items-center gap-1 px-2 py-1.5 bg-gray-50 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-100 transition-all" title="Ver detalle">
+                                <Eye size={12} />
+                                {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                              </button>
+                              {inv.status === 'DRAFT' && (
+                                <>
+                                  <button onClick={() => setEditingInvoice(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all">Edit</button>
+                                  <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
+                                    {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Emitir
+                                  </button>
+                                </>
+                              )}
+                              {inv.status === 'REJECTED' && (
+                                <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
+                                  {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Reintentar
+                                </button>
+                              )}
+                              {inv.status === 'ACCEPTED' && inv.pdfUrl && (
+                                <a href={inv.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-medium hover:bg-green-100 transition-all">
+                                  <FileDown size={12} /> PDF
+                                </a>
+                              )}
+                              {inv.status === 'ACCEPTED' && !inv.pdfUrl && (
+                                <span className="text-xs text-gray-300 italic">Procesando...</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="bg-brand-50/60">
+                            <td colSpan={10} className="px-6 py-4">
+                              {detail ? (
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                  <div>
+                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Receptor</p>
+                                    <p className="font-medium text-gray-800">{detail.entityName || 'Anónimo'}</p>
+                                    <p className="text-xs text-gray-500 font-mono">{detail.entityDocNo}</p>
+                                    {detail.entityEmail && <p className="text-xs text-gray-400">{detail.entityEmail}</p>}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Lineas</p>
+                                    {(detail.lines ?? []).map((line: any, idx: number) => (
+                                      <div key={idx} className="flex justify-between text-xs text-gray-700 mb-1">
+                                        <span>{line.description} x{Number(line.qty)}</span>
+                                        <span className="font-mono">S/ {Number(line.total ?? 0).toFixed(2)}</span>
+                                      </div>
+                                    ))}
+                                    <div className="border-t pt-1 mt-2 flex justify-between text-xs font-semibold">
+                                      <span>Subtotal</span><span className="font-mono">S/ {fmtNum(detail.subtotalPen)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs text-gray-500">
+                                      <span>IGV</span><span className="font-mono">S/ {fmtNum(detail.igvPen)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs font-bold text-gray-800">
+                                      <span>Total</span><span className="font-mono">S/ {fmtNum(detail.totalPen)}</span>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Info SUNAT</p>
+                                    <p className="text-xs text-gray-600">Serie: {detail.series}-{String(detail.correlative).padStart(8, '0')}</p>
+                                    {detail.hashCpe && <p className="text-xs text-gray-500 font-mono truncate">Hash: {detail.hashCpe}</p>}
+                                    {detail.cdrResponse && <p className="text-xs text-gray-500 truncate">CDR: {detail.cdrResponse}</p>}
+                                    {detail.rejectionReason && <p className="text-xs text-red-600">Rechazo: {detail.rejectionReason}</p>}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-center text-gray-400 text-sm py-2">
+                                  <Loader2 size={16} className="animate-spin inline mr-2" /> Cargando detalle...
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

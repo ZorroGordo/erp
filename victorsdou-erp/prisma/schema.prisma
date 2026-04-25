@@ -931,10 +931,14 @@ model Sucursal {
   deliveryHour       String?   // e.g. "09:00"
   deliveryNotes      String?
 
-  isActive        Boolean  @default(true)
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isActive           Boolean  @default(true)
+  isDefaultDelivery  Boolean  @default(false)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  salesOrders SalesOrder[]
 
   @@index([customerId])
   @@map("sucursales")
@@ -971,6 +975,8 @@ model SalesOrder {
   totalPen          Decimal      @db.Decimal(14, 4)
   currency          String       @default("PEN")
   deliveryAddressId String?
+  sucursalId        String?
+  sucursal          Sucursal?  @relation(fields: [sucursalId], references: [id])
   deliveryDate      DateTime?
   deliveryJobId     String?
   invoiceId         String?

@@ -64,7 +64,8 @@ export async function previewOrderPricing(
 
 export async function createOrder(input: {
   customerId: string; channel: string; deliveryDate?: string;
-  deliveryAddressId?: string; lines: { productId: string; qty: number; notes?: string; unitPriceOverride?: number; discountPct?: number }[];
+  deliveryAddressId?: string; sucursalId?: string;
+  lines: { productId: string; qty: number; notes?: string; unitPriceOverride?: number; discountPct?: number }[];
   notes?: string; createdBy: string; invoiceType?: string; masterDiscountPct?: number;
 }) {
   const pricing = await previewOrderPricing(input.customerId, input.lines);
@@ -82,12 +83,11 @@ export async function createOrder(input: {
     if (discPct > 0) unitPrice = unitPrice * (100 - discPct) / 100;
     unitPrice = unitPrice * factor; // apply master discount
     const lineTotal = parseFloat((unitPrice * l.qty).toFixed(4));
-    const igvAmount = parseFloat((lineTotal * 0.18).toFixed(4));
     return {
       productId: l.productId, qty: l.qty,
-      unitPrice, lineTotalPen: lineTotal + igvAmount,
+      unitPrice, lineTotalPen: lineTotal,
       pricingSource: lineInput?.unitPriceOverride ? 'MANUAL_OVERRIDE' : l.pricingSource,
-      discountPct: discPct > 0 || masterDisc > 0 ? discPct + masterDisc : undefined,
+      ...(discPct > 0 || masterDisc > 0 ? { discountPct: discPct + masterDisc } : {}),
     };
   });
 
@@ -97,18 +97,27 @@ export async function createOrder(input: {
 
   return prisma.salesOrder.create({
     data: {
-      orderNumber, customerId: input.customerId, channel: input.channel as never,
-      status: 'DRAFT' as never, subtotalPen, igvPen, totalPen,
+      orderNumber,
+      customerId: input.customerId,
+      channel: input.channel as never,
+      status: 'DRAFT' as never,
+      subtotalPen,
+      igvPen,
+      totalPen,
       invoiceType: input.invoiceType ?? null,
-      deliveryAddressId: input.deliveryAddressId,
-      deliveryDate: input.deliveryDate ? new Date(input.deliveryDate) : undefined,
-      notes: input.notes, createdBy: input.createdBy,
+      ...(input.deliveryAddressId ? { deliveryAddressId: input.deliveryAddressId } : {}),
+      ...(input.deliveryDate ? { deliveryDate: new Date(input.deliveryDate) } : {}),
+      ...(input.sucursalId ? { sucursalId: input.sucursalId } : {}),
+      notes: input.notes ?? null,
+      createdBy: input.createdBy,
       lines: {
         create: finalLines.map((l) => ({
-          productId: l.productId, qty: l.qty,
-          unitPrice: l.unitPrice, lineTotalPen: l.lineTotalPen,
-          pricingSource: l.pricingSource,
-          discountPct: l.discountPct,
+          productId: l.productId,
+          qty: l.qty,
+          unitPrice: l.unitPrice,
+          lineTotalPen: l.lineTotalPen,
+          pricingSource: l.pricingSource ?? null,
+          ...(l.discountPct != null ? { discountPct: l.discountPct } : {}),
         })),
       },
     },

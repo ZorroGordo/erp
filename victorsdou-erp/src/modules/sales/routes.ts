@@ -5,7 +5,7 @@ import * as SalesService from './service';
 import { notifySalesOrderConfirmed } from '../../services/notifications';
 import { sendEmail } from '../../lib/email';
 
-// Ã¢ÂÂÃ¢ÂÂ Customer-facing email templates for order status changes Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+// ── Customer-facing email templates for order status changes ─────────────────
 const wrap = (content: string) => `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#f9f5f0;font-family:Georgia,serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9f5f0;padding:32px 16px;">
@@ -18,7 +18,7 @@ const wrap = (content: string) => `<!DOCTYPE html><html lang="es"><head><meta ch
 <tr><td style="padding:32px 32px 8px;">${content}</td></tr>
 <tr><td style="background:#f9f5f0;padding:20px 32px;text-align:center;border-top:1px solid #ede9e1;">
   <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#888;">
-    Victorsdou ÃÂ· Lima, Peru &nbsp;|&nbsp;
+    Victorsdou · Lima, Peru &nbsp;|&nbsp;
     <a href="https://victorsdou.pe" style="color:#6b7c4b;text-decoration:none;">victorsdou.pe</a>
   </p>
 </td></tr></table></td></tr></table></body></html>`;
@@ -32,14 +32,14 @@ function buildAcceptedEmail(name: string, orderId: string, deliveryDate?: Date |
   return wrap(`
     <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Pedido aceptado y programado</h2>
     <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
-      Hola ${name}, tu pedido fue aceptado y estÃÂ¡ programado para su entrega.
+      Hola ${name}, tu pedido fue aceptado y está programado para su entrega.
     </p>
     <div style="background:#f0f4ea;border-left:4px solid #6b7c4b;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
-      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#6b7c4b;letter-spacing:1px;text-transform:uppercase;font-weight:600;">Ã°ÂÂÂ Fecha de entrega</p>
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#6b7c4b;letter-spacing:1px;text-transform:uppercase;font-weight:600;">📅 Fecha de entrega</p>
       <p style="margin:0;font-family:Arial,sans-serif;font-size:15px;color:#1a1a1a;font-weight:600;">${dateStr}</p>
     </div>
     <p style="font-family:Arial,sans-serif;font-size:14px;color:#666;margin-bottom:24px;">
-      Nuestro equipo ya estÃÂ¡ preparando tu pedido. Te avisaremos cuando estÃÂ© en camino.
+      Nuestro equipo ya está preparando tu pedido. Te avisaremos cuando esté en camino.
     </p>
     <div style="text-align:center;padding-bottom:8px;">
       <a href="${ctaUrl}" style="display:inline-block;background:#6b7c4b;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Ver mi pedido</a>
@@ -50,14 +50,14 @@ function buildDispatchEmail(name: string, orderId: string, addr?: any): string {
   const addrLine = addr ? `${addr.street ?? ''}, ${addr.district ?? ''}` : '';
   const ctaUrl = `https://victorsdou.pe/tienda/cuenta/pedidos/${orderId}`;
   return wrap(`
-    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Tu pedido estÃÂ¡ en camino Ã°ÂÂÂ</h2>
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">Tu pedido está en camino 🚚</h2>
     <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
-      Hola ${name}, ÃÂ¡tu pan ya saliÃÂ³ a entregarse!
+      Hola ${name}, ¡tu pan ya salió a entregarse!
     </p>
     <div style="background:#fef9ec;border-left:4px solid #c8b560;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
-      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#c8b560;letter-spacing:1px;text-transform:uppercase;font-weight:600;">Ã°ÂÂÂ¦ En ruta</p>
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#c8b560;letter-spacing:1px;text-transform:uppercase;font-weight:600;">📦 En ruta</p>
       <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">
-        ${addrLine ? `Entregando en <strong>${addrLine}</strong>. ` : ''}Por favor asegÃÂºrate de estar disponible.
+        ${addrLine ? `Entregando en <strong>${addrLine}</strong>. ` : ''}Por favor asegúrate de estar disponible.
       </p>
     </div>
     <div style="text-align:center;padding-bottom:8px;">
@@ -68,12 +68,12 @@ function buildDispatchEmail(name: string, orderId: string, addr?: any): string {
 
 function buildDeliveredEmail(name: string, orderId: string): string {
   return wrap(`
-    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">ÃÂ¡Pedido entregado! Ã°ÂÂÂ</h2>
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">¡Pedido entregado! 🎉</h2>
     <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
-      Hola ${name}, tu pedido fue entregado exitosamente. ÃÂ¡Esperamos que lo disfrutes!
+      Hola ${name}, tu pedido fue entregado exitosamente. ¡Esperamos que lo disfrutes!
     </p>
     <div style="background:#f9f5f0;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
-      <p style="margin:0 0 8px;font-size:32px;">Ã°ÂÂÂ</p>
+      <p style="margin:0 0 8px;font-size:32px;">🍞</p>
       <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#666;">Gracias por confiar en Victorsdou.<br>Hecho con amor, masa madre y paciencia.</p>
     </div>
     <div style="text-align:center;padding-bottom:8px;">
@@ -81,7 +81,7 @@ function buildDeliveredEmail(name: string, orderId: string): string {
     </div>`);
 }
 
-// Ã¢ÂÂÃ¢ÂÂ Email template for new ecommerce orders Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+// ── Email template for new ecommerce orders ───────────────────────────────────
 
 function buildEcommerceOrderEmail(order: any, body: any): string {
   const items = (body.items ?? []).map((i: any) =>
@@ -98,20 +98,20 @@ function buildEcommerceOrderEmail(order: any, body: any): string {
   return `
 <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#111827;">
   <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <h1 style="margin:0;color:#fff;font-size:20px;">Ã°ÂÂÂ Nuevo pedido ecommerce</h1>
+    <h1 style="margin:0;color:#fff;font-size:20px;">🛍 Nuevo pedido ecommerce</h1>
     <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">Pedido #${order.orderNumber}</p>
   </div>
   <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
 
     <h2 style="font-size:15px;color:#374151;margin:0 0 8px;">Cliente</h2>
     <p style="margin:0 0 4px;font-size:14px;color:#6b7280;">
-      ${body.customerName ?? 'Ã¢ÂÂ'}<br/>
-      ${body.customerEmail ?? ''} ${body.customerPhone ? 'ÃÂ· ' + body.customerPhone : ''}
+      ${body.customerName ?? '—'}<br/>
+      ${body.customerEmail ?? ''} ${body.customerPhone ? '· ' + body.customerPhone : ''}
     </p>
 
     <h2 style="font-size:15px;color:#374151;margin:16px 0 8px;">Entrega</h2>
     <p style="margin:0 0 4px;font-size:14px;color:#6b7280;">
-      ${body.deliveryDate ? new Date(body.deliveryDate).toLocaleDateString('es-PE', { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : 'Ã¢ÂÂ'}<br/>
+      ${body.deliveryDate ? new Date(body.deliveryDate).toLocaleDateString('es-PE', { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : '—'}<br/>
       ${addr.street ?? ''}, ${addr.district ?? ''}, ${addr.city ?? 'Lima'}
       ${addr.reference ? '<br/>Ref: ' + addr.reference : ''}
     </p>
@@ -135,54 +135,26 @@ function buildEcommerceOrderEmail(order: any, body: any): string {
       <p style="margin:4px 0;font-size:16px;">Total: <strong style="color:#4f46e5;">S/ ${Number(order.totalPen).toFixed(2)}</strong></p>
     </div>
 
-    ${body.notes ? `<p style="margin-top:16px;font-size:13px;color:#6b7280;background:#f9fafb;padding:12px;border-radius:6px;">Ã°ÂÂÂ ${body.notes}</p>` : ''}
+    ${body.notes ? `<p style="margin-top:16px;font-size:13px;color:#6b7280;background:#f9fafb;padding:12px;border-radius:6px;">📝 ${body.notes}</p>` : ''}
 
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb;">
       <a href="https://erp-rpjk.vercel.app/sales"
          style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;">
-        Ver en VictorOS ERP Ã¢ÂÂ
+        Ver en VictorOS ERP →
       </a>
     </div>
   </div>
   <p style="font-size:12px;color:#9ca3af;text-align:center;margin-top:12px;">
-    Victorsdou ÃÂ· VictorOS ERP ÃÂ· Este aviso se enviÃÂ³ automÃÂ¡ticamente
+    Victorsdou · VictorOS ERP · Este aviso se envió automáticamente
   </p>
 </div>`;
 }
 
-// Ã¢ÂÂÃ¢ÂÂ Routes Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
-
-
-function buildRejectedEmail(name: string, orderNumber: string, reason?: string): string {
-  return wrap(`
-    <h1 style="font-family:Georgia,serif;font-size:22px;color:#374151;margin:0 0 8px;">Pedido rechazado</h1>
-    <p style="margin:0 0 16px;font-size:14px;color:#6b7280;">
-      Hola ${name}, lamentamos informarte que tu pedido <strong>#${orderNumber}</strong> no pudo ser procesado.
-    </p>
-    ${reason ? '<p style="margin:0 0 16px;font-size:14px;color:#6b7280;"><strong>Motivo:</strong> ' + reason + '</p>' : ''}
-    <p style="margin:0 0 16px;font-size:14px;color:#6b7280;">
-      Si tienes alguna consulta, no dudes en contactarnos por WhatsApp.
-    </p>
-    <a href="https://wa.me/51987741544" style="display:inline-block;background:#8b6f47;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:14px;">Contactar por WhatsApp</a>
-  `);
-}
-
-function buildRefundedEmail(name: string, orderNumber: string, amount: string): string {
-  return wrap(`
-    <h1 style="font-family:Georgia,serif;font-size:22px;color:#374151;margin:0 0 8px;">Reembolso procesado</h1>
-    <p style="margin:0 0 16px;font-size:14px;color:#6b7280;">
-      Hola ${name}, tu reembolso de <strong>S/ ${amount}</strong> para el pedido <strong>#${orderNumber}</strong> ha sido procesado.
-    </p>
-    <p style="margin:0 0 16px;font-size:14px;color:#6b7280;">
-      El monto se reflejara en tu estado de cuenta en 5â10 dias habiles, dependiendo de tu banco.
-    </p>
-    <a href="https://wa.me/51987741544" style="display:inline-block;background:#8b6f47;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:14px;">Contactar por WhatsApp</a>
-  `);
-}
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 export async function salesRoutes(app: FastifyInstance) {
 
-  // Ã¢ÂÂÃ¢ÂÂ List orders (with optional channel / status filter) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── List orders (with optional channel / status filter) ───────────────────
   app.get('/', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const q = req.query as { status?: string; customerId?: string; channel?: string };
     const orders = await prisma.salesOrder.findMany({
@@ -191,13 +163,13 @@ export async function salesRoutes(app: FastifyInstance) {
         ...(q.customerId ? { customerId: q.customerId } : {}),
         ...(q.channel   ? { channel:    q.channel   as never } : {}),
       },
-      include: { customer: true, lines: { include: { product: true } }, payments: true },
+      include: { customer: { include: { sucursales: { where: { isActive: true }, orderBy: { name: 'asc' } } } }, lines: { include: { product: true } }, payments: true, sucursal: true },
       orderBy: { createdAt: 'desc' },
     });
     return reply.send({ data: orders });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Record payment on an order Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Record payment on an order ──────────────────────────────────────────────
   app.post('/:id/payments', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
@@ -226,7 +198,7 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: payment });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Update invoice type Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Update invoice type ──────────────────────────────────────────────────────
   app.patch('/:id/invoice-type', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { invoiceType } = req.body as { invoiceType: string };
@@ -234,22 +206,22 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.send({ data: order });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Price preview Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Price preview ─────────────────────────────────────────────────────────
   app.get('/:id/price-preview', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR')] }, async (req, reply) => {
     const { customerId, lines } = req.body as { customerId: string; lines: { productId: string; qty: number }[] };
     const preview = await SalesService.previewOrderPricing(customerId, lines);
     return reply.send({ data: preview });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Create order (internal / ERP staff) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Create order (internal / ERP staff) ──────────────────────────────────
   app.post('/', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR')] }, async (req, reply) => {
     const body = req.body as Parameters<typeof SalesService.createOrder>[0];
     const order = await SalesService.createOrder({ ...body, createdBy: req.actor!.sub });
     return reply.code(201).send({ data: order });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ PUBLIC: Create order from ecommerce Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
-  // No auth Ã¢ÂÂ called by victorsdou-next after successful Culqi payment
+  // ── PUBLIC: Create order from ecommerce ───────────────────────────────────
+  // No auth — called by victorsdou-next after successful Culqi payment
   app.post('/ecommerce', async (req, reply) => {
     const body = req.body as {
       ecommerceOrderId:  string;
@@ -319,14 +291,14 @@ export async function salesRoutes(app: FastifyInstance) {
     // Fire-and-forget: notify ops team
     sendEmail({
       to:      ['luis@victorsdou.com', 'hola@victorsdou.com'],
-      subject: `Ã°ÂÂÂ Nuevo pedido web #${order.orderNumber} Ã¢ÂÂ S/ ${total.toFixed(2)}`,
+      subject: `🛍 Nuevo pedido web #${order.orderNumber} — S/ ${total.toFixed(2)}`,
       html:    buildEcommerceOrderEmail(order, body),
     }).catch(console.error);
 
     return reply.code(201).send({ data: order });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ PUBLIC: get single ecommerce order by ID (no auth Ã¢ÂÂ ID is a secret UUID) Ã¢ÂÂ
+  // ── PUBLIC: get single ecommerce order by ID (no auth — ID is a secret UUID) ─
   app.get('/ecommerce/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const order = await prisma.salesOrder.findUnique({
@@ -339,7 +311,7 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.send({ data: order });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Confirm (legacy / B2B) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Confirm (legacy / B2B) ────────────────────────────────────────────────
   app.patch('/:id/confirm', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const order = await prisma.salesOrder.update({
@@ -359,7 +331,7 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.send({ data: order });
   });
 
-  // Ã¢ÂÂÃ¢ÂÂ Ecommerce status transitions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Ecommerce status transitions ──────────────────────────────────────────
   const statusPatch = (newStatus: string) => async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const order = await prisma.salesOrder.update({ where: { id }, data: { status: newStatus as never } });
@@ -417,140 +389,7 @@ export async function salesRoutes(app: FastifyInstance) {
       'Pedido entregado - Victorsdou'));
   app.patch('/:id/return', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, statusPatch('RETURNED'));
 
-
-// ââ Reject (Rechazar) âââââââââââââââââââââââââââââââââââââââââââââââââââââ
-  app.patch('/:id/reject', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { reason } = req.body as { reason?: string };
-
-    const order = await prisma.salesOrder.update({
-      where: { id },
-      data: { status: 'CANCELLED' as never, notes: reason ?? 'Pedido rechazado' },
-    });
-
-    // Notify customer
-    const email = (order as any).ecommerceCustomerEmail;
-    const name = (order as any).ecommerceCustomerName ?? email ?? 'Cliente';
-    if (email) {
-      sendEmail({
-        to: email,
-        subject: 'Pedido rechazado - Victorsdou',
-        html: buildRejectedEmail(name, (order as any).orderNumber ?? id, reason),
-      }).catch(console.error);
-    }
-
-    return reply.send({ data: order });
-  });
-
-  // ââ Refund (Reembolsar) ââââââââââââââââââââââââââââââââââââââââââââââââââââ
-  app.patch('/:id/refund', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { reason } = req.body as { reason?: string };
-
-    const CULQI_API = 'https://api.culqi.com/v2';
-    const culqiSecretKey = process.env.CULQI_SECRET_KEY;
-    if (!culqiSecretKey) {
-      return reply.code(500).send({ error: 'PAYMENT_NOT_CONFIGURED', message: 'Culqi no configurado' });
-    }
-
-    // Get order with payments
-    const order = await prisma.salesOrder.findUnique({
-      where: { id },
-      include: { payments: true },
-    });
-    if (!order) {
-      return reply.code(404).send({ error: 'NOT_FOUND', message: 'Pedido no encontrado' });
-    }
-
-    // Find the Culqi charge ID from payment records
-    const culqiPayment = (order.payments ?? []).find(
-      (p: any) => p.method === 'CULQI_CARD' && p.referenceNo,
-    );
-    if (!culqiPayment) {
-      return reply.code(400).send({
-        error: 'NO_CULQI_PAYMENT',
-        message: 'No se encontro un pago con Culqi para este pedido',
-      });
-    }
-
-    const amountCents = Math.round(Number(culqiPayment.amountPen) * 100);
-
-    // Mark as refund pending
-    await prisma.salesOrder.update({
-      where: { id },
-      data: { status: 'REFUND_PENDING' as never },
-    });
-
-    // Call Culqi refund API
-    try {
-      const refundRes = await fetch(CULQI_API + '/refunds', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + culqiSecretKey,
-        },
-        body: JSON.stringify({
-          charge_id: culqiPayment.referenceNo,
-          amount: amountCents,
-          reason: reason ?? 'solicitud del comercio',
-        }),
-      });
-
-      const refundData = await refundRes.json();
-
-      if (!refundRes.ok) {
-        // Revert status
-        await prisma.salesOrder.update({
-          where: { id },
-          data: { status: (order as any).status },
-        });
-        return reply.code(400).send({
-          error: 'REFUND_FAILED',
-          message: (refundData as any).user_message ?? (refundData as any).merchant_message ?? 'Error al procesar el reembolso',
-        });
-      }
-
-      // Update order status and payment status
-      const updated = await prisma.salesOrder.update({
-        where: { id },
-        data: {
-          status: 'REFUNDED' as never,
-          paymentStatus: 'REFUNDED' as never,
-          notes: (order.notes ? order.notes + '\n' : '') + 'Reembolso: ' + ((refundData as any).id ?? ''),
-        },
-      });
-
-      // Notify customer
-      const email = (order as any).ecommerceCustomerEmail;
-      const name = (order as any).ecommerceCustomerName ?? email ?? 'Cliente';
-      if (email) {
-        sendEmail({
-          to: email,
-          subject: 'Reembolso procesado - Victorsdou',
-          html: buildRefundedEmail(name, (order as any).orderNumber ?? id, Number(order.totalPen).toFixed(2)),
-        }).catch(console.error);
-      }
-
-      // Notify ops team
-      sendEmail({
-        to: ['luis@victorsdou.com', 'hola@victorsdou.com'],
-        subject: 'Reembolso procesado #' + ((order as any).orderNumber ?? id) + ' - S/ ' + Number(order.totalPen).toFixed(2),
-        html: '<p>Se proceso el reembolso del pedido <strong>#' + ((order as any).orderNumber ?? id) + '</strong> por <strong>S/ ' + Number(order.totalPen).toFixed(2) + '</strong>.</p><p>Culqi refund ID: ' + ((refundData as any).id ?? 'N/A') + '</p>',
-      }).catch(console.error);
-
-      return reply.send({ data: updated });
-    } catch (err: any) {
-      // Revert status on network error
-      await prisma.salesOrder.update({
-        where: { id },
-        data: { status: (order as any).status },
-      });
-      app.log.error({ err }, 'Culqi refund failed');
-      return reply.code(500).send({ error: 'REFUND_ERROR', message: 'Error al conectar con Culqi' });
-    }
-  });
-
-  // Ã¢ÂÂÃ¢ÂÂ Cancel Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+  // ── Cancel ────────────────────────────────────────────────────────────────
   app.patch('/:id/cancel', { preHandler: [requireAnyOf('SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { reason } = req.body as { reason?: string };

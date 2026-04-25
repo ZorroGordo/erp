@@ -91,9 +91,9 @@ export async function invoicingRoutes(app: FastifyInstance) {
     });
   });
 
-  app.get('/:id', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR')] }, async (req, reply) => {
+  app.get('/:id', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SALES_AGENT', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { lines: true } });
+    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { lines: true, salesOrder: { select: { orderNumber: true } } } });
     if (!invoice) return reply.code(404).send({ error: 'NOT_FOUND' });
     return reply.send({ data: invoice });
   });
@@ -101,7 +101,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
   // ── Create draft invoice ──────────────────────────────────────────────────
   app.post('/', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const body = req.body as {
-      docType:      'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO';
+      docType:      'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
       entityId?:    string;   // optional: linked customer id
       entityDocNo:  string;   // RUC, DNI, CE, Pasaporte
       entityName:   string;
