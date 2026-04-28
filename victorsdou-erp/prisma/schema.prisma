@@ -132,6 +132,7 @@ enum TaxClass {
 }
 
 enum OrderStatus {
+  DRAFT
   CART
   PENDING_PAYMENT
   PAID
