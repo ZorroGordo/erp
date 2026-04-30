@@ -323,6 +323,13 @@ function PaymentModal({
   const [proofPreview, setProofPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Credit-specific state
+  const customerTermsDays = Number(order.customer?.paymentTermsDays ?? 0);
+  const customerCreditLimit = Number(order.customer?.creditLimitPen ?? 0);
+  const [overrideTerms, setOverrideTerms] = useState(false);
+  const [customTermsDays, setCustomTermsDays] = useState(String(customerTermsDays));
+  const isCredit = method === 'CREDIT';
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -334,17 +341,21 @@ function PaymentModal({
   };
 
   const handleConfirm = async () => {
-    if (!amount || Number(amount) <= 0) return toast.error('Monto invalido');
+    if (!isCredit && (!amount || Number(amount) <= 0)) return toast.error('Monto invalido');
+    if (isCredit && customerTermsDays === 0 && !overrideTerms) return toast.error('El cliente no tiene condiciones de crédito definidas');
     setSaving(true);
     try {
-      // Record payment
-      await api.post(`/v1/sales-orders/${order.id}/payments`, {
+      const payload: any = {
         method,
-        amountPen: Number(amount),
+        amountPen: isCredit ? Number(order.totalPen) : Number(amount),
         referenceNo: referenceNo || undefined,
         notes: proofFile ? `[Comprobante adjunto: ${proofFile.name}] ${notes}` : notes || undefined,
-      });
-      toast.success('Pago registrado');
+      };
+      if (isCredit) {
+        payload.creditPaymentTermsDays = overrideTerms ? parseInt(customTermsDays, 10) || 0 : customerTermsDays;
+      }
+      await api.post(`/v1/sales-orders/${order.id}/payments`, payload);
+      toast.success(isCredit ? 'Crédito registrado' : 'Pago registrado');
       onConfirmed();
     } catch (e: any) {
       toast.error(e.response?.data?.message ?? 'Error al registrar pago');
@@ -372,13 +383,13 @@ function PaymentModal({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Metodo de pago</label>
             <div className="grid grid-cols-3 gap-1.5">
-              {PAYMENT_METHODS.filter(m => m.value !== 'CREDIT').map(m => (
+              {PAYMENT_METHODS.map(m => (
                 <button
                   key={m.value}
                   onClick={() => setMethod(m.value)}
                   className={`px-2 py-1.5 rounded text-xs font-medium border transition-all ${
                     method === m.value
-                      ? 'bg-brand-600 text-white border-brand-600'
+                      ? m.value === 'CREDIT' ? 'bg-amber-600 text-white border-amber-600' : 'bg-brand-600 text-white border-brand-600'
                       : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
                   }`}
                 >
@@ -388,41 +399,89 @@ function PaymentModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Monto (S/)</label>
-              <input className="input" type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">N referencia</label>
-              <input className="input" value={referenceNo} onChange={e => setReferenceNo(e.target.value)} placeholder="Ej: N operacion" />
-            </div>
-          </div>
-
-          {/* Screenshot upload — especially for Yape/Plin */}
-          {['YAPE', 'PLIN', 'BANK_TRANSFER'].includes(method) && (
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Comprobante (captura)</label>
-              <div className="border-2 border-dashed border-gray-200 rounded-lg p-3 text-center">
-                {proofPreview ? (
-                  <div className="relative">
-                    <img src={proofPreview} alt="Comprobante" className="max-h-40 mx-auto rounded" />
-                    <button
-                      onClick={() => { setProofFile(null); setProofPreview(null); }}
-                      className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="cursor-pointer flex flex-col items-center gap-1 text-gray-400 hover:text-gray-600">
-                    <Upload size={20} />
-                    <span className="text-xs">Subir captura de pantalla</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-                  </label>
-                )}
+          {/* ── Credit terms section ── */}
+          {isCredit && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+              <div className="text-xs font-semibold text-amber-800">Condiciones de crédito del cliente</div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-xs text-gray-500">Días de crédito</span>
+                  <div className="font-medium text-gray-800">{customerTermsDays > 0 ? `${customerTermsDays} días` : 'No definido'}</div>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500">Límite de crédito</span>
+                  <div className="font-medium text-gray-800">{customerCreditLimit > 0 ? `S/ ${fmtNum(customerCreditLimit)}` : 'Sin límite'}</div>
+                </div>
               </div>
+              {customerTermsDays > 0 && (
+                <div className="text-xs text-gray-500">
+                  Vencimiento: {new Date(Date.now() + (overrideTerms ? (parseInt(customTermsDays, 10) || 0) : customerTermsDays) * 86400000).toLocaleDateString('es-PE')}
+                </div>
+              )}
+              <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={overrideTerms}
+                  onChange={e => { setOverrideTerms(e.target.checked); if (!e.target.checked) setCustomTermsDays(String(customerTermsDays)); }}
+                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-xs text-gray-700">Modificar condiciones para este pedido</span>
+              </label>
+              {overrideTerms && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Días de crédito para este pedido</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min="1"
+                    value={customTermsDays}
+                    onChange={e => setCustomTermsDays(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
+          )}
+
+          {/* ── Standard payment fields (hidden for credit) ── */}
+          {!isCredit && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Monto (S/)</label>
+                  <input className="input" type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">N referencia</label>
+                  <input className="input" value={referenceNo} onChange={e => setReferenceNo(e.target.value)} placeholder="Ej: N operacion" />
+                </div>
+              </div>
+
+              {/* Screenshot upload — especially for Yape/Plin */}
+              {['YAPE', 'PLIN', 'BANK_TRANSFER'].includes(method) && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Comprobante (captura)</label>
+                  <div className="border-2 border-dashed border-gray-200 rounded-lg p-3 text-center">
+                    {proofPreview ? (
+                      <div className="relative">
+                        <img src={proofPreview} alt="Comprobante" className="max-h-40 mx-auto rounded" />
+                        <button
+                          onClick={() => { setProofFile(null); setProofPreview(null); }}
+                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer flex flex-col items-center gap-1 text-gray-400 hover:text-gray-600">
+                        <Upload size={20} />
+                        <span className="text-xs">Subir captura de pantalla</span>
+                        <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           <div>
@@ -432,9 +491,9 @@ function PaymentModal({
         </div>
 
         <div className="flex gap-2 pt-2">
-          <button className="btn-primary flex-1" onClick={handleConfirm} disabled={saving}>
+          <button className={`flex-1 ${isCredit ? 'btn-primary bg-amber-600 hover:bg-amber-700 border-amber-600' : 'btn-primary'}`} onClick={handleConfirm} disabled={saving}>
             <DollarSign size={14} className="inline mr-1" />
-            {saving ? 'Registrando...' : 'Registrar pago y aceptar'}
+            {saving ? 'Registrando...' : isCredit ? 'Registrar crédito y aceptar' : 'Registrar pago y aceptar'}
           </button>
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
         </div>
