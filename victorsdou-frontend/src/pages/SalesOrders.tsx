@@ -5,7 +5,7 @@ import {
   Plus, ShoppingCart, Check, X, Globe, Package, Truck, RotateCcw,
   MapPin, Phone, Mail, StickyNote, ChevronDown, ChevronUp, Search,
   Upload, FileSpreadsheet, Download, DollarSign, CreditCard, Receipt,
-  UserPlus, Percent, Settings2, Eye, EyeOff, Filter,
+  UserPlus, Percent, Settings2, Eye, EyeOff, Filter, FileText, Send, Trash2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
@@ -1115,6 +1115,18 @@ export default function SalesOrders() {
     { productId: '', qty: 1, unitPrice: '', discountPct: 0 },
   ]);
 
+  // Quotation form
+  const [showQuoteForm,    setShowQuoteForm]    = useState(false);
+  const [qCustomerName,    setQCustomerName]    = useState('');
+  const [qCustomerEmail,   setQCustomerEmail]   = useState('');
+  const [qCustomerPhone,   setQCustomerPhone]   = useState('');
+  const [qCustomerDocNo,   setQCustomerDocNo]   = useState('');
+  const [qNotes,           setQNotes]           = useState('');
+  const [qValidDays,       setQValidDays]       = useState(15);
+  const [qLines, setQLines] = useState<{ productId: string; productName: string; qty: number; unitPrice: string }[]>([
+    { productId: '', productName: '', qty: 1, unitPrice: '' },
+  ]);
+
   // Modals
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [paymentModalOrder, setPaymentModalOrder] = useState<any>(null);
@@ -1154,6 +1166,11 @@ export default function SalesOrders() {
   const { data: products } = useQuery({
     queryKey: ['products'],
     queryFn:  () => api.get('/v1/products/').then(r => r.data),
+  });
+
+  const { data: quotations } = useQuery({
+    queryKey: ['quotations'],
+    queryFn: () => api.get('/v1/quotations/').then(r => r.data),
   });
 
   const customerList = customers?.data ?? [];
@@ -1312,13 +1329,91 @@ export default function SalesOrders() {
     });
   };
 
+  // ── Quotation mutations ──────────────────────────────────────────────────
+  const createQuotation = useMutation({
+    mutationFn: (body: any) => api.post('/v1/quotations/', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['quotations'] });
+      toast.success('Cotizacion creada');
+      setShowQuoteForm(false);
+      setQCustomerName(''); setQCustomerEmail(''); setQCustomerPhone(''); setQCustomerDocNo(''); setQNotes('');
+      setQLines([{ productId: '', productName: '', qty: 1, unitPrice: '' }]);
+      setQValidDays(15);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error al crear cotizacion'),
+  });
+
+  const deleteQuotation = useMutation({
+    mutationFn: (id: string) => api.delete(`/v1/quotations/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['quotations'] }); toast.success('Cotizacion eliminada'); },
+  });
+
+  const updateQuoteStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => api.patch(`/v1/quotations/${id}/status`, { status }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['quotations'] }); toast.success('Estado actualizado'); },
+  });
+
+  // Quotation product change — supports both DB products and manual entry
+  const handleQProductChange = (index: number, productId: string) => {
+    const product = productList.find((p: any) => p.id === productId);
+    setQLines(ls => ls.map((x, j) =>
+      j === index
+        ? { ...x, productId, productName: product?.name ?? '', unitPrice: product ? String(Number(product.basePricePen)) : x.unitPrice }
+        : x
+    ));
+  };
+
+  // Quotation totals preview
+  const quotePreview = useMemo(() => {
+    const validLines = qLines.filter(l => (l.productId || l.productName) && Number(l.unitPrice) > 0);
+    const lineDetails = validLines.map(l => {
+      const lineTotal = Number(l.unitPrice) * l.qty;
+      return { ...l, lineTotal };
+    });
+    const subtotal = lineDetails.reduce((s, l) => s + l.lineTotal, 0);
+    const igv = subtotal * 0.18;
+    return { lineDetails, subtotal, igv, total: subtotal + igv };
+  }, [qLines]);
+
+  const handleCreateQuotation = () => {
+    const validLines = qLines.filter(l => (l.productId || l.productName.trim()) && Number(l.unitPrice) > 0);
+    if (!qCustomerName.trim()) return toast.error('Ingresa el nombre del cliente');
+    if (validLines.length === 0) return toast.error('Agrega al menos un producto');
+
+    const validUntil = new Date();
+    validUntil.setDate(validUntil.getDate() + qValidDays);
+
+    createQuotation.mutate({
+      customerName: qCustomerName,
+      customerEmail: qCustomerEmail || undefined,
+      customerPhone: qCustomerPhone || undefined,
+      customerDocNo: qCustomerDocNo || undefined,
+      validUntil: validUntil.toISOString(),
+      notes: qNotes || undefined,
+      lines: validLines.map(l => ({
+        productId: l.productId || undefined,
+        productName: l.productName || 'Producto',
+        qty: l.qty,
+        unitPrice: Number(l.unitPrice),
+      })),
+    });
+  };
+
+  const QUOTE_STATUS_LABEL: Record<string, string> = {
+    DRAFT: 'Borrador', SENT: 'Enviada', ACCEPTED: 'Aceptada', REJECTED: 'Rechazada', EXPIRED: 'Vencida',
+  };
+  const QUOTE_STATUS_COLOR: Record<string, string> = {
+    DRAFT: 'bg-gray-100 text-gray-600', SENT: 'bg-blue-100 text-blue-700', ACCEPTED: 'bg-green-100 text-green-700',
+    REJECTED: 'bg-red-100 text-red-700', EXPIRED: 'bg-yellow-100 text-yellow-700',
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Ventas</h1>
-          <p className="text-gray-500 text-sm">Pedidos B2B, B2C y ecommerce</p>
+          <p className="text-gray-500 text-sm">Pedidos, cotizaciones y ecommerce</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -1350,7 +1445,10 @@ export default function SalesOrders() {
               />
             )}
           </div>
-          <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
+          <button className="btn-secondary flex items-center gap-2 text-sm border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => { setShowQuoteForm(v => !v); setShowForm(false); }}>
+            <FileText size={14} /> Nueva cotizacion
+          </button>
+          <button className="btn-primary flex items-center gap-2" onClick={() => { setShowForm(v => !v); setShowQuoteForm(false); }}>
             <Plus size={16} /> Nuevo pedido
           </button>
         </div>
@@ -1614,6 +1712,157 @@ export default function SalesOrders() {
               {createOrder.isPending ? 'Creando...' : 'Crear pedido'}
             </button>
             <button className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Quotation form ────────────────────────────────────────────────── */}
+      {showQuoteForm && (
+        <div className="card p-5 space-y-4 border-l-4 border-amber-400">
+          <h3 className="font-semibold flex items-center gap-2"><FileText size={16} className="text-amber-600" /> Nueva cotizacion</h3>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Nombre del cliente</label>
+              <input className="input" value={qCustomerName} onChange={e => setQCustomerName(e.target.value)} placeholder="Nombre o razon social..." />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">RUC / DNI</label>
+              <input className="input" value={qCustomerDocNo} onChange={e => setQCustomerDocNo(e.target.value)} placeholder="Documento..." />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Validez (dias)</label>
+              <input type="number" className="input" min={1} value={qValidDays} onChange={e => setQValidDays(Number(e.target.value) || 15)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
+              <input className="input" type="email" value={qCustomerEmail} onChange={e => setQCustomerEmail(e.target.value)} placeholder="email@ejemplo.com" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Telefono</label>
+              <input className="input" value={qCustomerPhone} onChange={e => setQCustomerPhone(e.target.value)} placeholder="+51 ..." />
+            </div>
+          </div>
+
+          {/* Quote lines — product from DB or manual entry */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-2">Productos</label>
+            <div className="grid grid-cols-12 gap-2 mb-1 text-xs font-medium text-gray-500 px-1">
+              <div className="col-span-3">Producto (DB)</div>
+              <div className="col-span-3">Nombre manual</div>
+              <div className="col-span-2 text-right">Precio unit.</div>
+              <div className="col-span-1 text-center">Cant.</div>
+              <div className="col-span-2 text-right">Total</div>
+              <div className="col-span-1"></div>
+            </div>
+            {qLines.map((l, i) => {
+              const lineTotal = Number(l.unitPrice) * l.qty;
+              return (
+                <div key={i} className="grid grid-cols-12 gap-2 mb-2 items-center">
+                  <div className="col-span-3">
+                    <select className="input text-sm" value={l.productId} onChange={e => handleQProductChange(i, e.target.value)}>
+                      <option value="">Seleccionar...</option>
+                      {productList.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="col-span-3">
+                    <input className="input text-sm" value={l.productName} onChange={e => setQLines(ls => ls.map((x, j) => j === i ? { ...x, productName: e.target.value, productId: '' } : x))} placeholder="O escribir nombre..." />
+                  </div>
+                  <div className="col-span-2">
+                    <input type="number" className="input text-sm text-right" step="0.01" value={l.unitPrice} onChange={e => setQLines(ls => ls.map((x, j) => j === i ? { ...x, unitPrice: e.target.value } : x))} placeholder="0.00" />
+                  </div>
+                  <div className="col-span-1">
+                    <input type="number" className="input text-sm text-center" min={1} value={l.qty} onChange={e => setQLines(ls => ls.map((x, j) => j === i ? { ...x, qty: parseInt(e.target.value) || 1 } : x))} />
+                  </div>
+                  <div className="col-span-2 text-right text-sm font-mono font-semibold pr-1">
+                    {Number(l.unitPrice) > 0 ? `S/ ${lineTotal.toFixed(2)}` : ''}
+                  </div>
+                  <div className="col-span-1 text-center">
+                    {qLines.length > 1 && <button onClick={() => setQLines(ls => ls.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600"><X size={16} /></button>}
+                  </div>
+                </div>
+              );
+            })}
+            <button className="text-sm text-amber-600 hover:underline" onClick={() => setQLines(ls => [...ls, { productId: '', productName: '', qty: 1, unitPrice: '' }])}>
+              + Agregar linea
+            </button>
+          </div>
+
+          {/* Quote totals */}
+          {quotePreview.lineDetails.length > 0 && (
+            <div className="bg-amber-50 rounded-lg p-3 text-sm space-y-1 max-w-xs ml-auto">
+              <div className="flex justify-between text-gray-600"><span>Subtotal</span><span className="font-mono">S/ {quotePreview.subtotal.toFixed(2)}</span></div>
+              <div className="flex justify-between text-gray-600"><span>IGV (18%)</span><span className="font-mono">S/ {quotePreview.igv.toFixed(2)}</span></div>
+              <div className="flex justify-between font-semibold text-gray-800 border-t border-amber-200 pt-1"><span>Total</span><span className="font-mono">S/ {quotePreview.total.toFixed(2)}</span></div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
+            <input className="input" value={qNotes} onChange={e => setQNotes(e.target.value)} placeholder="Condiciones, observaciones..." />
+          </div>
+          <div className="flex gap-2">
+            <button className="btn-primary bg-amber-600 hover:bg-amber-700" disabled={createQuotation.isPending} onClick={handleCreateQuotation}>
+              {createQuotation.isPending ? 'Creando...' : 'Crear cotizacion'}
+            </button>
+            <button className="btn-secondary" onClick={() => setShowQuoteForm(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Quotations table ──────────────────────────────────────────────── */}
+      {(quotations?.data?.length ?? 0) > 0 && (
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+            <FileText size={18} className="text-amber-500" />
+            <h2 className="font-semibold">Cotizaciones</h2>
+            <span className="ml-auto text-sm text-gray-400">{quotations?.data?.length ?? 0}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-amber-50 text-amber-700 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-4 py-3 text-left">N.o</th>
+                  <th className="px-4 py-3 text-left">Cliente</th>
+                  <th className="px-4 py-3 text-left">Fecha</th>
+                  <th className="px-4 py-3 text-right">Total</th>
+                  <th className="px-4 py-3 text-center">Estado</th>
+                  <th className="px-4 py-3 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(quotations?.data ?? []).map((q: any) => (
+                  <tr key={q.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-mono text-xs">{q.quoteNumber}</td>
+                    <td className="px-4 py-3">{q.customerName}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{new Date(q.createdAt).toLocaleDateString('es-PE')}</td>
+                    <td className="px-4 py-3 text-right font-mono">S/ {fmtNum(q.totalPen)}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${QUOTE_STATUS_COLOR[q.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {QUOTE_STATUS_LABEL[q.status] ?? q.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        {q.status === 'DRAFT' && (
+                          <button onClick={() => updateQuoteStatus.mutate({ id: q.id, status: 'SENT' })} className="p-1 rounded hover:bg-blue-50 text-blue-600" title="Marcar como enviada"><Send size={14} /></button>
+                        )}
+                        {q.status === 'SENT' && (
+                          <>
+                            <button onClick={() => updateQuoteStatus.mutate({ id: q.id, status: 'ACCEPTED' })} className="p-1 rounded hover:bg-green-50 text-green-600" title="Aceptada"><Check size={14} /></button>
+                            <button onClick={() => updateQuoteStatus.mutate({ id: q.id, status: 'REJECTED' })} className="p-1 rounded hover:bg-red-50 text-red-600" title="Rechazada"><X size={14} /></button>
+                          </>
+                        )}
+                        <button onClick={() => { if (confirm('Eliminar esta cotizacion?')) deleteQuotation.mutate(q.id); }} className="p-1 rounded hover:bg-red-50 text-red-400" title="Eliminar"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

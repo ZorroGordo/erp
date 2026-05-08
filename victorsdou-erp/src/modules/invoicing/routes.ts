@@ -451,4 +451,99 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: factproRes, accepted });
   });
 
+  // ── Create Guía de Remisión from a sales order ──────────────────────────
+  app.post('/guia-remision', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const body = req.body as {
+      salesOrderId: string;
+      movementType: string;  // VENTA|COMPRA|TRASLADO|DEVOLUCION|OTROS
+      senderName: string;
+      senderAddress: string;
+      recipientName: string;
+      recipientAddress: string;
+      transportistName?: string;
+      transportistRuc?: string;
+      transportistPlate?: string;
+      transportistLicense?: string;
+      goodsDescription?: string;
+      issueDate?: string;
+    };
+
+    if (!body.salesOrderId) return reply.code(400).send({ error: 'salesOrderId required' });
+    if (!body.movementType) return reply.code(400).send({ error: 'movementType required' });
+
+    const order = await prisma.salesOrder.findUniqueOrThrow({
+      where: { id: body.salesOrderId },
+      include: { customer: true, lines: { include: { product: true } } },
+    });
+
+    // Auto-generate series/correlative for GUIA_REMISION
+    const series = process.env.GUIA_REMISION_SERIE ?? 'T001';
+    const lastGuia = await prisma.invoice.findFirst({
+      where: { docType: 'GUIA_REMISION', series },
+      orderBy: { correlative: 'desc' },
+    });
+    const nextCorr = lastGuia ? parseInt(lastGuia.correlative, 10) + 1 : 1;
+    const correlative = String(nextCorr).padStart(8, '0');
+
+    // Build goods description from order lines if not provided
+    const autoGoods = order.lines.map(l =>
+      `${Number(l.qty)} x ${l.product?.name ?? 'Producto'}`
+    ).join('; ');
+
+    // Build line items from the order
+    const lineItems = order.lines.map(l => ({
+      productId: l.productId,
+      description: l.product?.name ?? 'Producto',
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+      igvRate: 0,
+      subtotal: l.lineTotalPen,
+      igv: 0,
+      total: l.lineTotalPen,
+    }));
+
+    const issueDate = body.issueDate ? new Date(body.issueDate) : new Date();
+
+    const guia = await prisma.invoice.create({
+      data: {
+        docType: 'GUIA_REMISION',
+        series,
+        correlative,
+        issueDate,
+        entityType: 'CUSTOMER',
+        entityId: order.customerId,
+        entityDocNo: (order.customer as any)?.docNumber ?? '',
+        entityName: (order.customer as any)?.displayName ?? body.recipientName,
+        entityEmail: (order.customer as any)?.email ?? null,
+        subtotalPen: order.subtotalPen,
+        igvPen: 0,
+        totalPen: order.totalPen,
+        status: 'ACCEPTED',
+        paymentStatus: 'UNPAID',
+        salesOrderId: order.id,
+        guiaMovementType: body.movementType as any,
+        guiaSenderName: body.senderName,
+        guiaSenderAddress: body.senderAddress,
+        guiaRecipientName: body.recipientName,
+        guiaRecipientAddress: body.recipientAddress,
+        guiaTransportistName: body.transportistName ?? null,
+        guiaTransportistRuc: body.transportistRuc ?? null,
+        guiaTransportistPlate: body.transportistPlate ?? null,
+        guiaTransportistLicense: body.transportistLicense ?? null,
+        guiaGoodsDescription: body.goodsDescription ?? autoGoods,
+        createdBy: req.actor!.sub,
+        lines: { create: lineItems },
+      },
+      include: { lines: true },
+    });
+
+    // Update order status to READY
+    await prisma.salesOrder.update({
+      where: { id: order.id },
+      data: { status: 'READY' as any },
+    });
+
+    return reply.code(201).send({ data: guia });
+  });
+
 }

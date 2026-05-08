@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import {
   Receipt, Send, CheckCircle2, XCircle, Clock, FileDown, AlertCircle,
   Loader2, Plus, Trash2, Search, X, UserPlus, Building2, User, Download,
-  Filter, Eye, ChevronDown, ChevronUp,
+  Filter, Eye, ChevronDown, ChevronUp, Truck, FileText,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import React, { useState, useRef, useEffect } from 'react';
@@ -202,6 +202,8 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
   const [productSearch, setProductSearch] = useState('');
   const [productDropdownOpen, setProductDropdownOpen] = useState(false);
   const [paymentDueDays, setPaymentDueDays] = useState(0);
+  const [selectedSalesOrderId, setSelectedSalesOrderId] = useState('');
+  const [selectedInvoiceRef, setSelectedInvoiceRef] = useState('');
   const productRef = useRef<HTMLDivElement>(null);
 
   const { data: productsData } = useQuery<{ data: any[] }>({
@@ -209,6 +211,41 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
     queryFn: () => api.get('/v1/products').then(r => r.data),
     staleTime: 60_000,
   });
+
+  // Prerequisite: pending orders for the selected customer (Factura)
+  const { data: customerOrdersData } = useQuery<{ data: any[] }>({
+    queryKey: ['pending-orders-for-invoice'],
+    queryFn: () => api.get('/v1/invoices/pending-orders').then(r => r.data),
+    enabled: entityConfirmed && (docType === 'FACTURA' || docType === 'BOLETA' || docType === 'GUIA_REMISION'),
+  });
+  const customerPendingOrders = (customerOrdersData?.data ?? []).filter((o: any) =>
+    !entityId || o.customer?.id === entityId || (o as any).customerId === entityId
+  );
+
+  // Prerequisite: issued invoices for the selected customer (Nota de Crédito)
+  const { data: customerInvoicesData } = useQuery<{ data: any[] }>({
+    queryKey: ['invoices-for-credit-note'],
+    queryFn: () => api.get('/v1/invoices/?status=ACCEPTED').then(r => r.data),
+    enabled: entityConfirmed && (docType === 'NOTA_CREDITO' || docType === 'GUIA_REMISION'),
+  });
+  const customerIssuedInvoices = (customerInvoicesData?.data ?? []).filter((inv: any) =>
+    !entityId || inv.customer?.id === entityId || (inv as any).entityId === entityId
+  );
+
+  // Auto-fill lines from selected sales order
+  useEffect(() => {
+    if (!selectedSalesOrderId) return;
+    const order = customerPendingOrders.find((o: any) => o.id === selectedSalesOrderId);
+    if (!order) return;
+    const newLines = (order.lines ?? []).map((l: any) => ({
+      description: l.product?.name ?? 'Producto',
+      qty: Number(l.qty),
+      unitPrice: Number(l.unitPrice),
+      igvRate: 0.18,
+      discountPct: Number(l.discountPct ?? 0),
+    }));
+    if (newLines.length > 0) setLines(newLines);
+  }, [selectedSalesOrderId]);
 
   const filteredProducts = (productsData?.data ?? []).filter(p =>
     !productSearch || p.name?.toLowerCase().includes(productSearch.toLowerCase()) || p.sku?.toLowerCase().includes(productSearch.toLowerCase())
@@ -260,7 +297,7 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
         entityName: entityName.trim(),
         entityEmail: entityEmail.trim() || undefined,
         paymentDueDays: paymentDueDays > 0 ? paymentDueDays : undefined,
-        salesOrderId: salesOrderId || undefined,
+        salesOrderId: salesOrderId || selectedSalesOrderId || undefined,
         items: lines.map(l => ({
           description: l.description,
           qty: l.qty,
@@ -397,6 +434,59 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
               </div>
             )}
           </div>
+
+          {/* ── Prerequisite: Order/Invoice selection ──────────────────── */}
+          {entityConfirmed && docType === 'FACTURA' && customerPendingOrders.length > 0 && (
+            <div className="bg-indigo-50/60 rounded-2xl p-5 border border-indigo-100">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">Orden de pedido (prerrequisito)</label>
+              <select className="input" value={selectedSalesOrderId} onChange={e => setSelectedSalesOrderId(e.target.value)}>
+                <option value="">Seleccionar pedido pendiente...</option>
+                {customerPendingOrders.map((o: any) => (
+                  <option key={o.id} value={o.id}>{o.orderNumber} — {o.customer?.displayName} — S/ {Number(o.lines?.reduce((s: number, l: any) => s + Number(l.qty) * Number(l.unitPrice), 0) * 1.18).toFixed(2)}</option>
+                ))}
+              </select>
+              <p className="text-xs text-indigo-500 mt-1.5">Al seleccionar un pedido, las líneas se autocompletarán.</p>
+            </div>
+          )}
+
+          {entityConfirmed && docType === 'BOLETA' && (
+            <div className="bg-blue-50/60 rounded-2xl p-5 border border-blue-100">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">Pedido asociado (opcional)</label>
+              <select className="input" value={selectedSalesOrderId} onChange={e => setSelectedSalesOrderId(e.target.value)}>
+                <option value="">Manual — sin pedido asociado</option>
+                {customerPendingOrders.map((o: any) => (
+                  <option key={o.id} value={o.id}>{o.orderNumber} — {o.customer?.displayName}</option>
+                ))}
+              </select>
+              <p className="text-xs text-blue-500 mt-1.5">Para ventas puntuales, deja en manual e ingresa los items abajo.</p>
+            </div>
+          )}
+
+          {entityConfirmed && docType === 'NOTA_CREDITO' && (
+            <div className="bg-purple-50/60 rounded-2xl p-5 border border-purple-100">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">Factura de referencia (prerrequisito)</label>
+              <select className="input" value={selectedInvoiceRef} onChange={e => setSelectedInvoiceRef(e.target.value)}>
+                <option value="">Seleccionar factura emitida...</option>
+                {customerIssuedInvoices.filter((inv: any) => inv.docType === 'FACTURA' || inv.docType === 'BOLETA').map((inv: any) => (
+                  <option key={inv.id} value={inv.id}>{inv.series}-{inv.correlative} — {inv.entityName} — S/ {Number(inv.totalPen).toFixed(2)}</option>
+                ))}
+              </select>
+              <p className="text-xs text-purple-500 mt-1.5">Selecciona la factura a la que se aplicará esta nota de crédito.</p>
+            </div>
+          )}
+
+          {entityConfirmed && docType === 'GUIA_REMISION' && (
+            <div className="bg-teal-50/60 rounded-2xl p-5 border border-teal-100">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">Pedido asociado (prerrequisito)</label>
+              <select className="input" value={selectedSalesOrderId} onChange={e => setSelectedSalesOrderId(e.target.value)}>
+                <option value="">Seleccionar pedido...</option>
+                {customerPendingOrders.map((o: any) => (
+                  <option key={o.id} value={o.id}>{o.orderNumber} — {o.customer?.displayName}</option>
+                ))}
+              </select>
+              <p className="text-xs text-teal-500 mt-1.5">Selecciona el pedido al que se generará la guía de remisión.</p>
+            </div>
+          )}
 
           {isFactura && (
             <div className="bg-blue-50/60 rounded-2xl p-5 border border-blue-100">
@@ -822,6 +912,19 @@ export default function Invoices() {
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
+
+  // Guía de Remisión modal state
+  const [guiaOrderId, setGuiaOrderId] = useState<string | null>(null);
+  const [guiaMovementType, setGuiaMovementType] = useState('VENTA');
+  const [guiaSenderName, setGuiaSenderName] = useState('Victorsdou SAC');
+  const [guiaSenderAddress, setGuiaSenderAddress] = useState('');
+  const [guiaRecipientName, setGuiaRecipientName] = useState('');
+  const [guiaRecipientAddress, setGuiaRecipientAddress] = useState('');
+  const [guiaTransportistName, setGuiaTransportistName] = useState('');
+  const [guiaTransportistRuc, setGuiaTransportistRuc] = useState('');
+  const [guiaTransportistPlate, setGuiaTransportistPlate] = useState('');
+  const [guiaTransportistLicense, setGuiaTransportistLicense] = useState('');
+  const [guiaGoodsDescription, setGuiaGoodsDescription] = useState('');
   const toggleInvoiceDetail = (id: string) => setExpandedInvoiceId(prev => prev === id ? null : id);
 
   // Fetch detail for expanded invoice
@@ -865,6 +968,47 @@ export default function Invoices() {
     onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Error'),
   });
 
+  const guiaRemisionMutation = useMutation({
+    mutationFn: (payload: any) => api.post('/v1/invoices/guia-remision', payload),
+    onMutate: () => toast.loading('Generando guía de remisión…', { id: 'guia' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      qc.invalidateQueries({ queryKey: ['pending-orders'] });
+      toast.success('Guía de remisión generada — pedido marcado como Listo', { id: 'guia' });
+      setGuiaOrderId(null);
+      setGuiaMovementType('VENTA');
+      setGuiaRecipientName(''); setGuiaRecipientAddress('');
+      setGuiaTransportistName(''); setGuiaTransportistRuc(''); setGuiaTransportistPlate(''); setGuiaTransportistLicense('');
+      setGuiaGoodsDescription('');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Error al crear guía', { id: 'guia' }),
+  });
+
+  const handleCreateGuia = () => {
+    if (!guiaOrderId) return;
+    guiaRemisionMutation.mutate({
+      salesOrderId: guiaOrderId,
+      movementType: guiaMovementType,
+      senderName: guiaSenderName,
+      senderAddress: guiaSenderAddress,
+      recipientName: guiaRecipientName,
+      recipientAddress: guiaRecipientAddress,
+      transportistName: guiaTransportistName || undefined,
+      transportistRuc: guiaTransportistRuc || undefined,
+      transportistPlate: guiaTransportistPlate || undefined,
+      transportistLicense: guiaTransportistLicense || undefined,
+      goodsDescription: guiaGoodsDescription || undefined,
+    });
+  };
+
+  const openGuiaModal = (order: any) => {
+    setGuiaOrderId(order.id);
+    setGuiaRecipientName(order.customer?.displayName ?? '');
+    // Auto-fill goods description from order lines
+    const desc = (order.lines ?? []).map((l: any) => `${Number(l.qty)} x ${l.product?.name ?? 'Producto'}`).join('; ');
+    setGuiaGoodsDescription(desc);
+  };
+
   const invoices = invoicesData?.data ?? [];
   const pendingOrders = pendingOrdersData?.data ?? [];
   const accepted = invoices.filter(i => i.status === 'ACCEPTED').length;
@@ -888,6 +1032,90 @@ export default function Invoices() {
       {showCreate && <CreateInvoiceModal onClose={() => setShowCreate(false)} />}
       {showExport && <ExportModal invoices={invoices} onClose={() => setShowExport(false)} />}
       {editingInvoice && <EditInvoiceModal invoice={editingInvoice} onClose={() => setEditingInvoice(null)} />}
+
+      {/* ── Guía de Remisión Modal ──────────────────────────────────────── */}
+      {guiaOrderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2"><Truck size={18} className="text-purple-600" /> Generar Guía de Remisión</h3>
+              <button onClick={() => setGuiaOrderId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de movimiento</label>
+                <select className="input" value={guiaMovementType} onChange={e => setGuiaMovementType(e.target.value)}>
+                  <option value="VENTA">Venta</option>
+                  <option value="COMPRA">Compra</option>
+                  <option value="TRASLADO">Traslado entre establecimientos</option>
+                  <option value="DEVOLUCION">Devolución</option>
+                  <option value="OTROS">Otros</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Nombre remitente</label>
+                  <input className="input" value={guiaSenderName} onChange={e => setGuiaSenderName(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Dirección remitente</label>
+                  <input className="input" value={guiaSenderAddress} onChange={e => setGuiaSenderAddress(e.target.value)} placeholder="Dirección de origen..." />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Nombre destinatario</label>
+                  <input className="input" value={guiaRecipientName} onChange={e => setGuiaRecipientName(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Dirección destinatario</label>
+                  <input className="input" value={guiaRecipientAddress} onChange={e => setGuiaRecipientAddress(e.target.value)} placeholder="Dirección de destino..." />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Descripción de bienes transportados</label>
+                <textarea className="input min-h-[60px]" value={guiaGoodsDescription} onChange={e => setGuiaGoodsDescription(e.target.value)} placeholder="Detalle de mercadería..." />
+              </div>
+
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-3">
+                <div className="text-xs font-semibold text-purple-800">Datos del transportista (opcional)</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Nombre / Razón social</label>
+                    <input className="input text-sm" value={guiaTransportistName} onChange={e => setGuiaTransportistName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">RUC</label>
+                    <input className="input text-sm" value={guiaTransportistRuc} onChange={e => setGuiaTransportistRuc(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Placa del vehículo</label>
+                    <input className="input text-sm" value={guiaTransportistPlate} onChange={e => setGuiaTransportistPlate(e.target.value)} placeholder="ABC-123" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">Licencia</label>
+                    <input className="input text-sm" value={guiaTransportistLicense} onChange={e => setGuiaTransportistLicense(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button onClick={handleCreateGuia} disabled={guiaRemisionMutation.isPending || !guiaRecipientName}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700 disabled:opacity-50 transition-all">
+                  {guiaRemisionMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                  Generar Guía
+                </button>
+                <button onClick={() => setGuiaOrderId(null)} className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200 transition-all">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -1083,6 +1311,12 @@ export default function Invoices() {
                   className="flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                   {bulkCreateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}Facturar y emitir
                 </button>
+                {selectedOrders.size === 1 && (
+                  <button onClick={() => { const order = pendingOrders.find(o => selectedOrders.has(o.id)); if (order) openGuiaModal(order); }}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 transition-all">
+                    <Truck size={12} /> Generar Guía de Remisión
+                  </button>
+                )}
               </div>
             )}
           </div>

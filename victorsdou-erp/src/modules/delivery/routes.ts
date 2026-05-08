@@ -215,4 +215,121 @@ export async function deliveryRoutes(app: FastifyInstance) {
     });
     return reply.send({ data: drivers });
   });
+
+  // ── GET /v1/delivery/pending-orders ──────────────────────────────────────
+  // Orders with Guía de Remisión that have NOT been assigned to a route yet
+  app.get('/pending-orders', {
+    preHandler: [requireAnyOf('OPS_MGR', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (_req, reply) => {
+    // Find orders in READY status (have guía) that don't have a delivery job
+    const orders = await prisma.salesOrder.findMany({
+      where: {
+        status: 'READY' as any,
+        deliveryJobId: null,
+      },
+      include: {
+        customer: {
+          include: {
+            addresses: true,
+            sucursales: true,
+          },
+        },
+        lines: { include: { product: true } },
+        sucursal: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return reply.send({ data: orders });
+  });
+
+  // ── POST /v1/delivery/suggest-route ──────────────────────────────────────
+  // Given an array of sales order IDs, suggest a route grouped by postal code
+  app.post('/suggest-route', {
+    preHandler: [requireAnyOf('OPS_MGR', 'SALES_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { orderIds } = req.body as { orderIds: string[] };
+    if (!orderIds?.length) return reply.code(400).send({ error: 'orderIds required' });
+
+    const orders = await prisma.salesOrder.findMany({
+      where: { id: { in: orderIds } },
+      include: {
+        customer: {
+          include: {
+            addresses: { where: { isDefault: true }, take: 1 },
+            sucursales: true,
+          },
+        },
+        sucursal: true,
+      },
+    });
+
+    // Build stop list with postal code info
+    type RouteStop = {
+      salesOrderId: string;
+      customerName: string;
+      addressLine: string;
+      district: string;
+      postalCode: string | null;
+      contactName: string | null;
+      contactPhone: string | null;
+    };
+
+    const stops: RouteStop[] = orders.map(o => {
+      // Prefer sucursal address if linked
+      if (o.sucursal) {
+        return {
+          salesOrderId: o.id,
+          customerName: o.customer.displayName,
+          addressLine: `${o.sucursal.addressLine1}${o.sucursal.addressLine2 ? ', ' + o.sucursal.addressLine2 : ''}, ${o.sucursal.district}`,
+          district: o.sucursal.district,
+          postalCode: (o.sucursal as any).postalCode ?? null,
+          contactName: o.sucursal.contactName,
+          contactPhone: o.sucursal.contactPhone ?? o.customer.phone,
+        };
+      }
+      // Fall back to default customer address
+      const addr = o.customer.addresses?.[0];
+      return {
+        salesOrderId: o.id,
+        customerName: o.customer.displayName,
+        addressLine: addr
+          ? `${addr.addressLine1}${addr.addressLine2 ? ', ' + addr.addressLine2 : ''}, ${addr.district}`
+          : 'Sin dirección',
+        district: addr?.district ?? 'Sin distrito',
+        postalCode: (addr as any)?.postalCode ?? null,
+        contactName: null,
+        contactPhone: o.customer.phone,
+      };
+    });
+
+    // Sort by postal code first, then by district order
+    const sorted = stops.sort((a, b) => {
+      // Group by postal code
+      if (a.postalCode && b.postalCode && a.postalCode !== b.postalCode) {
+        return a.postalCode.localeCompare(b.postalCode);
+      }
+      // Then by district order
+      const oa = DISTRICT_ORDER[a.district] ?? 99;
+      const ob = DISTRICT_ORDER[b.district] ?? 99;
+      return oa - ob;
+    });
+
+    // Group by postal code
+    const byPostalCode: Record<string, RouteStop[]> = {};
+    for (const s of sorted) {
+      const key = s.postalCode ?? 'SIN_CP';
+      if (!byPostalCode[key]) byPostalCode[key] = [];
+      byPostalCode[key].push(s);
+    }
+
+    return reply.send({
+      total: sorted.length,
+      stops: sorted.map((s, i) => ({ ...s, sequence: i + 1 })),
+      byPostalCode: Object.entries(byPostalCode).map(([code, ss]) => ({
+        postalCode: code === 'SIN_CP' ? null : code,
+        count: ss.length,
+        stops: ss.map(s => s.customerName),
+      })),
+    });
+  });
 }

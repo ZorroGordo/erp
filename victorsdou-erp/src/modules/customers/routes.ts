@@ -89,6 +89,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:     body.address.district.trim(),
         province:     body.address.province?.trim()    || 'Lima',
         department:   body.address.department?.trim()  || 'Lima',
+        postalCode:   body.address.postalCode?.trim()  || null,
         isDefault:    true,
       });
     }
@@ -100,6 +101,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:     body.deliveryAddress.district.trim(),
         province:     body.deliveryAddress.province?.trim()    || 'Lima',
         department:   body.deliveryAddress.department?.trim()  || 'Lima',
+        postalCode:   body.deliveryAddress.postalCode?.trim()  || null,
         isDefault:    false,
       });
     }
@@ -265,6 +267,7 @@ export async function customersRoutes(app: FastifyInstance) {
       district:          string;
       province?:         string;
       department?:       string;
+      postalCode?:       string;
       deliveryFrequency?: string;
       deliveryDays?:     string[];
       deliveryUnitsQty?: number;
@@ -295,6 +298,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:          body.district.trim(),
         province:          body.province   ?? 'Lima',
         department:        body.department ?? 'Lima',
+        postalCode:        body.postalCode?.trim() ?? null,
         deliveryFrequency: body.deliveryFrequency ?? null,
         deliveryDays:      body.deliveryDays      ?? [],
         deliveryUnitsQty:  body.deliveryUnitsQty  ?? null,
@@ -321,6 +325,7 @@ export async function customersRoutes(app: FastifyInstance) {
       district:          string;
       province:          string;
       department:        string;
+      postalCode:        string;
       deliveryFrequency: string;
       deliveryDays:      string[];
       deliveryUnitsQty:  number;
@@ -345,6 +350,7 @@ export async function customersRoutes(app: FastifyInstance) {
         ...(body.district          !== undefined ? { district:          body.district }          : {}),
         ...(body.province          !== undefined ? { province:          body.province }          : {}),
         ...(body.department        !== undefined ? { department:        body.department }         : {}),
+        ...(body.postalCode        !== undefined ? { postalCode:        body.postalCode?.trim() ?? null } : {}),
         ...(body.deliveryFrequency !== undefined ? { deliveryFrequency: body.deliveryFrequency } : {}),
         ...(body.deliveryDays      !== undefined ? { deliveryDays:      body.deliveryDays }      : {}),
         ...(body.deliveryUnitsQty  !== undefined ? { deliveryUnitsQty:  body.deliveryUnitsQty }  : {}),
@@ -436,7 +442,7 @@ export async function customersRoutes(app: FastifyInstance) {
     const body = req.body as {
       label: string; addressLine1: string; addressLine2?: string;
       district: string; province?: string; department?: string;
-      isDefault?: boolean; deliveryNotes?: string;
+      postalCode?: string; isDefault?: boolean; deliveryNotes?: string;
     };
     if (body.isDefault) {
       await prisma.customerAddress.updateMany({ where: { customerId: id }, data: { isDefault: false } });
@@ -450,6 +456,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:     body.district.trim(),
         province:     body.province?.trim() || 'Lima',
         department:   body.department?.trim() || 'Lima',
+        postalCode:   body.postalCode?.trim() ?? null,
         isDefault:    body.isDefault ?? false,
         deliveryNotes: body.deliveryNotes?.trim() ?? null,
       },
@@ -465,7 +472,7 @@ export async function customersRoutes(app: FastifyInstance) {
     const body = req.body as {
       label?: string; addressLine1?: string; addressLine2?: string;
       district?: string; province?: string; department?: string;
-      isDefault?: boolean; deliveryNotes?: string;
+      postalCode?: string; isDefault?: boolean; deliveryNotes?: string;
     };
     if (body.isDefault) {
       await prisma.customerAddress.updateMany({ where: { customerId: id }, data: { isDefault: false } });
@@ -479,6 +486,7 @@ export async function customersRoutes(app: FastifyInstance) {
         ...(body.district     !== undefined ? { district:     body.district.trim() }              : {}),
         ...(body.province     !== undefined ? { province:     body.province?.trim() || 'Lima' }   : {}),
         ...(body.department   !== undefined ? { department:   body.department?.trim() || 'Lima' } : {}),
+        ...(body.postalCode   !== undefined ? { postalCode:   body.postalCode?.trim() ?? null }   : {}),
         ...(body.isDefault    !== undefined ? { isDefault:    body.isDefault }                    : {}),
         ...(body.deliveryNotes !== undefined ? { deliveryNotes: body.deliveryNotes?.trim() ?? null } : {}),
       },

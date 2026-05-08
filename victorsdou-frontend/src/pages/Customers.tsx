@@ -97,6 +97,7 @@ interface SucursalForm {
   district:          string;
   province:          string;
   department:        string;
+  postalCode:        string;
   deliveryFrequency: string;
   deliveryDays:      string[];
   deliveryUnitsQty:  string;
@@ -106,7 +107,7 @@ interface SucursalForm {
 }
 const EMPTY_SUCURSAL: SucursalForm = {
   name: '', contactName: '', contactPhone: '', contactEmail: '',
-  addressLine1: '', addressLine2: '', district: '', province: 'Lima', department: 'Lima',
+  addressLine1: '', addressLine2: '', district: '', province: 'Lima', department: 'Lima', postalCode: '',
   deliveryFrequency: '', deliveryDays: [], deliveryUnitsQty: '', deliveryHour: '', deliveryNotes: '', notes: '',
 };
 
@@ -187,6 +188,7 @@ function SucursalModal({
     district:          sucursal.district ?? '',
     province:          sucursal.province ?? 'Lima',
     department:        sucursal.department ?? 'Lima',
+    postalCode:        sucursal.postalCode ?? '',
     deliveryFrequency: sucursal.deliveryFrequency ?? '',
     deliveryDays:      sucursal.deliveryDays ?? [],
     deliveryUnitsQty:  sucursal.deliveryUnitsQty != null ? String(sucursal.deliveryUnitsQty) : '',
@@ -224,6 +226,7 @@ function SucursalModal({
     if (!form.district.trim())     return toast.error('Distrito requerido');
     save.mutate({
       ...form,
+      postalCode: form.postalCode.trim() || null,
       deliveryUnitsQty: form.deliveryUnitsQty ? Number(form.deliveryUnitsQty) : null,
       deliveryFrequency: form.deliveryFrequency || null,
     });
@@ -283,7 +286,7 @@ function SucursalModal({
                 <input className="input" placeholder="Piso 2, Ref: al lado del banco" value={form.addressLine2}
                   onChange={e => setForm(f => ({ ...f, addressLine2: e.target.value }))} />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Distrito <span className="text-red-500">*</span></label>
                   <input className="input" placeholder="Miraflores" value={form.district}
@@ -298,6 +301,11 @@ function SucursalModal({
                   <label className="block text-xs font-medium text-gray-600 mb-1">Departamento</label>
                   <input className="input" placeholder="Lima" value={form.department}
                     onChange={e => setForm(f => ({ ...f, department: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Código postal</label>
+                  <input className="input font-mono" placeholder="15074" value={form.postalCode} maxLength={10}
+                    onChange={e => setForm(f => ({ ...f, postalCode: e.target.value }))} />
                 </div>
               </div>
             </div>
@@ -506,6 +514,7 @@ function EditCustomerModal({
     district:     existingAddr?.district     ?? '',
     province:     existingAddr?.province     ?? 'Lima',
     department:   existingAddr?.department   ?? 'Lima',
+    postalCode:   existingAddr?.postalCode   ?? '',
     deliveryNotes: existingAddr?.deliveryNotes ?? '',
   });
   const [addrDirty,  setAddrDirty]  = useState(false);
@@ -579,7 +588,7 @@ function EditCustomerModal({
     if (!addr.addressLine1.trim() || !addr.district.trim()) return toast.error('Dirección y distrito requeridos');
     setAddrSaving(true);
     try {
-      const payload = { label: addr.label || 'Principal', addressLine1: addr.addressLine1, addressLine2: addr.addressLine2 || undefined, district: addr.district, province: addr.province || 'Lima', department: addr.department || 'Lima', deliveryNotes: addr.deliveryNotes || undefined, isDefault: true };
+      const payload = { label: addr.label || 'Principal', addressLine1: addr.addressLine1, addressLine2: addr.addressLine2 || undefined, district: addr.district, province: addr.province || 'Lima', department: addr.department || 'Lima', postalCode: addr.postalCode?.trim() || undefined, deliveryNotes: addr.deliveryNotes || undefined, isDefault: true };
       if (addr.id) {
         await api.patch(`/v1/customers/${customer.id}/addresses/${addr.id}`, payload);
       } else {
@@ -714,13 +723,16 @@ function EditCustomerModal({
             <div><label className="block text-xs font-medium text-gray-600 mb-1">Ofc. / Piso / Referencia</label>
               <input className="input" placeholder="Piso 3, Of. 301" value={addr.addressLine2}
                 onChange={e => setA('addressLine2', e.target.value)} /></div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-4 gap-3">
               <div><label className="block text-xs font-medium text-gray-600 mb-1">Distrito <span className="text-red-500">*</span></label>
                 <input className="input" placeholder="San Miguel" value={addr.district} onChange={e => setA('district', e.target.value)} /></div>
               <div><label className="block text-xs font-medium text-gray-600 mb-1">Provincia</label>
                 <input className="input" placeholder="Lima" value={addr.province} onChange={e => setA('province', e.target.value)} /></div>
               <div><label className="block text-xs font-medium text-gray-600 mb-1">Departamento</label>
                 <input className="input" placeholder="Lima" value={addr.department} onChange={e => setA('department', e.target.value)} /></div>
+              <div><label className="block text-xs font-medium text-gray-600 mb-1">Código postal</label>
+                <input className="input font-mono" placeholder="15074" value={addr.postalCode} maxLength={10}
+                  onChange={e => setA('postalCode', e.target.value)} /></div>
             </div>
             <div><label className="block text-xs font-medium text-gray-600 mb-1">Instrucciones de entrega</label>
               <input className="input" placeholder="Ingresar por muelle trasero…" value={addr.deliveryNotes}
