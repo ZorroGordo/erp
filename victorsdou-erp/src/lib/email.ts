@@ -36,9 +36,10 @@ export async function sendEmail(msg: EmailMessage): Promise<void> {
 
   const ses = getSES();
   if (!ses) {
-    // No AWS credentials configured — log instead of sending
-    console.log('[Email] (no AWS SES config) Would send to:', recipients.join(', '));
-    console.log('[Email] Subject:', msg.subject);
+    // No AWS credentials configured — log WARNING so it's visible in Railway logs
+    console.warn('[Email] ⚠️  AWS SES NOT CONFIGURED — email NOT sent');
+    console.warn('[Email]    To:', recipients.join(', '));
+    console.warn('[Email]    Subject:', msg.subject);
     return;
   }
 
@@ -55,9 +56,13 @@ export async function sendEmail(msg: EmailMessage): Promise<void> {
   });
 
   try {
-    await ses.send(command);
-  } catch (err) {
-    console.error('[Email] SES error:', err);
+    const result = await ses.send(command);
+    console.log(`[Email] ✅ Sent to ${recipients.join(', ')} | Subject: ${msg.subject} | MessageId: ${result.MessageId}`);
+  } catch (err: any) {
+    console.error(`[Email] ❌ SES FAILED to ${recipients.join(', ')} | Subject: ${msg.subject}`);
+    console.error('[Email]    Error:', err?.message ?? err);
+    // Re-throw so callers know it failed
+    throw err;
   }
 }
 

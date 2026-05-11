@@ -81,7 +81,70 @@ function buildDeliveredEmail(name: string, orderId: string): string {
     </div>`);
 }
 
-// ── Email template for new ecommerce orders ───────────────────────────────────
+// ── Customer-facing order confirmation email ─────────────────────────────────
+
+function buildCustomerConfirmationEmail(order: any, body: any): string {
+  const items = (body.items ?? []).map((i: any) =>
+    `<tr>
+      <td style="padding:10px 0;border-bottom:1px solid #ede9e1;font-family:Arial,sans-serif;font-size:14px;color:#333;">${i.productName ?? i.name ?? ''}</td>
+      <td style="padding:10px 0;border-bottom:1px solid #ede9e1;font-family:Arial,sans-serif;font-size:14px;color:#666;text-align:center;">${i.qty}</td>
+      <td style="padding:10px 0;border-bottom:1px solid #ede9e1;font-family:Arial,sans-serif;font-size:14px;color:#333;text-align:right;">S/ ${(Number(i.unitPrice) * Number(i.qty)).toFixed(2)}</td>
+    </tr>`
+  ).join('');
+
+  const addr = body.deliveryAddress ?? {};
+  const addrLine = [addr.street, addr.district, addr.city].filter(Boolean).join(', ');
+  let dateStr = '';
+  if (body.deliveryDate) {
+    dateStr = new Date(body.deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  const ctaUrl = `https://victorsdou.pe/tienda/cuenta/pedidos/${order.id}`;
+
+  return wrap(`
+    <h2 style="margin:0 0 4px;color:#1a1a1a;font-size:22px;">¡Gracias por tu pedido!</h2>
+    <p style="margin:0 0 24px;color:#666;font-family:Arial,sans-serif;font-size:14px;">
+      Hola ${body.customerName ?? 'Cliente'}, recibimos tu pedido <strong>#${order.orderNumber}</strong> correctamente.
+      Nuestro equipo lo revisará y te avisaremos cuando esté confirmado.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+      <thead><tr style="border-bottom:2px solid #1a1a1a;">
+        <th style="padding:8px 0;text-align:left;font-family:Arial,sans-serif;font-size:12px;color:#888;letter-spacing:1px;text-transform:uppercase;">Producto</th>
+        <th style="padding:8px 0;text-align:center;font-family:Arial,sans-serif;font-size:12px;color:#888;letter-spacing:1px;text-transform:uppercase;">Cant.</th>
+        <th style="padding:8px 0;text-align:right;font-family:Arial,sans-serif;font-size:12px;color:#888;letter-spacing:1px;text-transform:uppercase;">Total</th>
+      </tr></thead>
+      <tbody>${items}</tbody>
+    </table>
+
+    <div style="background:#f9f5f0;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;font-size:14px;">
+        <tr><td style="color:#666;padding:2px 0;">Subtotal</td><td style="text-align:right;color:#333;">S/ ${Number(order.subtotalPen).toFixed(2)}</td></tr>
+        <tr><td style="color:#666;padding:2px 0;">IGV (18%)</td><td style="text-align:right;color:#333;">S/ ${Number(order.igvPen).toFixed(2)}</td></tr>
+        <tr><td style="color:#1a1a1a;padding:8px 0 0;font-weight:700;font-size:16px;border-top:1px solid #ddd;">Total</td>
+            <td style="text-align:right;color:#1a1a1a;padding:8px 0 0;font-weight:700;font-size:16px;border-top:1px solid #ddd;">S/ ${Number(order.totalPen).toFixed(2)}</td></tr>
+      </table>
+    </div>
+
+    ${addrLine ? `<div style="margin-bottom:16px;">
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#888;letter-spacing:1px;text-transform:uppercase;">📍 Dirección de entrega</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">${addrLine}</p>
+      ${addr.reference ? `<p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:13px;color:#888;">Ref: ${addr.reference}</p>` : ''}
+    </div>` : ''}
+
+    ${dateStr ? `<div style="margin-bottom:24px;">
+      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#888;letter-spacing:1px;text-transform:uppercase;">📅 Fecha de entrega</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">${dateStr}</p>
+    </div>` : ''}
+
+    <div style="text-align:center;padding-bottom:8px;">
+      <a href="${ctaUrl}" style="display:inline-block;background:#6b7c4b;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Ver mi pedido</a>
+    </div>
+    <p style="font-family:Arial,sans-serif;font-size:13px;color:#888;text-align:center;margin-top:16px;">
+      ¿Tienes alguna pregunta? Escríbenos por <a href="https://wa.me/51944200333" style="color:#6b7c4b;text-decoration:none;">WhatsApp</a>.
+    </p>`);
+}
+
+// ── Email template for new ecommerce orders (team) ───────────────────────────
 
 function buildEcommerceOrderEmail(order: any, body: any): string {
   const items = (body.items ?? []).map((i: any) =>
@@ -174,27 +237,53 @@ export async function salesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const body = req.body as {
       method: string; amountPen: number; referenceNo?: string; notes?: string;
+      creditPaymentTermsDays?: number; // Override customer payment terms for CREDIT
     };
-    const order = await prisma.salesOrder.findUniqueOrThrow({ where: { id }, include: { payments: true } });
+    const order = await prisma.salesOrder.findUniqueOrThrow({ where: { id }, include: { payments: true, customer: true } });
+
+    const isCredit = body.method === 'CREDIT';
+
+    // For CREDIT: amount = order total, paidAt = due date (future)
+    const paymentAmount = isCredit ? Number(order.totalPen) : body.amountPen;
+    const termsDays = isCredit
+      ? (body.creditPaymentTermsDays ?? (order.customer as any)?.paymentTermsDays ?? 0)
+      : 0;
+    const dueDate = isCredit ? new Date(Date.now() + termsDays * 86400000) : null;
+
     const payment = await prisma.paymentRecord.create({
       data: {
         salesOrderId: id,
         method: body.method,
-        amountPen: body.amountPen,
+        amountPen: paymentAmount,
         referenceNo: body.referenceNo ?? null,
-        paidAt: new Date(),
-        notes: body.notes ?? null,
+        paidAt: isCredit ? (dueDate ?? new Date()) : new Date(),
+        notes: isCredit
+          ? `Crédito ${termsDays} días — vence ${dueDate?.toLocaleDateString('es-PE')}${body.notes ? '. ' + body.notes : ''}`
+          : (body.notes ?? null),
         createdBy: req.actor!.sub,
       },
     });
-    // Update order payment status
-    const totalPaid = (order.payments ?? []).reduce((s: number, p: any) => s + Number(p.amountPen), 0) + body.amountPen;
-    const orderTotal = Number(order.totalPen);
-    const newStatus = totalPaid >= orderTotal ? 'PAID' : 'PARTIAL';
-    await prisma.salesOrder.update({
-      where: { id },
-      data: { paymentStatus: newStatus as never },
-    });
+
+    // Update order payment status + credit terms
+    if (isCredit) {
+      await prisma.salesOrder.update({
+        where: { id },
+        data: {
+          paymentStatus: 'PARTIAL' as never,
+          creditPaymentTermsDays: termsDays,
+          paymentDueDate: dueDate,
+        },
+      });
+    } else {
+      const totalPaid = (order.payments ?? []).reduce((s: number, p: any) => s + Number(p.amountPen), 0) + body.amountPen;
+      const orderTotal = Number(order.totalPen);
+      const newStatus = totalPaid >= orderTotal ? 'PAID' : 'PARTIAL';
+      await prisma.salesOrder.update({
+        where: { id },
+        data: { paymentStatus: newStatus as never },
+      });
+    }
+
     return reply.code(201).send({ data: payment });
   });
 
@@ -288,12 +377,39 @@ export async function salesRoutes(app: FastifyInstance) {
       include: { lines: { include: { product: true } } },
     });
 
-    // Fire-and-forget: notify ops team
-    sendEmail({
-      to:      ['luis@victorsdou.com', 'hola@victorsdou.com'],
-      subject: `🛍 Nuevo pedido web #${order.orderNumber} — S/ ${total.toFixed(2)}`,
-      html:    buildEcommerceOrderEmail(order, body),
-    }).catch(console.error);
+    // Send emails (non-blocking but logged)
+    const emailPromises: Promise<void>[] = [];
+
+    // 1. Team notification
+    emailPromises.push(
+      sendEmail({
+        to:      ['luis@victorsdou.com', 'hola@victorsdou.com'],
+        subject: `🛍 Nuevo pedido web #${order.orderNumber} — S/ ${total.toFixed(2)}`,
+        html:    buildEcommerceOrderEmail(order, body),
+      }).then(() => {
+        console.log(`[Ecommerce] ✅ Team email sent for ${order.orderNumber}`);
+      }).catch(err => {
+        console.error(`[Ecommerce] ❌ Team email FAILED for ${order.orderNumber}:`, err);
+      })
+    );
+
+    // 2. Customer confirmation
+    if (body.customerEmail) {
+      emailPromises.push(
+        sendEmail({
+          to:      body.customerEmail,
+          subject: `Pedido #${order.orderNumber} recibido — Victorsdou`,
+          html:    buildCustomerConfirmationEmail(order, body),
+        }).then(() => {
+          console.log(`[Ecommerce] ✅ Customer email sent for ${order.orderNumber} → ${body.customerEmail}`);
+        }).catch(err => {
+          console.error(`[Ecommerce] ❌ Customer email FAILED for ${order.orderNumber} → ${body.customerEmail}:`, err);
+        })
+      );
+    }
+
+    // Don't block response on email delivery
+    Promise.allSettled(emailPromises);
 
     return reply.code(201).send({ data: order });
   });
@@ -363,7 +479,7 @@ export async function salesRoutes(app: FastifyInstance) {
     if ((current.payments ?? []).length === 0 && current.paymentStatus === 'UNPAID') {
       return reply.code(400).send({
         error: 'PAYMENT_REQUIRED',
-        message: 'Debe registrar un pago antes de aceptar el pedido',
+        message: 'Debe registrar un pago o asignar crédito antes de aceptar el pedido',
       });
     }
     const order = await prisma.salesOrder.update({ where: { id }, data: { status: 'ACCEPTED' as never } });
