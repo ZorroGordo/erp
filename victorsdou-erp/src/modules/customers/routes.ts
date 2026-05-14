@@ -79,6 +79,7 @@ export async function customersRoutes(app: FastifyInstance) {
     const addressRecords: {
       label: string; addressLine1: string; addressLine2?: string;
       district: string; province: string; department: string; isDefault: boolean;
+      postalCode?: string | null;
     }[] = [];
 
     if (body.address?.addressLine1?.trim()) {
