@@ -55,6 +55,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:     string;
         province?:    string;
         department?:  string;
+        postalCode?:  string;
       };
       // Separate delivery address — only stored when different from main
       deliveryAddress?: {
@@ -63,6 +64,7 @@ export async function customersRoutes(app: FastifyInstance) {
         district:     string;
         province?:    string;
         department?:  string;
+        postalCode?:  string;
       };
     };
 
