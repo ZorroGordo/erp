@@ -203,7 +203,15 @@ function ReceiveModal({
   const [invoiceRef,   setInvoiceRef]   = useState('');
   const [poRef,        setPoRef]        = useState('');
   const [productionOrderRef, setProductionOrderRef] = useState('');
+  const [lotNumber,        setLotNumber]        = useState('');
+  const [productionDate,   setProductionDate]   = useState('');
+  const [expiryDate,       setExpiryDate]       = useState('');
   const [notes,        setNotes]        = useState('');
+
+  // Detect if the selected ingredient corresponds to a finished/intermediate
+  // product (we ask for production date in that case).
+  const isFinishedOrIntermediate = ingredients.find(i => i.id === ingredientId)?.productType === 'FINISHED'
+    || ingredients.find(i => i.id === ingredientId)?.productType === 'INTERMEDIATE';
 
   const create = useMutation({
     mutationFn: (body: any) => api.post('/v1/inventory/receipts', body),
@@ -213,7 +221,7 @@ function ReceiveModal({
 
   const selIng   = ingredients.find(i => i.id === ingredientId);
   const total    = Number(qty) * Number(unitCost);
-  const canSave  = ingredientId && warehouseId && Number(qty) > 0 && Number(unitCost) >= 0;
+  const canSave  = ingredientId && warehouseId && Number(qty) > 0 && Number(unitCost) >= 0 && lotNumber.trim() && expiryDate;
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -294,6 +302,31 @@ function ReceiveModal({
               onChange={e => setProductionOrderRef(e.target.value)} />
           </div>
 
+          {/* Lot number */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Lote de producto <span className="text-red-500">*</span>
+            </label>
+            <input className="input font-mono" value={lotNumber} placeholder="L-2026-001"
+              onChange={e => setLotNumber(e.target.value)} />
+          </div>
+
+          {isFinishedOrIntermediate && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de producción</label>
+              <input type="date" className="input" value={productionDate}
+                onChange={e => setProductionDate(e.target.value)} />
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Fecha de vencimiento <span className="text-red-500">*</span>
+            </label>
+            <input type="date" className="input" value={expiryDate}
+              onChange={e => setExpiryDate(e.target.value)} />
+          </div>
+
           {/* Notes */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
@@ -318,6 +351,9 @@ function ReceiveModal({
               invoiceRef: invoiceRef.trim() || undefined,
               poRef:      poRef.trim()      || undefined,
               productionOrderRef: productionOrderRef.trim() || undefined,
+              lotNumber:      lotNumber.trim() || undefined,
+              productionDate: productionDate || undefined,
+              expiryDate:     expiryDate || undefined,
               notes:      notes.trim()      || undefined,
             })}>
             {create.isPending && <Loader2 size={14} className="animate-spin" />}
@@ -479,9 +515,11 @@ function AlertSettingsModal({
 
 // ── HistoryModal ──────────────────────────────────────────────────────────────
 function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: () => void }) {
+  // Use the full movement history (includes consumptions, adjustments, production output)
+  // not just receipts, so users can see entradas AND consumos in one place.
   const { data, isLoading } = useQuery({
-    queryKey: ['receipts', item.id],
-    queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/receipts`).then(r => r.data),
+    queryKey: ['movements', item.id],
+    queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/movements?pageSize=200`).then(r => r.data),
   });
 
   function parseRefs(notes: string | null) {
@@ -501,8 +539,8 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
           <div className="flex items-center gap-2">
             <Package size={18} className="text-brand-600" />
             <div>
-              <h2 className="font-semibold text-gray-900">Historial de entradas</h2>
-              <p className="text-xs text-gray-400">{item.name} — {data?.meta?.total ?? 0} registros</p>
+              <h2 className="font-semibold text-gray-900">Historial de movimientos</h2>
+              <p className="text-xs text-gray-400">{item.name} — {data?.meta?.total ?? 0} registros (entradas + consumos)</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
@@ -522,6 +560,7 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
               <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide sticky top-0">
                 <tr>
                   <th className="px-4 py-3 text-left">Fecha</th>
+                  <th className="px-4 py-3 text-left">Tipo</th>
                   <th className="px-4 py-3 text-right">Cantidad</th>
                   <th className="px-4 py-3 text-right">Costo unit.</th>
                   <th className="px-4 py-3 text-right">Total</th>
@@ -534,14 +573,33 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
               <tbody className="divide-y divide-gray-100">
                 {receipts.map((r: any) => {
                   const { inv, po, extra } = parseRefs(r.notes);
-                  const total = Number(r.qtyIn) * Number(r.unitCostPen);
+                  const qIn  = Number(r.qtyIn ?? 0);
+                  const qOut = Number(r.qtyOut ?? 0);
+                  const isIn = qIn > 0;
+                  const total = (isIn ? qIn : qOut) * Number(r.unitCostPen);
+                  const TYPE_LABELS: Record<string,string> = {
+                    PURCHASE_RECEIPT:       'Compra',
+                    PRODUCTION_CONSUMPTION: 'Consumo prod.',
+                    PRODUCTION_OUTPUT:      'Producción',
+                    WASTE:                  'Merma',
+                    ADJUSTMENT:             'Ajuste',
+                    TRANSFER_IN:            'Transf. entrada',
+                    TRANSFER_OUT:           'Transf. salida',
+                    RETURN:                 'Devolución',
+                    OPENING_BALANCE:        'Saldo inicial',
+                  };
                   return (
                     <tr key={r.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
                         {new Date(r.createdAt).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' })}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono font-semibold text-green-700">
-                        +{fmtNum(r.qtyIn)} {item.baseUom}
+                      <td className="px-4 py-3 text-xs">
+                        <span className={`px-1.5 py-0.5 rounded ${isIn ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                          {TYPE_LABELS[r.type] ?? r.type}
+                        </span>
+                      </td>
+                      <td className={`px-4 py-3 text-right font-mono font-semibold ${isIn ? 'text-green-700' : 'text-red-600'}`}>
+                        {isIn ? '+' : '−'}{fmtNum(isIn ? r.qtyIn : r.qtyOut)} {item.baseUom}
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-gray-500 text-xs">
                         S/ {Number(r.unitCostPen).toFixed(4)}

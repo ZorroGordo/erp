@@ -30,6 +30,7 @@ import { comprobantesRoutes }          from './modules/comprobantes/routes';
 import { lookupRoutes }                from './modules/lookup/routes';
 import { notificationsWebhookRoutes }  from './modules/notifications/routes';
 import { quotationsRoutes }            from './modules/quotations/routes';
+import { settingsRoutes }              from './modules/settings/routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -134,6 +135,7 @@ export async function buildApp() {
     await api.register(comprobantesRoutes, { prefix: '/comprobantes' });
     await api.register(lookupRoutes,       { prefix: '/lookup' });
     await api.register(quotationsRoutes,   { prefix: '/quotations' });
+    await api.register(settingsRoutes,     { prefix: '/settings' });
   }, { prefix: '/v1' });
 
   // ── Public API Routes ─────────────────────────────────────────────────────

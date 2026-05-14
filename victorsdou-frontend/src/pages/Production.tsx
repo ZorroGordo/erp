@@ -1,19 +1,52 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useState } from 'react';
-import { Plus, Factory } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Plus, Factory, X, CheckCircle2, Loader2 } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
+
+interface BOMLine {
+  id: string;
+  ingredientId: string;
+  ingredient: { id: string; name: string; baseUom: string; avgCostPen: string };
+  qtyRequired: string;
+  uom: string;
+  wasteFactorPct: string;
+}
+
+interface Recipe {
+  id: string;
+  productId: string;
+  product?: { id: string; name: string; productType?: string };
+  yieldQty: string;
+  yieldUom: string;
+  bomLines: BOMLine[];
+}
+
+interface Order {
+  id: string;
+  orderNumber: string;
+  status: string;
+  plannedQty: string;
+  actualQty: string | null;
+  scheduledDate: string;
+  completedAt: string | null;
+  recipeId: string;
+  recipe?: Recipe & { product?: any };
+}
 
 export default function Production() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ recipeId: '', plannedQty: 1, scheduledDate: '' });
+  const [closingOrder, setClosingOrder] = useState<Order | null>(null);
 
   const { data: orders, isLoading } = useQuery({
     queryKey: ['production-orders'],
     queryFn: () => api.get('/v1/production/orders').then(r => r.data),
   });
+  // Recipes returns ACTIVE recipes for both intermediate and finished products,
+  // so this dropdown automatically covers both per the spec.
   const { data: recipes } = useQuery({
     queryKey: ['recipes'],
     queryFn: () => api.get('/v1/production/recipes').then(r => r.data),
@@ -31,7 +64,7 @@ export default function Production() {
   });
 
   const nextStatus: Record<string, string> = {
-    PLANNED: 'IN_PROGRESS', IN_PROGRESS: 'COMPLETED',
+    PLANNED: 'IN_PROGRESS', DRAFT: 'IN_PROGRESS', CONFIRMED: 'IN_PROGRESS',
   };
 
   return (
@@ -51,10 +84,17 @@ export default function Production() {
           <h3 className="font-semibold">Nueva orden de producción</h3>
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Receta</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Receta <span className="text-gray-400">(intermedio o terminado)</span>
+              </label>
               <select className="input" value={form.recipeId} onChange={e => setForm(f => ({ ...f, recipeId: e.target.value }))}>
                 <option value="">Seleccionar...</option>
-                {recipes?.data?.map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                {recipes?.data?.map((r: Recipe) => {
+                  const label = r.product?.name ?? r.productId;
+                  const typeTag = r.product?.productType === 'INTERMEDIATE' ? ' (PI)'
+                               : r.product?.productType === 'FINISHED' ? ' (PT)' : '';
+                  return <option key={r.id} value={r.id}>{label}{typeTag}</option>;
+                })}
               </select>
             </div>
             <div>
@@ -69,7 +109,12 @@ export default function Production() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button className="btn-primary" disabled={!form.recipeId} onClick={() => create.mutate(form)}>Crear</button>
+            <button className="btn-primary" disabled={!form.recipeId} onClick={() => create.mutate({
+              recipeId: form.recipeId,
+              recipeVersion: 1,
+              plannedQty: form.plannedQty,
+              scheduledDate: form.scheduledDate,
+            })}>Crear</button>
             <button className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
           </div>
         </div>
@@ -85,31 +130,39 @@ export default function Production() {
           <table className="w-full text-sm">
             <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
               <tr>
-                <th className="px-5 py-3 text-left">Batch</th>
-                <th className="px-5 py-3 text-left">Receta</th>
+                <th className="px-5 py-3 text-left">Orden #</th>
+                <th className="px-5 py-3 text-left">Producto</th>
                 <th className="px-5 py-3 text-right">Planificado</th>
                 <th className="px-5 py-3 text-right">Producido</th>
                 <th className="px-5 py-3 text-left">Fecha</th>
                 <th className="px-5 py-3 text-left">Estado</th>
-                <th className="px-5 py-3 text-center">Avanzar</th>
+                <th className="px-5 py-3 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {orders?.data?.map((o: any) => (
+              {orders?.data?.map((o: Order) => (
                 <tr key={o.id} className="table-row-hover">
-                  <td className="px-5 py-3 font-mono text-gray-700">{o.batchCode}</td>
-                  <td className="px-5 py-3 font-medium">{o.recipe?.name ?? '—'}</td>
+                  <td className="px-5 py-3 font-mono text-gray-700 text-xs">{o.orderNumber}</td>
+                  <td className="px-5 py-3 font-medium">{o.recipe?.product?.name ?? '—'}</td>
                   <td className="px-5 py-3 text-right">{o.plannedQty}</td>
                   <td className="px-5 py-3 text-right">{o.actualQty ?? '—'}</td>
                   <td className="px-5 py-3 text-gray-500">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE') : '—'}</td>
                   <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
-                  <td className="px-5 py-3 text-center">
+                  <td className="px-5 py-3 text-center space-x-1">
                     {nextStatus[o.status] && (
                       <button
                         onClick={() => updateStatus.mutate({ id: o.id, status: nextStatus[o.status] })}
                         className="text-xs bg-brand-100 text-brand-700 hover:bg-brand-200 px-2 py-1 rounded"
                       >
                         → {nextStatus[o.status].replace(/_/g,' ')}
+                      </button>
+                    )}
+                    {o.status !== 'COMPLETED' && o.status !== 'CANCELLED' && (
+                      <button
+                        onClick={() => setClosingOrder(o)}
+                        className="text-xs bg-green-600 text-white hover:bg-green-700 px-2 py-1 rounded"
+                      >
+                        Cerrar orden
                       </button>
                     )}
                   </td>
@@ -120,6 +173,187 @@ export default function Production() {
           </div>
         )}
         {!orders?.data?.length && !isLoading && <p className="text-center text-gray-400 py-8">Sin órdenes aún</p>}
+      </div>
+
+      {closingOrder && (
+        <CloseOrderModal
+          order={closingOrder}
+          onClose={() => setClosingOrder(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['production-orders'] });
+            setClosingOrder(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Close order modal ───────────────────────────────────────────────────────
+function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose: () => void; onSuccess: () => void }) {
+  // Fetch BOM for the recipe
+  const { data: bomData } = useQuery({
+    queryKey: ['recipe-bom', order.recipeId],
+    queryFn: () => api.get(`/v1/production/recipes/${order.recipeId}/bom`).then(r => r.data),
+  });
+
+  const recipe: Recipe | null = bomData?.data ?? null;
+  const yieldQty = recipe ? Number(recipe.yieldQty) || 1 : 1;
+  const scale = Number(order.plannedQty) / yieldQty;
+
+  // Local form state — initialized once the BOM loads
+  const [actualYieldQty, setActualYieldQty] = useState<string>(String(order.plannedQty));
+  const [completedAt, setCompletedAt] = useState<string>(() => {
+    const d = new Date();
+    d.setSeconds(0, 0);
+    // Datetime-local needs YYYY-MM-DDTHH:mm
+    const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    return iso;
+  });
+  const [finishedLotNumber, setFinishedLotNumber] = useState('');
+  const [finishedExpiryDate, setFinishedExpiryDate] = useState('');
+  const [notes, setNotes] = useState('');
+  const [consumptions, setConsumptions] = useState<Record<string, { actualQty: string; lotNumber: string }>>({});
+
+  // Default each line's actualQty to the scaled plan when BOM arrives.
+  useMemo(() => {
+    if (!recipe) return;
+    setConsumptions(prev => {
+      const next = { ...prev };
+      recipe.bomLines.forEach(l => {
+        if (!next[l.ingredientId]) {
+          const plannedConsumption = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+          next[l.ingredientId] = { actualQty: plannedConsumption.toFixed(3), lotNumber: '' };
+        }
+      });
+      return next;
+    });
+  }, [recipe?.id]);
+
+  const close = useMutation({
+    mutationFn: (body: any) => api.post(`/v1/production/orders/${order.id}/close`, body),
+    onSuccess: (resp: any) => {
+      const c = resp.data?.data?.cost;
+      toast.success(`Orden cerrada. Costo unitario: S/ ${c?.unitCost ?? '—'}`);
+      onSuccess();
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? 'Error al cerrar orden'),
+  });
+
+  const canSubmit = recipe && Number(actualYieldQty) > 0 && completedAt;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: '90vh' }}>
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div>
+            <h2 className="font-semibold text-gray-900">Cerrar orden de producción</h2>
+            <p className="text-xs text-gray-500">{order.orderNumber} — {order.recipe?.product?.name ?? ''}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-5 space-y-4">
+          {!recipe ? (
+            <div className="text-center text-gray-400 py-8">Cargando receta…</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad real producida <span className="text-red-500">*</span></label>
+                  <input type="number" min="0" step="0.01" className="input font-mono"
+                    value={actualYieldQty}
+                    onChange={e => setActualYieldQty(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha y hora real de término <span className="text-red-500">*</span></label>
+                  <input type="datetime-local" className="input"
+                    value={completedAt} onChange={e => setCompletedAt(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Lote producto terminado</label>
+                  <input className="input font-mono" placeholder="L-2026-001"
+                    value={finishedLotNumber} onChange={e => setFinishedLotNumber(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Vencimiento producto terminado</label>
+                  <input type="date" className="input"
+                    value={finishedExpiryDate} onChange={e => setFinishedExpiryDate(e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800 mb-2">Consumo real de materias primas</h3>
+                <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+                  <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Ingrediente</th>
+                      <th className="px-3 py-2 text-right">Planeado</th>
+                      <th className="px-3 py-2 text-right">Cant. real</th>
+                      <th className="px-3 py-2 text-left">Lote utilizado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {recipe.bomLines.map(l => {
+                      const planned = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+                      const c = consumptions[l.ingredientId] ?? { actualQty: '', lotNumber: '' };
+                      return (
+                        <tr key={l.id}>
+                          <td className="px-3 py-2 font-medium">{l.ingredient.name}</td>
+                          <td className="px-3 py-2 text-right font-mono text-gray-500 text-xs">
+                            {planned.toFixed(3)} {l.uom}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <input type="number" min="0" step="0.001"
+                              className="input font-mono text-right w-28"
+                              value={c.actualQty}
+                              onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value } }))} />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input className="input font-mono w-32"
+                              placeholder="Lote"
+                              value={c.lotNumber}
+                              onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, lotNumber: e.target.value } }))} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
+                <input className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Observaciones de la corrida" />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="p-5 border-t border-gray-100 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-secondary">Cancelar</button>
+          <button
+            disabled={!canSubmit || close.isPending}
+            onClick={() => close.mutate({
+              completedAt: new Date(completedAt).toISOString(),
+              actualYieldQty: Number(actualYieldQty),
+              finishedLotNumber: finishedLotNumber || undefined,
+              finishedExpiryDate: finishedExpiryDate || undefined,
+              notes: notes || undefined,
+              consumptions: Object.entries(consumptions)
+                .map(([ingredientId, v]) => ({
+                  ingredientId,
+                  actualQty: Number(v.actualQty) || 0,
+                  lotNumber: v.lotNumber || undefined,
+                }))
+                .filter(c => c.actualQty > 0),
+            })}
+            className="btn-primary flex items-center gap-2 disabled:opacity-50"
+          >
+            {close.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            Cerrar orden
+          </button>
+        </div>
       </div>
     </div>
   );

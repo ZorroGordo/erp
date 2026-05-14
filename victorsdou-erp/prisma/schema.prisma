@@ -51,6 +51,29 @@ enum ProductFamily {
   SECO
 }
 
+enum ProductLinea {
+  MOLDE
+  HOGAZA
+  VARIOS
+  ESTANDAR
+  SALADOS
+  DULCES
+  GALLETAS
+  HOJALDRES
+  POSTRES
+}
+
+enum RawMaterialFamily {
+  HARINA
+  SEMILLAS
+  LACTEOS
+  ENDULZANTES
+  GRASAS
+  ESPECIAS
+  ADITIVOS
+  COBERTURAS_RELLENOS
+}
+
 enum StockMovementType {
   PURCHASE_RECEIPT
   PRODUCTION_CONSUMPTION
@@ -400,7 +423,8 @@ model Ingredient {
   name           String
   category       String         // flour|sugar|fat|dairy|egg|flavoring|packaging|other
   productType    ProductType?   // RAW_MATERIAL | INTERMEDIATE | FINISHED
-  family         ProductFamily? // CONGELADO | SECO
+  family         ProductFamily? // CONGELADO | SECO (legacy; storage-temp split)
+  rawFamily      RawMaterialFamily? // family for raw-materials: Harina|Semillas|Lacteos|...
   baseUom        String         // kg|litre|unit|g|ml
   avgCostPen     Decimal        @default(0) @db.Decimal(14, 6)
   isPerishable   Boolean        @default(false)
@@ -446,6 +470,8 @@ model Warehouse {
   stockLevels    StockLevel[]
   stockMovements StockMovement[]
   reorderRules   ReorderRule[]
+  productStockLevels    ProductStockLevel[]
+  productStockMovements ProductStockMovement[]
 
   @@map("warehouses")
 }
@@ -499,6 +525,7 @@ model Batch {
   ingredient       Ingredient @relation(fields: [ingredientId], references: [id])
   supplierLotNo    String?
   receivedDate     DateTime
+  productionDate   DateTime?
   expiryDate       DateTime?
   qtyReceived      Decimal   @db.Decimal(14, 4)
   qtyRemaining     Decimal   @db.Decimal(14, 4)
@@ -640,6 +667,63 @@ model WasteLog {
   createdAt         DateTime        @default(now())
 
   @@map("waste_logs")
+}
+
+// ══════════════════════════════════════════════════════════════
+//  FINISHED-PRODUCT STOCK (parallel to StockLevel / StockMovement
+//  which are ingredient-only)
+// ══════════════════════════════════════════════════════════════
+
+model ProductStockLevel {
+  id              String    @id @default(uuid())
+  productId       String
+  product         Product   @relation(fields: [productId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  qtyOnHand       Decimal   @default(0) @db.Decimal(14, 4)
+  avgCostPen      Decimal   @default(0) @db.Decimal(14, 6)
+  lastMovementAt  DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([productId, warehouseId])
+  @@map("product_stock_levels")
+}
+
+model ProductStockMovement {
+  id                 String            @id @default(uuid())
+  type               StockMovementType
+  productId          String
+  product            Product           @relation(fields: [productId], references: [id])
+  warehouseId        String
+  warehouse          Warehouse         @relation(fields: [warehouseId], references: [id])
+  qtyIn              Decimal           @default(0) @db.Decimal(14, 4)
+  qtyOut             Decimal           @default(0) @db.Decimal(14, 4)
+  unitCostPen        Decimal           @db.Decimal(14, 6)
+  totalCostPen       Decimal           @db.Decimal(14, 4)
+  balanceAfter       Decimal           @db.Decimal(14, 4)
+  productionOrderRef String?
+  lotNumber          String?
+  productionDate     DateTime?
+  expiryDate         DateTime?
+  notes              String?
+  createdAt          DateTime          @default(now())
+  createdBy          String
+
+  @@index([productId, createdAt])
+  @@map("product_stock_movements")
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SETTINGS — global config
+// ══════════════════════════════════════════════════════════════
+
+model OverheadConfig {
+  id        String   @id @default("singleton")
+  rate      Decimal  @default(0.47) @db.Decimal(5, 4)
+  updatedAt DateTime @default(now()) @updatedAt
+  updatedBy String?
+
+  @@map("overhead_config")
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -829,6 +913,8 @@ model Product {
   description   String?
   productType   ProductType?    // RAW_MATERIAL | INTERMEDIATE | FINISHED
   family        ProductFamily?  // CONGELADO | SECO
+  linea         ProductLinea?   // for FINISHED products only
+  avgCostPen    Decimal         @default(0) @db.Decimal(14, 6)  // running WAC for finished goods
   categoryId    String
   category      ProductCategory @relation(fields: [categoryId], references: [id])
   basePricePen  Decimal         @db.Decimal(12, 4)
@@ -855,6 +941,8 @@ model Product {
   invoiceLines     InvoiceLineItem[]
   forecastLines    ForecastLine[]
   planLines        ProductionPlanLine[]
+  stockLevels      ProductStockLevel[]
+  stockMovements   ProductStockMovement[]
 
   @@map("products")
 }

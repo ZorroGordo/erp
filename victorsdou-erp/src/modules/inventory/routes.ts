@@ -39,6 +39,7 @@ export async function inventoryRoutes(app: FastifyInstance) {
       allergenFlags?: string[];
       productType?: string;
       family?: string;
+      rawFamily?: string;
     };
     const { prisma } = await import('../../lib/prisma');
     const ingredient = await prisma.ingredient.create({
@@ -53,6 +54,7 @@ export async function inventoryRoutes(app: FastifyInstance) {
         allergenFlags: body.allergenFlags ?? [],
         productType:   body.productType ? (body.productType as never) : null,
         family:        body.family ? (body.family as never) : null,
+        rawFamily:     body.rawFamily ? (body.rawFamily as never) : null,
       },
     });
     return reply.code(201).send({ data: ingredient });
@@ -111,14 +113,19 @@ export async function inventoryRoutes(app: FastifyInstance) {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PROCUREMENT', 'PRODUCTION', 'SUPER_ADMIN')],
   }, async (req, reply) => {
     const body = req.body as {
-      ingredientId: string;
-      warehouseId:  string;
-      qty:          number;
-      unitCost:     number;
-      invoiceRef?:  string;
-      poRef?:       string;
+      ingredientId:        string;
+      warehouseId:         string;
+      qty:                 number;
+      unitCost:            number;
+      invoiceRef?:         string;
+      poRef?:              string;
       productionOrderRef?: string;
-      notes?:       string;
+      notes?:              string;
+      // New: lot/batch tracking — lot + expiryDate are required at the UI
+      // layer; backend keeps them optional so legacy clients keep working.
+      lotNumber?:          string;
+      productionDate?:     string; // ISO date — for finished/intermediate batches
+      expiryDate?:         string; // ISO date — required for raw materials too
     };
 
     setAuditContext(req, 'inventory', 'PURCHASE_RECEIPT', body.ingredientId);
@@ -130,9 +137,17 @@ export async function inventoryRoutes(app: FastifyInstance) {
     ].filter(Boolean).join(' | ') || undefined;
 
     await InventoryService.registerReceipt({
-      ...body,
-      notes: notesWithPO,
-      createdBy: req.actor!.sub,
+      ingredientId:   body.ingredientId,
+      warehouseId:    body.warehouseId,
+      qty:            body.qty,
+      unitCost:       body.unitCost,
+      invoiceRef:     body.invoiceRef,
+      poRef:          body.poRef,
+      notes:          notesWithPO,
+      lotNumber:      body.lotNumber,
+      productionDate: body.productionDate,
+      expiryDate:     body.expiryDate,
+      createdBy:      req.actor!.sub,
     });
 
     return reply.code(201).send({ data: { success: true } });
