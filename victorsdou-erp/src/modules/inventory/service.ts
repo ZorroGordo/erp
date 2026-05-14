@@ -354,21 +354,47 @@ export async function upsertAlertConfig(
 }
 
 // ── Receipt registration (PURCHASE_RECEIPT with invoice+PO refs) ──────────────
+//
+// If a lotNumber is provided we also create a Batch row so expiry tracking
+// keeps working and consumptions can be linked back to a specific lot.
 
 export async function registerReceipt(input: {
-  ingredientId: string;
-  warehouseId:  string;
-  qty:          number;
-  unitCost:     number;
-  invoiceRef?:  string;
-  poRef?:       string;
-  notes?:       string;
-  createdBy:    string;
+  ingredientId:   string;
+  warehouseId:    string;
+  qty:            number;
+  unitCost:       number;
+  invoiceRef?:    string;
+  poRef?:         string;
+  notes?:         string;
+  lotNumber?:     string;
+  productionDate?: string;
+  expiryDate?:    string;
+  createdBy:      string;
 }) {
   const notesParts: string[] = [];
   if (input.invoiceRef) notesParts.push(`Factura: ${input.invoiceRef}`);
   if (input.poRef)      notesParts.push(`OC: ${input.poRef}`);
+  if (input.lotNumber)  notesParts.push(`Lote: ${input.lotNumber}`);
   if (input.notes)      notesParts.push(input.notes);
+
+  // Create a Batch row when lot info is supplied — this is what the
+  // expiry-alert / FEFO logic keys off.
+  let batchId: string | undefined;
+  if (input.lotNumber || input.expiryDate || input.productionDate) {
+    const batch = await prisma.batch.create({
+      data: {
+        ingredientId:   input.ingredientId,
+        supplierLotNo:  input.lotNumber ?? null,
+        receivedDate:   new Date(),
+        productionDate: input.productionDate ? new Date(input.productionDate) : null,
+        expiryDate:     input.expiryDate ? new Date(input.expiryDate) : null,
+        qtyReceived:    input.qty,
+        qtyRemaining:   input.qty,
+        unitCostPen:    input.unitCost,
+      },
+    });
+    batchId = batch.id;
+  }
 
   await recordStockIn({
     type:         'PURCHASE_RECEIPT',
@@ -378,6 +404,7 @@ export async function registerReceipt(input: {
     unitCost:     input.unitCost,
     refDocType:   input.invoiceRef ? 'invoice' : undefined,
     refDocId:     input.invoiceRef ?? undefined,
+    batchId,
     notes:        notesParts.join(' | ') || undefined,
     createdBy:    input.createdBy,
   });

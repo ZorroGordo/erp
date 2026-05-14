@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf, requireAuth } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { getCache, setCache, CACHE_KEYS } from '../../lib/redis';
+import { getOverheadRate } from '../../lib/settings';
 
 // ── Auto-code generation helpers ──────────────────────────────────────────
 
@@ -56,9 +57,12 @@ function convertQtyToKgOrL(qty: number, uom: string): number {
   return qty;
 }
 
-async function getProductCosts(productIds: string[]): Promise<Record<string, { rawCost: number; overheadCost: number; totalCost: number }>> {
+async function getProductCosts(
+  productIds: string[],
+  overheadRate?: number,
+): Promise<Record<string, { rawCost: number; overheadCost: number; totalCost: number }>> {
   if (productIds.length === 0) return {};
-  const OVERHEAD_RATE = 0.47; // 47% default
+  const OVERHEAD_RATE = overheadRate ?? await getOverheadRate();
 
   const recipes = await prisma.recipe.findMany({
     where: { productId: { in: productIds }, status: 'ACTIVE' },
@@ -90,13 +94,14 @@ export async function catalogRoutes(app: FastifyInstance) {
 
   // ── List products (with costs) ──────────────────────────────────────────
   app.get('/', { preHandler: [requireAuth()] }, async (req, reply) => {
-    const q = req.query as { categoryId?: string; search?: string; active?: string; productType?: string; family?: string };
+    const q = req.query as { categoryId?: string; search?: string; active?: string; productType?: string; family?: string; linea?: string };
     const products = await prisma.product.findMany({
       where: {
         isActive: q.active !== 'false',
         ...(q.categoryId ? { categoryId: q.categoryId } : {}),
         ...(q.productType ? { productType: q.productType as never } : {}),
         ...(q.family ? { family: q.family as never } : {}),
+        ...(q.linea ? { linea: q.linea as never } : {}),
         ...(q.search ? { name: { contains: q.search, mode: 'insensitive' } } : {}),
       },
       include: { category: true },
@@ -140,6 +145,7 @@ export async function catalogRoutes(app: FastifyInstance) {
       unitOfSale?: string;
       productType?: string;
       family?: string;
+      linea?: string;
       autoCode?: boolean;
       categoryCode?: string; // 2-letter short code for the category
     };
@@ -160,6 +166,7 @@ export async function catalogRoutes(app: FastifyInstance) {
         unitOfSale: body.unitOfSale ?? 'unit',
         productType: body.productType ? (body.productType as never) : null,
         family: body.family ? (body.family as never) : null,
+        linea: body.linea ? (body.linea as never) : null,
       },
     });
     return reply.code(201).send({ data: product });

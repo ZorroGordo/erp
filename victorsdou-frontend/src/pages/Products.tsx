@@ -14,6 +14,7 @@ interface Product {
   id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { id: string; name: string };
   productType?: 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED' | null;
   family?: 'CONGELADO' | 'SECO' | null;
+  linea?: 'MOLDE' | 'HOGAZA' | 'VARIOS' | 'ESTANDAR' | 'SALADOS' | 'DULCES' | 'GALLETAS' | 'HOJALDRES' | 'POSTRES' | null;
   costs?: { rawCost: number; overheadCost: number; totalCost: number } | null;
   ecommerceEnabled?: boolean; ecommercePrice?: string | null;
   ecommerceImages?: string[]; ecommerceMainImageIndex?: number;
@@ -21,6 +22,12 @@ interface Product {
 
 const PRODUCT_TYPE_LABELS: Record<string, string> = { RAW_MATERIAL: 'Materia prima', INTERMEDIATE: 'Intermedio', FINISHED: 'Terminado' };
 const FAMILY_LABELS: Record<string, string> = { CONGELADO: 'Congelado', SECO: 'Seco' };
+const LINEA_LABELS: Record<string, string> = {
+  MOLDE: 'Molde', HOGAZA: 'Hogaza', VARIOS: 'Varios', ESTANDAR: 'Estándar',
+  SALADOS: 'Salados', DULCES: 'Dulces', GALLETAS: 'Galletas',
+  HOJALDRES: 'Hojaldres', POSTRES: 'Postres',
+};
+const FINISHED_CATEGORIES = ['Masa Madre', 'Brioche', 'Tradicionales', 'Boyería'];
 interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: number; stdUnit: string; avgCost: number; lineCost: number; }
 
 // ── Cost helpers ───────────────────────────────────────────────────────────
@@ -240,7 +247,7 @@ export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, autoCode: false });
+  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, linea: '' as string, autoCode: false });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
@@ -250,11 +257,27 @@ export default function Products() {
     ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
   });
   const [filterEcommerce, setFilterEcommerce] = useState(false);
+  const [activeTab, setActiveTab] = useState<'ALL' | 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED'>('ALL');
   const ecomImgRef = useRef<HTMLInputElement>(null);
   const [editingRecipe, setEditingRecipe] = useState<{ product: Product; recipe: Recipe | null } | null>(null);
   const [overheadRate, setOverheadRate] = useState(0.47);
   const [editingOverhead, setEditingOverhead] = useState(false);
   const [overheadInput, setOverheadInput] = useState('47');
+  const { data: overheadData } = useQuery({
+    queryKey: ['overhead-rate'],
+    queryFn: () => api.get('/v1/settings/overhead').then(r => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  // Sync server rate to local state once it loads.
+  useMemo(() => {
+    const r = overheadData?.data?.rate;
+    if (typeof r === 'number') setOverheadRate(r);
+  }, [overheadData]);
+  const saveOverhead = useMutation({
+    mutationFn: (rate: number) => api.put('/v1/settings/overhead', { rate }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['overhead-rate'] }); toast.success('Tasa de overhead guardada'); },
+    onError:   () => toast.error('No se pudo guardar la tasa'),
+  });
 
   const { data: productsData, isLoading } = useQuery({
     queryKey: ['products'],
@@ -298,6 +321,7 @@ export default function Products() {
       const payload: any = { name: data.name, basePricePen: data.basePricePen, categoryId: data.categoryId };
       if (data.productType) payload.productType = data.productType;
       if (data.family) payload.family = data.family;
+      if (data.linea && data.productType === 'FINISHED') payload.linea = data.linea;
       if (data.autoCode && data.productType && data.family) {
         payload.autoCode = true;
         const cat = categories.find((c: any) => c.id === data.categoryId);
@@ -312,7 +336,7 @@ export default function Products() {
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
       toast.success('Producto creado');
       setShowCreate(false);
-      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', autoCode: false });
+      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', linea: '', autoCode: false });
     },
     onError: () => toast.error('Error al crear producto'),
   });
@@ -386,7 +410,8 @@ export default function Products() {
   }
 
   const allProducts: Product[] = productsData?.data ?? [];
-  const products: Product[] = filterEcommerce ? allProducts.filter(p => p.ecommerceEnabled) : allProducts;
+  const productsAfterEcom: Product[] = filterEcommerce ? allProducts.filter(p => p.ecommerceEnabled) : allProducts;
+  const products: Product[] = activeTab === 'ALL' ? productsAfterEcom : productsAfterEcom.filter(p => p.productType === activeTab);
   const categories = categoriesData?.data ?? [];
   const activeRecipe: Recipe | null = recipeData?.data?.[0] ?? null;
   const expandedProduct = products.find(p => p.id === expandedId);
@@ -396,7 +421,11 @@ export default function Products() {
 
   const commitOverhead = () => {
     const v = parseFloat(overheadInput);
-    if (!isNaN(v) && v >= 0 && v < 100) setOverheadRate(v / 100);
+    if (!isNaN(v) && v >= 0 && v < 100) {
+      const rate = v / 100;
+      setOverheadRate(rate);
+      saveOverhead.mutate(rate);
+    }
     setEditingOverhead(false);
   };
 
@@ -692,6 +721,23 @@ export default function Products() {
         </div>
       </div>
 
+      <div className="flex items-center gap-1 border-b border-gray-200 mb-2">
+        {[
+          { key: 'ALL',           label: 'Todos' },
+          { key: 'RAW_MATERIAL',  label: 'Materias primas' },
+          { key: 'INTERMEDIATE',  label: 'Intermedios' },
+          { key: 'FINISHED',      label: 'Terminados' },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key as any)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === t.key ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
         <Settings2 className="w-4 h-4 text-amber-600 shrink-0" />
         <span className="text-amber-800 font-medium">Tasa de gastos generales:</span>
@@ -740,11 +786,23 @@ export default function Products() {
                 <option value="SECO">Seco (SE)</option>
               </select>
             </div>
+            {productForm.productType === 'FINISHED' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Línea</label>
+                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.linea} onChange={e => setProductForm(f => ({ ...f, linea: e.target.value }))}>
+                  <option value="">— Seleccionar —</option>
+                  {Object.entries(LINEA_LABELS).map(([k,l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Categoria</label>
               <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
                 <option value="">Sin categoria</option>
-                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {(productForm.productType === 'FINISHED'
+                    ? categories.filter((c: any) => FINISHED_CATEGORIES.includes(c.name))
+                    : categories
+                  ).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div>
