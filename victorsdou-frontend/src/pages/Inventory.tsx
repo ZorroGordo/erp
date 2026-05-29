@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import {
   AlertTriangle, Clock, Package, Plus, LayoutGrid, List,
   Settings, X, Loader2, ArrowDownToLine, FileText,
-  ShoppingCart, Bell,
+  ShoppingCart, Bell, Layers,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
@@ -94,12 +94,13 @@ function GaugeMeter({ available, alertThr, minThr }: { available: number; alertT
 
 // ── IngredientCard ────────────────────────────────────────────────────────────
 function IngredientCard({
-  item, onReceive, onSettings, onHistory,
+  item, onReceive, onSettings, onHistory, onLotes,
 }: {
   item:       IngredientDashItem;
   onReceive:  (i: IngredientDashItem) => void;
   onSettings: (i: IngredientDashItem) => void;
   onHistory:  (i: IngredientDashItem) => void;
+  onLotes:    (i: IngredientDashItem) => void;
 }) {
   const UNITS: DashUnit[] = ['qty', 'pct', 'und'];
   const [unit, setUnit] = useState<DashUnit>((item.alertConfig?.dashboardUnit as DashUnit) ?? 'qty');
@@ -134,6 +135,7 @@ function IngredientCard({
       <div className="flex items-start justify-between gap-1">
         <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold leading-tight">{item.category}</span>
         <div className="flex gap-0.5 flex-shrink-0">
+          <button onClick={() => onLotes(item)}    className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Ver lotes"><Layers size={13} /></button>
           <button onClick={() => onHistory(item)}  className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Historial"><FileText  size={13} /></button>
           <button onClick={() => onSettings(item)} className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Alertas">   <Settings  size={13} /></button>
         </div>
@@ -237,7 +239,7 @@ function ReceiveModal({
         <div className="p-5 space-y-4 overflow-y-auto max-h-[70vh]">
           {/* Ingredient */}
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Ingrediente <span className="text-red-500">*</span></label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Materia prima <span className="text-red-500">*</span></label>
             <select className="input" value={ingredientId} onChange={e => setIngredientId(e.target.value)}>
               <option value="">— Seleccionar —</option>
               {ingredients.map(i => <option key={i.id} value={i.id}>{i.name} ({i.baseUom})</option>)}
@@ -631,6 +633,65 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
   );
 }
 
+// ── LotesModal — lotes (batches) with stock for one materia prima / intermedio ──
+function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['ingredient-batches', item.id],
+    queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/batches`).then(r => r.data),
+  });
+  const batches: any[] = data?.data ?? [];
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '85vh' }}>
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Layers size={18} className="text-brand-500" />
+            <div>
+              <h2 className="font-semibold text-gray-900">Lotes en inventario</h2>
+              <p className="text-xs text-gray-500">{item.name} · {item.baseUom}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-5">
+          {isLoading ? (
+            <div className="text-center text-gray-400 py-8">Cargando lotes…</div>
+          ) : batches.length === 0 ? (
+            <div className="text-center text-gray-400 py-8">Sin lotes con stock. Registra una entrada con número de lote para crear uno.</div>
+          ) : (
+            <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+              <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Lote</th>
+                  <th className="px-3 py-2 text-left">Recibido</th>
+                  <th className="px-3 py-2 text-left">Producción</th>
+                  <th className="px-3 py-2 text-left">Vence</th>
+                  <th className="px-3 py-2 text-right">Recibido</th>
+                  <th className="px-3 py-2 text-right">Disponible</th>
+                  <th className="px-3 py-2 text-right">Costo unit.</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {batches.map(b => (
+                  <tr key={b.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 font-mono">{b.supplierLotNo || <span className="text-gray-300">sin lote</span>}</td>
+                    <td className="px-3 py-2 text-gray-500">{b.receivedDate ? new Date(b.receivedDate).toLocaleDateString('es-PE') : '—'}</td>
+                    <td className="px-3 py-2 text-gray-500">{b.productionDate ? new Date(b.productionDate).toLocaleDateString('es-PE') : '—'}</td>
+                    <td className="px-3 py-2 text-gray-500">{b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('es-PE') : '—'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-400">{Number(b.qtyReceived).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">{Number(b.qtyRemaining).toFixed(2)} {item.baseUom}</td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-500">S/ {Number(b.unitCostPen).toFixed(4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Inventory() {
   const qc = useQueryClient();
@@ -639,6 +700,7 @@ export default function Inventory() {
   const [receiveItem,  setReceiveItem]  = useState<IngredientDashItem | undefined>();
   const [settingsItem, setSettingsItem] = useState<IngredientDashItem | null>(null);
   const [historyItem,  setHistoryItem]  = useState<IngredientDashItem | null>(null);
+  const [lotesItem,    setLotesItem]    = useState<IngredientDashItem | null>(null);
   const [filterWarehouse, setFilterWarehouse] = useState<string>('');
   const [filterType,      setFilterType]      = useState<string>('');
 
@@ -685,7 +747,7 @@ export default function Inventory() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Inventario</h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            {ingredients.length} ingrediente{ingredients.length !== 1 ? 's' : ''}{(filterWarehouse || filterType) ? ' (filtrado)' : ' activos'}
+            {ingredients.length} {ingredients.length !== 1 ? 'materias primas' : 'materia prima'}{(filterWarehouse || filterType) ? ' (filtrado)' : ' activos'}
             {criticalCount > 0 && <span className="text-red-600 ml-2 font-medium">· {criticalCount} crítico(s)</span>}
             {alertCount    > 0 && <span className="text-amber-600 ml-2 font-medium">· {alertCount} con alerta</span>}
           </p>
@@ -723,7 +785,7 @@ export default function Inventory() {
               sheetName="Inventario"
               data={ingredients}
               columns={[
-                { header: 'Ingrediente', key: 'name', width: 28 },
+                { header: 'Materia prima', key: 'name', width: 28 },
                 { header: 'SKU', key: 'sku', width: 14 },
                 { header: 'Tipo', key: 'productType', width: 10, format: (v: any) => v ? (INGREDIENT_TYPE_LABELS[v] ?? v) : '—' },
                 { header: 'Familia', key: 'family', width: 12, format: (v: any) => v ? (INGREDIENT_FAMILY_LABELS[v] ?? v) : '—' },
@@ -760,7 +822,7 @@ export default function Inventory() {
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium text-red-800">{criticalCount} ingrediente(s) en nivel crítico</p>
+            <p className="font-medium text-red-800">{criticalCount} materia(s) prima(s) en nivel crítico</p>
             <p className="text-sm text-red-600">{ingredients.filter(i => i.status === 'critical').map(i => i.name).join(', ')}</p>
           </div>
         </div>
@@ -769,7 +831,7 @@ export default function Inventory() {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium text-amber-800">{alertCount} ingrediente(s) bajo umbral de alerta</p>
+            <p className="font-medium text-amber-800">{alertCount} materia(s) prima(s) bajo umbral de alerta</p>
             <p className="text-sm text-amber-600">{ingredients.filter(i => i.status === 'alert').map(i => i.name).join(', ')}</p>
           </div>
         </div>
@@ -777,7 +839,7 @@ export default function Inventory() {
       {reorder?.data?.length > 0 && (
         <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-orange-500 flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-orange-700"><strong>{reorder.data.length}</strong> ingrediente(s) bajo punto de reorden configurado.</p>
+          <p className="text-sm text-orange-700"><strong>{reorder.data.length}</strong> materia(s) prima(s) bajo punto de reorden configurado.</p>
         </div>
       )}
       {expiry?.data?.length > 0 && (
@@ -803,8 +865,8 @@ export default function Inventory() {
         ) : ingredients.length === 0 ? (
           <div className="card p-14 text-center">
             <Package size={40} className="mx-auto text-gray-200 mb-3" />
-            <p className="text-gray-500 font-medium">Sin ingredientes activos</p>
-            <p className="text-gray-400 text-sm mt-1">Agrega ingredientes desde el módulo de Catálogo.</p>
+            <p className="text-gray-500 font-medium">Sin materias primas activas</p>
+            <p className="text-gray-400 text-sm mt-1">Agrega materias primas desde el módulo de Catálogo.</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -815,6 +877,7 @@ export default function Inventory() {
                 onReceive={i => { setReceiveItem(i); setShowReceive(true); }}
                 onSettings={setSettingsItem}
                 onHistory={setHistoryItem}
+                onLotes={setLotesItem}
               />
             ))}
           </div>
@@ -826,7 +889,7 @@ export default function Inventory() {
         <div className="card overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
             <Package size={18} className="text-gray-400" />
-            <h2 className="font-semibold text-gray-800">Ingredientes</h2>
+            <h2 className="font-semibold text-gray-800">Materias primas</h2>
             <span className="ml-auto text-sm text-gray-400">{ingredients.length} items</span>
           </div>
           {isLoading ? (
@@ -836,7 +899,7 @@ export default function Inventory() {
               <table className="w-full text-sm">
                 <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
                   <tr>
-                    <th className="px-5 py-3 text-left">Ingrediente</th>
+                    <th className="px-5 py-3 text-left">Materia prima</th>
                     <th className="px-5 py-3 text-left">Tipo</th>
                     <th className="px-5 py-3 text-left">Categoría</th>
                     <th className="px-5 py-3 text-right">Disponible</th>
@@ -853,7 +916,7 @@ export default function Inventory() {
                     const s = STYLE[item.status];
                     return (
                       <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-5 py-3 font-medium text-gray-900">{item.name}</td>
+                        <td className="px-5 py-3 font-medium text-gray-900"><button onClick={() => setLotesItem(item)} className="text-left hover:text-brand-600 hover:underline" title="Ver lotes">{item.name}</button></td>
                         <td className="px-5 py-3 text-xs">
                           {item.productType && <span className="inline-block bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{INGREDIENT_TYPE_LABELS[item.productType] ?? item.productType}</span>}
                           {item.family && <span className="inline-block bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded ml-1">{INGREDIENT_FAMILY_LABELS[item.family] ?? item.family}</span>}
@@ -875,6 +938,10 @@ export default function Inventory() {
                             <button onClick={() => { setReceiveItem(item); setShowReceive(true); }}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Registrar entrada">
                               <ArrowDownToLine size={14} />
+                            </button>
+                            <button onClick={() => setLotesItem(item)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Ver lotes">
+                              <Layers size={14} />
                             </button>
                             <button onClick={() => setHistoryItem(item)}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors" title="Historial">
@@ -911,6 +978,9 @@ export default function Inventory() {
       )}
       {historyItem && (
         <HistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />
+      )}
+      {lotesItem && (
+        <LotesModal item={lotesItem} onClose={() => setLotesItem(null)} />
       )}
     </div>
   );
