@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Factory, X, CheckCircle2, Loader2, LayoutGrid, Table as TableIcon } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
@@ -336,22 +336,28 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
   const [finishedLotNumber, setFinishedLotNumber] = useState('');
   const [finishedExpiryDate, setFinishedExpiryDate] = useState('');
   const [notes, setNotes] = useState('');
-  const [consumptions, setConsumptions] = useState<Record<string, { actualQty: string; lotNumber: string; batchId: string }>>({});
+  const [consumptions, setConsumptions] = useState<Record<string, { actualQty: string; lotNumber: string; batchId: string; manual: boolean }>>({});
 
-  // Default each line's actualQty to the scaled plan when BOM arrives.
-  useMemo(() => {
+  // Auto-fill each line's consumption from the recipe, scaled to the units actually
+  // produced. Re-scales when the produced quantity changes, but never overwrites a
+  // line the user edited by hand (so over/under-use can still be tracked).
+  useEffect(() => {
     if (!recipe) return;
+    const producedScale = (Number(actualYieldQty) || 0) / yieldQty;
     setConsumptions(prev => {
       const next = { ...prev };
       recipe.bomLines.forEach(l => {
-        if (!next[l.ingredientId]) {
-          const plannedConsumption = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
-          next[l.ingredientId] = { actualQty: plannedConsumption.toFixed(3), lotNumber: '', batchId: '' };
+        const perBatch = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * producedScale;
+        const existing = next[l.ingredientId];
+        if (!existing) {
+          next[l.ingredientId] = { actualQty: perBatch.toFixed(3), lotNumber: '', batchId: '', manual: false };
+        } else if (!existing.manual) {
+          next[l.ingredientId] = { ...existing, actualQty: perBatch.toFixed(3) };
         }
       });
       return next;
     });
-  }, [recipe?.id]);
+  }, [recipe?.id, actualYieldQty]);
 
   const close = useMutation({
     mutationFn: (body: any) => api.post(`/v1/production/orders/${order.id}/close`, body),
@@ -419,7 +425,7 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                   <tbody className="divide-y divide-gray-100">
                     {recipe.bomLines.map(l => {
                       const planned = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
-                      const c = consumptions[l.ingredientId] ?? { actualQty: '', lotNumber: '', batchId: '' };
+                      const c = consumptions[l.ingredientId] ?? { actualQty: '', lotNumber: '', batchId: '', manual: false };
                       return (
                         <tr key={l.id}>
                           <td className="px-3 py-2 font-medium">{l.ingredient.name}</td>
@@ -430,7 +436,7 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                             <input type="number" min="0" step="0.001"
                               className="input font-mono text-right w-28"
                               value={c.actualQty}
-                              onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value } }))} />
+                              onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value, manual: true } }))} />
                           </td>
                           <td className="px-3 py-2 w-56">
                             <BatchSelect
