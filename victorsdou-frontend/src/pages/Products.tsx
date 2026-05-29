@@ -27,7 +27,7 @@ const LINEA_LABELS: Record<string, string> = {
   SALADOS: 'Salados', DULCES: 'Dulces', GALLETAS: 'Galletas',
   HOJALDRES: 'Hojaldres', POSTRES: 'Postres',
 };
-const FINISHED_CATEGORIES = ['Masa Madre', 'Brioche', 'Tradicionales', 'Boyería'];
+const FINISHED_CATEGORIES = ['Masa Madre', 'Brioche', 'Tradicionales', 'Bollería'];
 interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: number; stdUnit: string; avgCost: number; lineCost: number; }
 
 // ── Cost helpers ───────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, linea: '' as string, autoCode: false });
+  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, linea: '' as string, unitOfSale: 'unidades', autoCode: false });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
@@ -318,11 +318,18 @@ export default function Products() {
 
   const createProduct = useMutation({
     mutationFn: (data: typeof productForm) => {
-      const payload: any = { name: data.name, basePricePen: data.basePricePen, categoryId: data.categoryId };
+      const payload: any = {
+        name: data.name,
+        basePricePen: data.productType === 'FINISHED' ? (Number(data.basePricePen) || 0) : 0,
+        unitOfSale: data.unitOfSale || 'unidades',
+      };
       if (data.productType) payload.productType = data.productType;
-      if (data.family) payload.family = data.family;
-      if (data.linea && data.productType === 'FINISHED') payload.linea = data.linea;
-      if (data.autoCode && data.productType && data.family) {
+      if (data.family && data.productType !== 'INTERMEDIATE') payload.family = data.family;
+      if (data.productType === 'FINISHED') {
+        if (data.categoryId) payload.categoryId = data.categoryId;
+        if (data.linea) payload.linea = data.linea;
+      }
+      if (data.autoCode && data.productType && data.family && data.productType !== 'INTERMEDIATE') {
         payload.autoCode = true;
         const cat = categories.find((c: any) => c.id === data.categoryId);
         payload.categoryCode = cat ? cat.name.substring(0, 2).toUpperCase() : 'XX';
@@ -336,7 +343,7 @@ export default function Products() {
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
       toast.success('Producto creado');
       setShowCreate(false);
-      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', linea: '', autoCode: false });
+      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', linea: '', unitOfSale: 'unidades', autoCode: false });
     },
     onError: () => toast.error('Error al crear producto'),
   });
@@ -771,38 +778,50 @@ export default function Products() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de producto</label>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.productType} onChange={e => setProductForm(f => ({ ...f, productType: e.target.value }))}>
+              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.productType} onChange={e => setProductForm(f => ({ ...f, productType: e.target.value, family: '', linea: '', categoryId: '', autoCode: false }))}>
                 <option value="">— Seleccionar —</option>
                 <option value="RAW_MATERIAL">Materia prima (MP)</option>
                 <option value="INTERMEDIATE">Producto intermedio (PI)</option>
                 <option value="FINISHED">Producto terminado (PT)</option>
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Familia</label>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.family} onChange={e => setProductForm(f => ({ ...f, family: e.target.value }))}>
-                <option value="">— Seleccionar —</option>
-                <option value="CONGELADO">Congelado (CO)</option>
-                <option value="SECO">Seco (SE)</option>
-              </select>
-            </div>
+            {(productForm.productType === 'RAW_MATERIAL' || productForm.productType === 'FINISHED') && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Familia</label>
+                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.family} onChange={e => setProductForm(f => ({ ...f, family: e.target.value }))}>
+                  <option value="">— Seleccionar —</option>
+                  <option value="CONGELADO">Congelado (CO)</option>
+                  <option value="SECO">Seco (SE)</option>
+                </select>
+              </div>
+            )}
             {productForm.productType === 'FINISHED' && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Línea</label>
                 <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.linea} onChange={e => setProductForm(f => ({ ...f, linea: e.target.value }))}>
                   <option value="">— Seleccionar —</option>
-                  {Object.entries(LINEA_LABELS).map(([k,l]) => <option key={k} value={k}>{l}</option>)}
+                  {Object.entries(LINEA_LABELS).filter(([k]) => k !== 'ESTANDAR').map(([k,l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+            )}
+            {productForm.productType === 'FINISHED' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Categoria</label>
+                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
+                  <option value="">Sin categoria</option>
+                  {categories.filter((c: any) => FINISHED_CATEGORIES.includes(c.name)).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
             )}
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Categoria</label>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
-                <option value="">Sin categoria</option>
-                {(productForm.productType === 'FINISHED'
-                    ? categories.filter((c: any) => FINISHED_CATEGORIES.includes(c.name))
-                    : categories
-                  ).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <label className="block text-xs font-medium text-gray-600 mb-1">Unidad de medida</label>
+              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.unitOfSale} onChange={e => setProductForm(f => ({ ...f, unitOfSale: e.target.value }))}>
+                <option value="gramos">Gramos (g)</option>
+                <option value="kilogramos">Kilogramos (kg)</option>
+                <option value="litros">Litros (l)</option>
+                <option value="ml">Mililitros (ml)</option>
+                <option value="unidades">Unidades</option>
+                <option value="porciones">Porciones</option>
               </select>
             </div>
             <div>
@@ -819,17 +838,21 @@ export default function Products() {
               ) : (
                 <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" type="text" placeholder="ej. PT-CO-PA-001" value={productForm.sku} onChange={e => setProductForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))} />
               )}
-              <label className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 cursor-pointer">
-                <input type="checkbox" checked={productForm.autoCode} onChange={e => setProductForm(f => ({ ...f, autoCode: e.target.checked }))}
-                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" disabled={!productForm.productType || !productForm.family} />
-                Auto-generar código
-                {(!productForm.productType || !productForm.family) && <span className="text-amber-500">(selecciona tipo y familia)</span>}
-              </label>
+              {(productForm.productType === 'RAW_MATERIAL' || productForm.productType === 'FINISHED') && (
+                <label className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 cursor-pointer">
+                  <input type="checkbox" checked={productForm.autoCode} onChange={e => setProductForm(f => ({ ...f, autoCode: e.target.checked }))}
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" disabled={!productForm.productType || !productForm.family} />
+                  Auto-generar código
+                  {(!productForm.productType || !productForm.family) && <span className="text-amber-500">(selecciona tipo y familia)</span>}
+                </label>
+              )}
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Precio base (S/.)</label>
-              <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" type="number" step="0.01" placeholder="0.00" value={productForm.basePricePen} onChange={e => setProductForm(f => ({ ...f, basePricePen: e.target.value }))} />
-            </div>
+            {productForm.productType === 'FINISHED' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Precio base (S/.)</label>
+                <input className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" type="number" step="0.01" placeholder="0.00" value={productForm.basePricePen} onChange={e => setProductForm(f => ({ ...f, basePricePen: e.target.value }))} />
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <button onClick={() => createProduct.mutate(productForm)} disabled={!productForm.name || (!productForm.sku && !productForm.autoCode)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40">Crear</button>
