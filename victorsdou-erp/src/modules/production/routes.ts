@@ -24,9 +24,23 @@ export async function productionRoutes(app: FastifyInstance) {
       plannedQty: number; scheduledDate: string;
       shift?: string; linkedSalesOrderIds?: string[]; notes?: string;
     };
+    const recipe = await prisma.recipe.findUnique({ where: { id: body.recipeId } });
+    if (!recipe) return reply.code(422).send({ error: 'Receta no encontrada' });
+    const scheduled = body.scheduledDate ? new Date(body.scheduledDate) : new Date();
+    if (isNaN(scheduled.getTime())) return reply.code(400).send({ error: 'Fecha programada invalida' });
+    if (!body.plannedQty || body.plannedQty <= 0) return reply.code(400).send({ error: 'Cantidad planificada invalida' });
     const order = await prisma.productionOrder.create({
-      data: { ...body, scheduledDate: new Date(body.scheduledDate),
-        status: 'DRAFT', createdBy: req.actor!.sub },
+      data: {
+        recipeId:            body.recipeId,
+        recipeVersion:       recipe.version,
+        plannedQty:          body.plannedQty,
+        scheduledDate:       scheduled,
+        shift:               body.shift ?? null,
+        linkedSalesOrderIds: body.linkedSalesOrderIds ?? [],
+        notes:               body.notes ?? null,
+        status:              'DRAFT',
+        createdBy:           req.actor!.sub,
+      },
     });
     return reply.code(201).send({ data: order });
   });

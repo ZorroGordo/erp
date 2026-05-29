@@ -49,7 +49,7 @@ function qtyToGrams(qty: number, uom: string): number {
   return factors[u] !== undefined ? qty * factors[u] : 0;
 }
 
-function computeCosts(recipe: Recipe | null, overheadRate: number) {
+function computeCosts(recipe: Recipe | null, overheadRate: number, applyOverhead = true) {
   if (!recipe) return { costLines: [] as CostLine[], totalRawCost: 0, effectiveUnitCost: 0, overheadCost: 0, totalProductCost: 0, doughWeightG: 0 };
   const yieldQty = Number(recipe.yieldQty) || 1;
   const costLines: CostLine[] = recipe.bomLines.map(l => {
@@ -61,7 +61,7 @@ function computeCosts(recipe: Recipe | null, overheadRate: number) {
   });
   const totalRawCost = costLines.reduce((s, l) => s + l.lineCost, 0);
   const effectiveUnitCost = totalRawCost / yieldQty;
-  const safeRate = Math.min(Math.max(overheadRate, 0), 0.99);
+  const safeRate = applyOverhead ? Math.min(Math.max(overheadRate, 0), 0.99) : 0;
   const totalProductCost = effectiveUnitCost / (1 - safeRate);
   const overheadCost = totalProductCost - effectiveUnitCost;
   const totalWeightG = recipe.bomLines.reduce((sum, l) => {
@@ -256,12 +256,12 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
 
             {/* Ingredient search */}
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Agregar ingrediente <span className="text-gray-300 normal-case font-normal">· {allowedLabel}</span></label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Agregar materia prima <span className="text-gray-300 normal-case font-normal">· {allowedLabel}</span></label>
               <div className="relative">
                 <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-indigo-300">
                   <Search size={14} className="text-gray-400 flex-shrink-0" />
                   <input className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
-                    placeholder="Buscar ingrediente del inventario…"
+                    placeholder="Buscar materia prima del inventario…"
                     value={ingSearch} onChange={e => { setIngSearch(e.target.value); setIngOpen(true); }}
                     onFocus={() => setIngOpen(true)} />
                   {ingSearch && <button onClick={() => { setIngSearch(''); setIngOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
@@ -285,7 +285,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
             {lines.length > 0 && (
               <div className="border border-indigo-200 rounded-xl overflow-hidden">
                 <div className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 bg-indigo-50 text-xs font-semibold text-indigo-600 uppercase tracking-wide">
-                  <span>Ingrediente</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
+                  <span>Materia prima</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
                 </div>
                 {lines.map(l => (
                   <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
@@ -306,7 +306,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
               </div>
             )}
             {lines.length === 0 && (
-              <p className="text-sm text-gray-400 italic text-center py-4">Sin ingredientes. Busca y agrega ingredientes arriba.</p>
+              <p className="text-sm text-gray-400 italic text-center py-4">Sin materias primas. Busca y agrega materias primas arriba.</p>
             )}
           </div>
         )}
@@ -403,8 +403,9 @@ export default function Products() {
     recipes.forEach((recipe: Recipe) => {
       if (recipe.status !== 'ACTIVE') return;
       if (!recipe.bomLines || recipe.bomLines.length === 0) return;
-      const costs = computeCosts(recipe, overheadRate);
       const product = products.find((p: Product) => p.id === recipe.productId);
+      const applyOverhead = product?.productType === 'INTERMEDIATE' || product?.productType === 'FINISHED';
+      const costs = computeCosts(recipe, overheadRate, applyOverhead);
       const basePrice = product ? Number(product.basePricePen) : 0;
       map[recipe.productId] = { totalProductCost: costs.totalProductCost, grossMargin: basePrice - costs.totalProductCost };
     });
@@ -523,7 +524,7 @@ export default function Products() {
   const activeRecipe: Recipe | null = recipeData?.data?.[0] ?? null;
   const expandedProduct = products.find(p => p.id === expandedId);
   const basePrice = expandedProduct ? Number(expandedProduct.basePricePen) : 0;
-  const { costLines, effectiveUnitCost, overheadCost, totalProductCost, doughWeightG } = computeCosts(activeRecipe, overheadRate);
+  const { costLines, effectiveUnitCost, overheadCost, totalProductCost, doughWeightG } = computeCosts(activeRecipe, overheadRate, expandedProduct?.productType === 'INTERMEDIATE' || expandedProduct?.productType === 'FINISHED');
   const grossMargin = basePrice - totalProductCost;
 
   const commitOverhead = () => {
