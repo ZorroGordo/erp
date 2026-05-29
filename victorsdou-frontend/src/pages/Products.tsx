@@ -78,8 +78,20 @@ function computeCosts(recipe: Recipe | null, overheadRate: number) {
 
 interface BOMLineEdit { tempId: string; ingredientId: string; ingredientName: string; qtyRequired: string; uom: string; wasteFactorPct: string; }
 
+const ALLOWED_BOM_TYPES: Record<string, string[]> = {
+  FINISHED: ['RAW_MATERIAL', 'INTERMEDIATE'],
+  INTERMEDIATE: ['RAW_MATERIAL'],
+};
+
+interface DashIngredient { id: string; name: string; sku: string; baseUom: string; productType?: string | null; }
+
 function RecipeEditorModal({ product, recipe, onClose }: { product: Product; recipe: Recipe | null; onClose: () => void }) {
   const qc = useQueryClient();
+  const allowedTypes = ALLOWED_BOM_TYPES[product.productType ?? ''] ?? ['RAW_MATERIAL', 'INTERMEDIATE'];
+  const typeOf = (pt?: string | null) => pt || 'RAW_MATERIAL'; // untyped ingredients count as raw materials
+
+  // Brand-new recipes start on the template/scratch chooser; existing recipes open straight in the editor.
+  const [step, setStep] = useState<'choose' | 'edit'>(recipe ? 'edit' : 'choose');
   const [yieldQty, setYieldQty] = useState(recipe ? String(recipe.yieldQty) : '1');
   const [yieldUom, setYieldUom] = useState(recipe ? recipe.yieldUom : 'unidades');
   const [lines, setLines] = useState<BOMLineEdit[]>(() =>
@@ -94,18 +106,48 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   );
   const [ingSearch, setIngSearch] = useState('');
   const [ingOpen, setIngOpen] = useState(false);
+  const [tplSearch, setTplSearch] = useState('');
 
-  const { data: ingsData } = useQuery<{ data: Ingredient[] }>({
-    queryKey: ['ingredients-all'],
-    queryFn: () => api.get('/v1/inventory/ingredients').then(r => r.data),
+  // Flat ingredient master list (carries productType); restrict to the types allowed for this product.
+  const { data: ingsData } = useQuery<{ data: DashIngredient[] }>({
+    queryKey: ['ingredients-dashboard'],
+    queryFn: () => api.get('/v1/inventory/dashboard').then(r => r.data),
     staleTime: 60_000,
   });
-
-  const filteredIngs = (ingsData?.data ?? []).filter(i =>
-    !ingSearch || i.name.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
+  const allowedIngs = (ingsData?.data ?? []).filter(i => allowedTypes.includes(typeOf(i.productType)));
+  const filteredIngs = allowedIngs.filter(i =>
+    !ingSearch || i.name?.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
   ).slice(0, 8);
 
-  const addIngredient = (ing: Ingredient) => {
+  // Existing ACTIVE recipes usable as templates.
+  const { data: tplData } = useQuery<{ data: any[] }>({
+    queryKey: ['recipe-templates'],
+    queryFn: () => api.get('/v1/production/recipes').then(r => r.data),
+    staleTime: 60_000,
+    enabled: step === 'choose',
+  });
+  const templates = (tplData?.data ?? []).filter((t: any) =>
+    !tplSearch || t.product?.name?.toLowerCase().includes(tplSearch.toLowerCase())
+  );
+
+  const applyTemplate = (tpl: any) => {
+    setYieldQty(String(tpl.yieldQty ?? '1'));
+    setYieldUom(tpl.yieldUom ?? 'unidades');
+    const copied: BOMLineEdit[] = (tpl.bomLines ?? [])
+      .filter((l: any) => allowedTypes.includes(typeOf(l.ingredient?.productType)))
+      .map((l: any) => ({
+        tempId: crypto.randomUUID(),
+        ingredientId: l.ingredientId,
+        ingredientName: l.ingredient?.name ?? '',
+        qtyRequired: String(l.qtyRequired),
+        uom: l.uom,
+        wasteFactorPct: String(l.wasteFactorPct),
+      }));
+    setLines(copied);
+    setStep('edit');
+  };
+
+  const addIngredient = (ing: DashIngredient) => {
     setLines(ls => [...ls, { tempId: crypto.randomUUID(), ingredientId: ing.id, ingredientName: ing.name, qtyRequired: '1', uom: ing.baseUom, wasteFactorPct: '0' }]);
     setIngSearch(''); setIngOpen(false);
   };
@@ -118,7 +160,6 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   const saveMutation = useMutation({
     mutationFn: async () => {
       let recipeId = recipe?.id;
-      // Create recipe if none exists
       if (!recipeId) {
         const r = await api.post('/v1/production/recipes', { productId: product.id, yieldQty: parseFloat(yieldQty) || 1, yieldUom });
         recipeId = r.data.data.id;
@@ -139,6 +180,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   });
 
   const UOM_OPTIONS = ['g', 'kg', 'ml', 'l', 'unidades', 'cl', 'dl', 'tsp', 'tbsp'];
+  const allowedLabel = product.productType === 'INTERMEDIATE' ? 'materias primas' : 'materias primas e intermedios';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -148,94 +190,147 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center"><FlaskConical size={15} className="text-white" /></div>
             <div>
-              <h2 className="font-bold text-gray-900">Editar receta</h2>
+              <h2 className="font-bold text-gray-900">{recipe ? 'Editar receta' : 'Crear receta'}</h2>
               <p className="text-xs text-gray-400">{product.name} {recipe && `· v${recipe.version}`}</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {/* Yield */}
-          <div className="flex gap-3 items-end">
-            <div className="flex-1">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rinde (cantidad)</label>
-              <input type="number" min={0.01} step={0.01} className="input w-full" value={yieldQty} onChange={e => setYieldQty(e.target.value)} />
-            </div>
-            <div className="flex-1">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unidad de medida</label>
-              <select className="input w-full" value={yieldUom} onChange={e => setYieldUom(e.target.value)}>
-                {['unidades', 'g', 'kg', 'l', 'ml', 'porciones'].map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
-          </div>
+        {step === 'choose' ? (
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <p className="text-sm text-gray-500">Empieza la receta desde cero o copia una receta existente como plantilla.</p>
+            <button
+              onClick={() => { setLines([]); setStep('edit'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 border-2 border-dashed border-indigo-200 rounded-xl hover:border-indigo-400 hover:bg-indigo-50/50 transition-all text-left">
+              <div className="w-9 h-9 bg-indigo-100 rounded-lg flex items-center justify-center"><Plus size={16} className="text-indigo-600" /></div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">Desde cero</p>
+                <p className="text-xs text-gray-400">Crea una receta nueva sin ingredientes.</p>
+              </div>
+            </button>
 
-          {/* Ingredient search */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Agregar ingrediente</label>
-            <div className="relative">
-              <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-indigo-300">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Usar plantilla (copiar receta existente)</label>
+              <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-indigo-300 mb-2">
                 <Search size={14} className="text-gray-400 flex-shrink-0" />
                 <input className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
-                  placeholder="Buscar ingrediente del inventario…"
-                  value={ingSearch} onChange={e => { setIngSearch(e.target.value); setIngOpen(true); }}
-                  onFocus={() => setIngOpen(true)} />
-                {ingSearch && <button onClick={() => { setIngSearch(''); setIngOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
+                  placeholder="Buscar receta por producto…"
+                  value={tplSearch} onChange={e => setTplSearch(e.target.value)} />
+                {tplSearch && <button onClick={() => setTplSearch('')} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
               </div>
-              {ingOpen && filteredIngs.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-hidden">
-                  {filteredIngs.map(ing => (
-                    <button key={ing.id} className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors"
-                      onClick={() => addIngredient(ing)}>
-                      <span className="flex-1 text-sm font-medium text-gray-800 truncate">{ing.name}</span>
-                      <span className="text-xs text-gray-400 font-mono">{ing.baseUom}</span>
+              <div className="border border-gray-100 rounded-xl divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                {templates.length === 0 && (
+                  <p className="text-sm text-gray-400 italic text-center py-6">No hay recetas para usar como plantilla.</p>
+                )}
+                {templates.map((t: any) => {
+                  const usable = (t.bomLines ?? []).filter((l: any) => allowedTypes.includes(typeOf(l.ingredient?.productType))).length;
+                  const total = (t.bomLines ?? []).length;
+                  return (
+                    <button key={t.id} onClick={() => applyTemplate(t)}
+                      className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors">
+                      <FlaskConical size={14} className="text-indigo-400 flex-shrink-0" />
+                      <span className="flex-1 text-sm font-medium text-gray-800 truncate">{t.product?.name ?? 'Receta'}{t.product?.productType ? ` · ${PRODUCT_TYPE_LABELS[t.product.productType] ?? ''}` : ''}</span>
+                      <span className="text-xs text-gray-400">{usable}/{total} ingr.</span>
                     </button>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
             </div>
           </div>
-
-          {/* BOM lines */}
-          {lines.length > 0 && (
-            <div className="border border-indigo-200 rounded-xl overflow-hidden">
-              <div className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 bg-indigo-50 text-xs font-semibold text-indigo-600 uppercase tracking-wide">
-                <span>Ingrediente</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
+        ) : (
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {/* Yield */}
+            <div className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rinde (cantidad)</label>
+                <input type="number" min={0.01} step={0.01} className="input w-full" value={yieldQty} onChange={e => setYieldQty(e.target.value)} />
               </div>
-              {lines.map(l => (
-                <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
-                  <span className="text-sm text-gray-800 truncate">{l.ingredientName}</span>
-                  <input type="number" min={0.001} step={0.001} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
-                    value={l.qtyRequired} onChange={e => updateLine(l.tempId, 'qtyRequired', e.target.value)} />
-                  <select className="text-xs border border-gray-200 rounded px-1 py-1 w-full focus:ring-1 focus:ring-indigo-300 outline-none"
-                    value={l.uom} onChange={e => updateLine(l.tempId, 'uom', e.target.value)}>
-                    {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                  <input type="number" min={0} max={99} step={0.5} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
-                    value={l.wasteFactorPct} onChange={e => updateLine(l.tempId, 'wasteFactorPct', e.target.value)} />
-                  <button onClick={() => removeLine(l.tempId)} className="text-gray-300 hover:text-red-400 flex items-center justify-center transition-colors">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unidad de medida</label>
+                <select className="input w-full" value={yieldUom} onChange={e => setYieldUom(e.target.value)}>
+                  {['unidades', 'g', 'kg', 'l', 'ml', 'porciones'].map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
             </div>
-          )}
-          {lines.length === 0 && (
-            <p className="text-sm text-gray-400 italic text-center py-4">Sin ingredientes. Busca y agrega ingredientes arriba.</p>
-          )}
-        </div>
+
+            {/* Ingredient search */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Agregar ingrediente <span className="text-gray-300 normal-case font-normal">· {allowedLabel}</span></label>
+              <div className="relative">
+                <div className="flex items-center gap-2 border border-brand-200 rounded-xl px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-indigo-300">
+                  <Search size={14} className="text-gray-400 flex-shrink-0" />
+                  <input className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
+                    placeholder="Buscar ingrediente del inventario…"
+                    value={ingSearch} onChange={e => { setIngSearch(e.target.value); setIngOpen(true); }}
+                    onFocus={() => setIngOpen(true)} />
+                  {ingSearch && <button onClick={() => { setIngSearch(''); setIngOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
+                </div>
+                {ingOpen && filteredIngs.length > 0 && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-hidden">
+                    {filteredIngs.map(ing => (
+                      <button key={ing.id} className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors"
+                        onClick={() => addIngredient(ing)}>
+                        <span className="flex-1 text-sm font-medium text-gray-800 truncate">{ing.name}</span>
+                        {ing.productType === 'INTERMEDIATE' && <span className="text-[10px] uppercase tracking-wide text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded">Interm.</span>}
+                        <span className="text-xs text-gray-400 font-mono">{ing.baseUom}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* BOM lines */}
+            {lines.length > 0 && (
+              <div className="border border-indigo-200 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 bg-indigo-50 text-xs font-semibold text-indigo-600 uppercase tracking-wide">
+                  <span>Ingrediente</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
+                </div>
+                {lines.map(l => (
+                  <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
+                    <span className="text-sm text-gray-800 truncate">{l.ingredientName}</span>
+                    <input type="number" min={0.001} step={0.001} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                      value={l.qtyRequired} onChange={e => updateLine(l.tempId, 'qtyRequired', e.target.value)} />
+                    <select className="text-xs border border-gray-200 rounded px-1 py-1 w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                      value={l.uom} onChange={e => updateLine(l.tempId, 'uom', e.target.value)}>
+                      {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                    <input type="number" min={0} max={99} step={0.5} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
+                      value={l.wasteFactorPct} onChange={e => updateLine(l.tempId, 'wasteFactorPct', e.target.value)} />
+                    <button onClick={() => removeLine(l.tempId)} className="text-gray-300 hover:text-red-400 flex items-center justify-center transition-colors">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {lines.length === 0 && (
+              <p className="text-sm text-gray-400 italic text-center py-4">Sin ingredientes. Busca y agrega ingredientes arriba.</p>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-xl transition-all">Cancelar</button>
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all"
-          >
-            {saveMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-            Guardar receta
-          </button>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-between gap-2 bg-gray-50 rounded-b-2xl">
+          <div>
+            {step === 'edit' && !recipe && (
+              <button onClick={() => setStep('choose')} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-xl transition-all">← Plantilla</button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-xl transition-all">Cancelar</button>
+            {step === 'edit' && (
+              <button
+                onClick={() => saveMutation.mutate()}
+                disabled={saveMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-all"
+              >
+                {saveMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                Guardar receta
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -338,12 +433,17 @@ export default function Products() {
       }
       return api.post('/v1/products', payload);
     },
-    onSuccess: () => {
+    onSuccess: (res: any, vars) => {
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
       toast.success('Producto creado');
       setShowCreate(false);
       setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', linea: '', unitOfSale: 'unidades', autoCode: false });
+      // Intermedios and terminados need a recipe — open the editor right away (skippable).
+      const created = res?.data?.data;
+      if (created && (vars.productType === 'INTERMEDIATE' || vars.productType === 'FINISHED')) {
+        setEditingRecipe({ product: created, recipe: null });
+      }
     },
     onError: () => toast.error('Error al crear producto'),
   });
