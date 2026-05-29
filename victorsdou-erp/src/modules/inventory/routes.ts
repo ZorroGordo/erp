@@ -87,6 +87,15 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.send({ data: result.receipts, meta: { total: result.total } });
   });
 
+  // ── GET /v1/inventory/ingredients/:id/batches — open lotes (qtyRemaining > 0) ──
+  app.get('/ingredients/:id/batches', {
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const batches = await InventoryService.getIngredientBatches(id);
+    return reply.send({ data: batches });
+  });
+
   // ── PUT /v1/inventory/ingredients/:id/alert-settings ─────────────────────────
   app.put('/ingredients/:id/alert-settings', {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'SUPER_ADMIN')],

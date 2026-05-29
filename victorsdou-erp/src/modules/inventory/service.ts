@@ -169,6 +169,14 @@ export async function recordStockOut(input: MovementInput): Promise<void> {
         createdBy:   input.createdBy,
       },
     });
+
+    // Draw down the specific batch (lote) when one was selected at consumption time.
+    if (input.batchId) {
+      await tx.batch.update({
+        where: { id: input.batchId },
+        data:  { qtyRemaining: { decrement: new Prisma.Decimal(input.qty) } },
+      });
+    }
   });
 
   await checkReorderAlert(input.ingredientId, input.warehouseId);
@@ -414,6 +422,14 @@ export async function registerReceipt(input: {
 }
 
 // ── Receipt history (all PURCHASE_RECEIPT movements for an ingredient) ─────────
+
+// ── Open lotes (batches with stock remaining) for one ingredient ──────────────
+export async function getIngredientBatches(ingredientId: string) {
+  return prisma.batch.findMany({
+    where:   { ingredientId, qtyRemaining: { gt: 0 } },
+    orderBy: [{ expiryDate: 'asc' }, { receivedDate: 'asc' }], // FEFO-friendly
+  });
+}
 
 export async function getReceiptHistory(ingredientId: string, page = 1, pageSize = 50) {
   const skip = (page - 1) * pageSize;
