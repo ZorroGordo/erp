@@ -156,12 +156,24 @@ export async function catalogRoutes(app: FastifyInstance) {
     }
     if (!sku) return reply.code(400).send({ error: 'SKU is required (or enable autoCode)' });
 
+    // Intermediates and raw materials are created without a category in the UI;
+    // fall back to a shared default category so the required FK is satisfied.
+    let categoryId = body.categoryId;
+    if (!categoryId) {
+      const defaultCategory = await prisma.productCategory.upsert({
+        where: { name: 'Sin categoría' },
+        update: {},
+        create: { name: 'Sin categoría' },
+      });
+      categoryId = defaultCategory.id;
+    }
+
     const product = await prisma.product.create({
       data: {
         sku,
         name: body.name,
-        categoryId: body.categoryId,
-        basePricePen: body.basePricePen,
+        categoryId,
+        basePricePen: body.basePricePen ?? 0,
         taxClass: (body.taxClass as never) ?? ('TAXABLE_IGV18' as never),
         unitOfSale: body.unitOfSale ?? 'unit',
         productType: body.productType ? (body.productType as never) : null,
