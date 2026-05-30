@@ -431,6 +431,66 @@ export async function getIngredientBatches(ingredientId: string) {
   });
 }
 
+// ── Finished-product (terminado) inventory + production-lote traceability ─────
+export async function getFinishedProducts() {
+  const levels = await (prisma as any).productStockLevel.findMany({
+    include: { product: { select: { id: true, name: true, sku: true, unitOfSale: true, productType: true } } },
+  });
+  const grouped = new Map<string, any>();
+  for (const lv of levels) {
+    if (lv.product?.productType !== 'FINISHED') continue;
+    const g = grouped.get(lv.productId) ?? {
+      productId: lv.productId, name: lv.product.name, sku: lv.product.sku,
+      unitOfSale: lv.product.unitOfSale, qtyOnHand: 0, avgCostPen: Number(lv.avgCostPen),
+    };
+    g.qtyOnHand += Number(lv.qtyOnHand);
+    grouped.set(lv.productId, g);
+  }
+  const out: any[] = [];
+  for (const g of grouped.values()) {
+    const loteCount = await (prisma as any).productStockMovement.count({
+      where: { productId: g.productId, type: 'PRODUCTION_OUTPUT' },
+    });
+    out.push({ ...g, loteCount });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getFinishedLotes(productId: string) {
+  return (prisma as any).productStockMovement.findMany({
+    where:   { productId, type: 'PRODUCTION_OUTPUT' },
+    orderBy: [{ productionDate: 'desc' }, { createdAt: 'desc' }],
+  });
+}
+
+// Trace a finished lote back to the materia-prima / intermedio lotes it consumed,
+// via its production order's recorded consumptions.
+export async function getFinishedLoteSources(movementId: string) {
+  const mv = await (prisma as any).productStockMovement.findUnique({ where: { id: movementId } });
+  if (!mv || !mv.productionOrderRef) return [];
+  const order = await prisma.productionOrder.findUnique({ where: { orderNumber: mv.productionOrderRef } });
+  if (!order) return [];
+  const consumptions = await prisma.productionConsumption.findMany({ where: { productionOrderId: order.id } });
+  const out: any[] = [];
+  for (const c of consumptions) {
+    const ing = await prisma.ingredient.findUnique({
+      where: { id: c.ingredientId }, select: { name: true, baseUom: true, productType: true },
+    });
+    const batch = c.batchId
+      ? await prisma.batch.findUnique({ where: { id: c.batchId }, select: { supplierLotNo: true, expiryDate: true } })
+      : null;
+    out.push({
+      ingredientName: ing?.name ?? '—',
+      productType:    ing?.productType ?? null,
+      baseUom:        ing?.baseUom ?? '',
+      actualQty:      Number(c.actualQty ?? 0),
+      lotNumber:      batch?.supplierLotNo ?? null,
+      expiryDate:     batch?.expiryDate ?? null,
+    });
+  }
+  return out;
+}
+
 export async function getReceiptHistory(ingredientId: string, page = 1, pageSize = 50) {
   const skip = (page - 1) * pageSize;
   const [receipts, total] = await Promise.all([

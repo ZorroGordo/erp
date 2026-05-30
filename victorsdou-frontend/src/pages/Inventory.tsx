@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import {
   AlertTriangle, Clock, Package, Plus, LayoutGrid, List,
   Settings, X, Loader2, ArrowDownToLine, FileText,
-  ShoppingCart, Bell, Layers,
+  ShoppingCart, Bell, Layers, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
@@ -692,10 +692,139 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
   );
 }
 
+// ── Terminados (finished products) inventory + lote traceability ──────────────
+interface FinishedProduct { productId: string; name: string; sku: string; unitOfSale: string; qtyOnHand: number; avgCostPen: number; loteCount: number; }
+
+function LoteSources({ movementId }: { movementId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['finished-lote-sources', movementId],
+    queryFn:  () => api.get(`/v1/inventory/finished/lotes/${movementId}/sources`).then(r => r.data),
+  });
+  const sources: any[] = data?.data ?? [];
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
+      <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-2">Materias primas / intermedios consumidos</p>
+      {isLoading ? <p className="text-xs text-gray-400">Cargando…</p>
+        : sources.length === 0 ? <p className="text-xs text-gray-400">Sin trazabilidad de lotes para esta producción.</p>
+        : (
+        <table className="w-full text-xs">
+          <tbody className="divide-y divide-gray-100">
+            {sources.map((s, i) => (
+              <tr key={i}>
+                <td className="py-1.5 font-medium text-gray-700">{s.ingredientName}{s.productType === 'INTERMEDIATE' && <span className="ml-1 text-[9px] uppercase text-indigo-500 bg-indigo-50 px-1 rounded">PI</span>}</td>
+                <td className="py-1.5 text-right font-mono text-gray-500">{Number(s.actualQty).toFixed(3)} {s.baseUom}</td>
+                <td className="py-1.5 text-right font-mono text-gray-600">{s.lotNumber ? `Lote ${s.lotNumber}` : <span className="text-gray-300">sin lote</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+interface FinishedLote { id: string; lotNumber: string | null; productionDate: string | null; expiryDate: string | null; qtyIn: string; unitCostPen: string; productionOrderRef: string | null; }
+function FinishedLotesModal({ product, onClose }: { product: FinishedProduct; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['finished-lotes', product.productId],
+    queryFn:  () => api.get(`/v1/inventory/finished/${product.productId}/lotes`).then(r => r.data),
+  });
+  const lotes: FinishedLote[] = data?.data ?? [];
+  const [openLote, setOpenLote] = useState<string | null>(null);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: '85vh' }}>
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Layers size={18} className="text-brand-500" />
+            <div>
+              <h2 className="font-semibold text-gray-900">Lotes de producción</h2>
+              <p className="text-xs text-gray-500">{product.name} · click un lote para ver su origen</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-5 space-y-2">
+          {isLoading ? <div className="text-center text-gray-400 py-8">Cargando…</div>
+            : lotes.length === 0 ? <div className="text-center text-gray-400 py-8">Sin lotes registrados.</div>
+            : lotes.map(l => (
+              <div key={l.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                <button onClick={() => setOpenLote(openLote === l.id ? null : l.id)} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left">
+                  {openLote === l.id ? <ChevronDown size={15} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={15} className="text-gray-400 flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-mono text-sm font-medium text-gray-800">{l.lotNumber || 'sin lote'}</p>
+                    <p className="text-[11px] text-gray-400">Producido {l.productionDate ? new Date(l.productionDate).toLocaleDateString('es-PE') : '—'}{l.expiryDate ? ` · vence ${new Date(l.expiryDate).toLocaleDateString('es-PE')}` : ''}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="font-mono text-sm font-semibold text-gray-900">{Number(l.qtyIn).toFixed(2)} {product.unitOfSale}</p>
+                    <p className="text-[11px] text-gray-400">S/ {Number(l.unitCostPen).toFixed(4)}/u</p>
+                  </div>
+                </button>
+                {openLote === l.id && <LoteSources movementId={l.id} />}
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TerminadosPanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['finished-products'],
+    queryFn:  () => api.get('/v1/inventory/finished').then(r => r.data),
+  });
+  const products: FinishedProduct[] = data?.data ?? [];
+  const [openProduct, setOpenProduct] = useState<FinishedProduct | null>(null);
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+        <Package size={18} className="text-gray-400" />
+        <h2 className="font-semibold text-gray-800">Productos terminados</h2>
+        <span className="ml-auto text-sm text-gray-400">{products.length} producto(s)</span>
+      </div>
+      {isLoading ? <div className="p-8 text-center text-gray-400">Cargando…</div>
+        : products.length === 0 ? <div className="p-10 text-center text-gray-400">Aún no hay producción de terminados. Cierra una orden de producción para generar lotes.</div>
+        : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="px-5 py-3 text-left">Producto</th>
+                <th className="px-5 py-3 text-left">SKU</th>
+                <th className="px-5 py-3 text-right">Stock</th>
+                <th className="px-5 py-3 text-right">Costo prom.</th>
+                <th className="px-5 py-3 text-right">Lotes</th>
+                <th className="px-5 py-3 text-center">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {products.map(p => (
+                <tr key={p.productId} className="hover:bg-gray-50">
+                  <td className="px-5 py-3 font-medium text-gray-900"><button onClick={() => setOpenProduct(p)} className="text-left hover:text-brand-600 hover:underline">{p.name}</button></td>
+                  <td className="px-5 py-3 font-mono text-xs text-gray-500">{p.sku}</td>
+                  <td className="px-5 py-3 text-right font-mono">{p.qtyOnHand.toFixed(2)} {p.unitOfSale}</td>
+                  <td className="px-5 py-3 text-right font-mono text-gray-500">S/ {p.avgCostPen.toFixed(4)}</td>
+                  <td className="px-5 py-3 text-right">{p.loteCount}</td>
+                  <td className="px-5 py-3 text-center">
+                    <button onClick={() => setOpenProduct(p)} className="text-xs bg-brand-100 text-brand-700 hover:bg-brand-200 px-2 py-1 rounded inline-flex items-center gap-1"><Layers size={12} /> Ver lotes</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {openProduct && <FinishedLotesModal product={openProduct} onClose={() => setOpenProduct(null)} />}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Inventory() {
   const qc = useQueryClient();
   const [view,         setView]         = useState<'dashboard' | 'list'>('dashboard');
+  const [tab,          setTab]          = useState<'insumos' | 'terminados'>('insumos');
   const [showReceive,  setShowReceive]  = useState(false);
   const [receiveItem,  setReceiveItem]  = useState<IngredientDashItem | undefined>();
   const [settingsItem, setSettingsItem] = useState<IngredientDashItem | null>(null);
@@ -752,6 +881,7 @@ export default function Inventory() {
             {alertCount    > 0 && <span className="text-amber-600 ml-2 font-medium">· {alertCount} con alerta</span>}
           </p>
         </div>
+        {tab === 'insumos' && (
         <div className="flex items-center gap-2 flex-wrap">
           {/* Warehouse filter */}
           <select className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 bg-white" value={filterWarehouse} onChange={e => setFilterWarehouse(e.target.value)}>
@@ -815,10 +945,23 @@ export default function Inventory() {
             <Plus size={15} /> Registrar entrada
           </button>
         </div>
+        )}
       </div>
 
+      {/* ── Tabs: insumos vs terminados ── */}
+      <div className="flex items-center gap-1 border-b border-gray-200">
+        {([['insumos', 'Materias primas e intermedios'], ['terminados', 'Productos terminados']] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === k ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'terminados' && <TerminadosPanel />}
+
       {/* ── Alert banners ── */}
-      {criticalCount > 0 && (
+      {tab === 'insumos' && criticalCount > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
           <div>
@@ -827,7 +970,7 @@ export default function Inventory() {
           </div>
         </div>
       )}
-      {alertCount > 0 && (
+      {tab === 'insumos' && alertCount > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
           <div>
@@ -836,13 +979,13 @@ export default function Inventory() {
           </div>
         </div>
       )}
-      {reorder?.data?.length > 0 && (
+      {tab === 'insumos' && reorder?.data?.length > 0 && (
         <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={18} className="text-orange-500 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-orange-700"><strong>{reorder.data.length}</strong> materia(s) prima(s) bajo punto de reorden configurado.</p>
         </div>
       )}
-      {expiry?.data?.length > 0 && (
+      {tab === 'insumos' && expiry?.data?.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
           <Clock size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-red-700"><strong>{expiry.data.length}</strong> lote(s) próximos a vencer en los próximos 7 días.</p>
@@ -850,7 +993,7 @@ export default function Inventory() {
       )}
 
       {/* ── DASHBOARD VIEW ── */}
-      {view === 'dashboard' && (
+      {tab === 'insumos' && view === 'dashboard' && (
         isLoading ? (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {[...Array(8)].map((_, i) => (
@@ -885,7 +1028,7 @@ export default function Inventory() {
       )}
 
       {/* ── LIST VIEW ── */}
-      {view === 'list' && (
+      {tab === 'insumos' && view === 'list' && (
         <div className="card overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
             <Package size={18} className="text-gray-400" />
