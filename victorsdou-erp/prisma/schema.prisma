@@ -1821,3 +1821,21 @@ model QuotationLine {
 
   @@map("quotation_lines")
 }
+
+// ══════════════════════════════════════════════════════════════
+//  OBSERVABILITY
+// ══════════════════════════════════════════════════════════════
+
+model ErrorLog {
+  id         String   @id @default(uuid())
+  statusCode Int
+  code       String?
+  message    String?
+  method     String?
+  path       String?
+  stack      String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("error_logs")
+}

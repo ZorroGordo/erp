@@ -8,6 +8,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config';
 import { redis } from './lib/redis';
+import { prisma } from './lib/prisma';
 
 // Middleware
 import { authPlugin } from './middleware/auth';
@@ -31,6 +32,7 @@ import { lookupRoutes }                from './modules/lookup/routes';
 import { notificationsWebhookRoutes }  from './modules/notifications/routes';
 import { quotationsRoutes }            from './modules/quotations/routes';
 import { settingsRoutes }              from './modules/settings/routes';
+import { monitoringRoutes }            from './modules/monitoring/routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -136,6 +138,7 @@ export async function buildApp() {
     await api.register(lookupRoutes,       { prefix: '/lookup' });
     await api.register(quotationsRoutes,   { prefix: '/quotations' });
     await api.register(settingsRoutes,     { prefix: '/settings' });
+    await api.register(monitoringRoutes,   { prefix: '/monitoring' });
   }, { prefix: '/v1' });
 
   // ── Public API Routes ─────────────────────────────────────────────────────
@@ -164,9 +167,22 @@ export async function buildApp() {
   });
 
   // ── Error Handler ─────────────────────────────────────────────────────────
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error, req, reply) => {
     app.log.error({ err: error }, 'Unhandled error');
     const statusCode = error.statusCode ?? 500;
+    // Persist non-auth errors for the weekly error digest (fire-and-forget).
+    if (statusCode !== 401) {
+      void (prisma as any).errorLog.create({
+        data: {
+          statusCode,
+          code:    (error as any).code ?? null,
+          message: (error.message ?? '').slice(0, 500),
+          method:  req.method ?? null,
+          path:    (req.url ?? '').split('?')[0] || null,
+          stack:   statusCode >= 500 ? ((error.stack ?? '').slice(0, 2000) || null) : null,
+        },
+      }).catch(() => {});
+    }
     reply.status(statusCode).send({
       error: error.code ?? 'INTERNAL_ERROR',
       message:
