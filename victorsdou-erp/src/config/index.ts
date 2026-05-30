@@ -17,6 +17,7 @@ const envSchema = z.object({
   JWT_PUBLIC_KEY: z.string(),       // RSA public key PEM
   JWT_ACCESS_EXPIRES_IN: z.string().default('1h'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('180d'),
+  MONITORING_TOKEN: z.string().optional(),  // bearer token for the weekly error-digest automation
 
   // CORS
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
