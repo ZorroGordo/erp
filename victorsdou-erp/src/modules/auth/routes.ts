@@ -14,7 +14,7 @@ const COOKIE_OPTS = {
   secure:   process.env.NODE_ENV === 'production',
   sameSite: 'strict' as const,
   path:     '/v1/auth/refresh',
-  maxAge:   7 * 24 * 60 * 60, // 7 days in seconds
+  maxAge:   180 * 24 * 60 * 60, // 180 days in seconds
 };
 
 const USER_SELECT = {

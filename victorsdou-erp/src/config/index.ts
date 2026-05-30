@@ -15,8 +15,8 @@ const envSchema = z.object({
   // JWT — RS256 keys stored in PEM format
   JWT_PRIVATE_KEY: z.string(),      // RSA private key PEM
   JWT_PUBLIC_KEY: z.string(),       // RSA public key PEM
-  JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
-  JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+  JWT_ACCESS_EXPIRES_IN: z.string().default('1h'),
+  JWT_REFRESH_EXPIRES_IN: z.string().default('180d'),
 
   // CORS
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
