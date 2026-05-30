@@ -96,6 +96,23 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.send({ data: batches });
   });
 
+  // ── Finished-product (terminado) inventory + lote traceability ──────────────
+  const finishedRoles = requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR', 'SUPER_ADMIN');
+
+  app.get('/finished', { preHandler: [finishedRoles] }, async (_req, reply) => {
+    return reply.send({ data: await InventoryService.getFinishedProducts() });
+  });
+
+  app.get('/finished/:productId/lotes', { preHandler: [finishedRoles] }, async (req, reply) => {
+    const { productId } = req.params as { productId: string };
+    return reply.send({ data: await InventoryService.getFinishedLotes(productId) });
+  });
+
+  app.get('/finished/lotes/:id/sources', { preHandler: [finishedRoles] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return reply.send({ data: await InventoryService.getFinishedLoteSources(id) });
+  });
+
   // ── PUT /v1/inventory/ingredients/:id/alert-settings ─────────────────────────
   app.put('/ingredients/:id/alert-settings', {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'SUPER_ADMIN')],
