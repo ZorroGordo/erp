@@ -22,6 +22,10 @@ interface Product {
 
 const PRODUCT_TYPE_LABELS: Record<string, string> = { RAW_MATERIAL: 'Materia prima', INTERMEDIATE: 'Intermedio', FINISHED: 'Terminado' };
 const FAMILY_LABELS: Record<string, string> = { CONGELADO: 'Congelado', SECO: 'Seco' };
+const RAW_FAMILY_LABELS: Record<string, string> = {
+  HARINA: 'Harina', SEMILLAS: 'Semillas', LACTEOS: 'Lácteos',
+  ENDULZANTES: 'Endulzantes', GRASAS: 'Grasas', ESPECIAS: 'Especias',
+};
 const LINEA_LABELS: Record<string, string> = {
   MOLDE: 'Molde', HOGAZA: 'Hogaza', VARIOS: 'Varios', ESTANDAR: 'Estándar',
   SALADOS: 'Salados', DULCES: 'Dulces', GALLETAS: 'Galletas',
@@ -342,7 +346,7 @@ export default function Products() {
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, linea: '' as string, unitOfSale: 'unidades', autoCode: false });
+  const [productForm, setProductForm] = useState({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '' as string, family: '' as string, rawFamily: '' as string, linea: '' as string, unitOfSale: 'unidades', autoCode: false });
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
@@ -420,12 +424,19 @@ export default function Products() {
         unitOfSale: data.unitOfSale || 'unidades',
       };
       if (data.productType) payload.productType = data.productType;
-      if (data.family && data.productType !== 'INTERMEDIATE') payload.family = data.family;
+      // Raw materials are classified by rawFamily (Harina, Semillas…); finished
+      // goods by family (Congelado/Seco).
+      if (data.productType === 'RAW_MATERIAL') {
+        if (data.rawFamily) payload.rawFamily = data.rawFamily;
+      } else if (data.family && data.productType !== 'INTERMEDIATE') {
+        payload.family = data.family;
+      }
       if (data.productType === 'FINISHED') {
         if (data.categoryId) payload.categoryId = data.categoryId;
         if (data.linea) payload.linea = data.linea;
       }
-      if (data.autoCode && data.productType && data.family && data.productType !== 'INTERMEDIATE') {
+      const familyForCode = data.productType === 'RAW_MATERIAL' ? data.rawFamily : data.family;
+      if (data.autoCode && data.productType && familyForCode && data.productType !== 'INTERMEDIATE') {
         payload.autoCode = true;
         const cat = categories.find((c: any) => c.id === data.categoryId);
         payload.categoryCode = cat ? cat.name.substring(0, 2).toUpperCase() : 'XX';
@@ -439,7 +450,7 @@ export default function Products() {
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
       toast.success('Producto creado');
       setShowCreate(false);
-      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', linea: '', unitOfSale: 'unidades', autoCode: false });
+      setProductForm({ name: '', sku: '', basePricePen: '', categoryId: '', productType: '', family: '', rawFamily: '', linea: '', unitOfSale: 'unidades', autoCode: false });
       // Intermedios and terminados need a recipe — open the editor right away (skippable).
       const created = res?.data?.data;
       if (created && (vars.productType === 'INTERMEDIATE' || vars.productType === 'FINISHED')) {
@@ -886,7 +897,16 @@ export default function Products() {
                 <option value="FINISHED">Producto terminado (PT)</option>
               </select>
             </div>
-            {(productForm.productType === 'RAW_MATERIAL' || productForm.productType === 'FINISHED') && (
+            {productForm.productType === 'RAW_MATERIAL' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Familia</label>
+                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.rawFamily} onChange={e => setProductForm(f => ({ ...f, rawFamily: e.target.value }))}>
+                  <option value="">— Seleccionar —</option>
+                  {Object.entries(RAW_FAMILY_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+            )}
+            {productForm.productType === 'FINISHED' && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Familia</label>
                 <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.family} onChange={e => setProductForm(f => ({ ...f, family: e.target.value }))}>
@@ -942,9 +962,9 @@ export default function Products() {
               {(productForm.productType === 'RAW_MATERIAL' || productForm.productType === 'FINISHED') && (
                 <label className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 cursor-pointer">
                   <input type="checkbox" checked={productForm.autoCode} onChange={e => setProductForm(f => ({ ...f, autoCode: e.target.checked }))}
-                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" disabled={!productForm.productType || !productForm.family} />
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" disabled={!productForm.productType || (productForm.productType === 'RAW_MATERIAL' ? !productForm.rawFamily : !productForm.family)} />
                   Auto-generar código
-                  {(!productForm.productType || !productForm.family) && <span className="text-amber-500">(selecciona tipo y familia)</span>}
+                  {(!productForm.productType || (productForm.productType === 'RAW_MATERIAL' ? !productForm.rawFamily : !productForm.family)) && <span className="text-amber-500">(selecciona tipo y familia)</span>}
                 </label>
               )}
             </div>
@@ -1076,6 +1096,14 @@ interface RecipePanelProps {
 }
 
 function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCost, overheadRate, totalProductCost, doughWeightG, basePrice, grossMargin, onEdit }: RecipePanelProps) {
+  // Raw materials don't have recipes — no option to create/generate one.
+  if (product.productType === 'RAW_MATERIAL') {
+    return (
+      <p className="text-sm text-gray-400 italic">
+        Las materias primas no tienen receta. Gestiona su stock y costo en el módulo de Inventario.
+      </p>
+    );
+  }
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-indigo-700 font-semibold">

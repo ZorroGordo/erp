@@ -12,6 +12,7 @@ import Products from './pages/Products';
 import Customers from './pages/Customers';
 import SalesOrders from './pages/SalesOrders';
 import Production from './pages/Production';
+import Tablet from './pages/Tablet';
 import Procurement from './pages/Procurement';
 import Delivery from './pages/Delivery';
 import Payroll from './pages/Payroll';
@@ -121,6 +122,7 @@ export default function App() {
               <Route path="ai"           element={<AiForecast />} />
               <Route path="settings"     element={<Settings />} />
             </Route>
+            <Route path="/tablet" element={<PrivateRoute><Tablet /></PrivateRoute>} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>

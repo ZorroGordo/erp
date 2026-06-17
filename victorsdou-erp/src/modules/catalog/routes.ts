@@ -15,6 +15,21 @@ const TYPE_CODES: Record<string, string> = {
 const FAMILY_CODES: Record<string, string> = {
   CONGELADO: 'CO',
   SECO:      'SE',
+  // Raw-material families (used for raw-material SKU auto-codes)
+  HARINA:      'HA',
+  SEMILLAS:    'SM',
+  LACTEOS:     'LA',
+  ENDULZANTES: 'EN',
+  GRASAS:      'GR',
+  ESPECIAS:    'ES',
+  ADITIVOS:    'AD',
+  COBERTURAS_RELLENOS: 'CR',
+};
+
+// Map a RawMaterialFamily enum to the free-text Ingredient.category string.
+const RAW_FAMILY_TO_CATEGORY: Record<string, string> = {
+  HARINA: 'flour', SEMILLAS: 'seeds', LACTEOS: 'dairy', ENDULZANTES: 'sugar',
+  GRASAS: 'fat', ESPECIAS: 'flavoring', ADITIVOS: 'other', COBERTURAS_RELLENOS: 'other',
 };
 
 async function generateProductCode(
@@ -145,14 +160,18 @@ export async function catalogRoutes(app: FastifyInstance) {
       unitOfSale?: string;
       productType?: string;
       family?: string;
+      rawFamily?: string;
       linea?: string;
       autoCode?: boolean;
       categoryCode?: string; // 2-letter short code for the category
     };
 
+    // Raw materials are classified by rawFamily; finished goods by family.
+    const familyForCode = body.productType === 'RAW_MATERIAL' ? body.rawFamily : body.family;
+
     let sku = body.sku;
-    if (body.autoCode && body.productType && body.family) {
-      sku = await generateProductCode(body.productType, body.family, body.categoryCode ?? 'XX');
+    if (body.autoCode && body.productType && familyForCode) {
+      sku = await generateProductCode(body.productType, familyForCode, body.categoryCode ?? 'XX');
     }
     if (!sku) return reply.code(400).send({ error: 'SKU is required (or enable autoCode)' });
 
@@ -178,9 +197,37 @@ export async function catalogRoutes(app: FastifyInstance) {
         unitOfSale: body.unitOfSale ?? 'unit',
         productType: body.productType ? (body.productType as never) : null,
         family: body.family ? (body.family as never) : null,
+        rawFamily: body.rawFamily ? (body.rawFamily as never) : null,
         linea: body.linea ? (body.linea as never) : null,
       },
     });
+
+    // Mirror raw materials and intermediates into the Ingredient master so they
+    // show up in inventory entry, purchase orders and the BOM editor. (Finished
+    // goods are outputs and live only in the Product/ProductStockLevel tables.)
+    if (body.productType === 'RAW_MATERIAL' || body.productType === 'INTERMEDIATE') {
+      const category = body.rawFamily
+        ? (RAW_FAMILY_TO_CATEGORY[body.rawFamily] ?? 'other')
+        : (body.productType === 'INTERMEDIATE' ? 'intermediate' : 'other');
+      await prisma.ingredient.upsert({
+        where:  { sku },
+        update: {
+          name:        body.name,
+          baseUom:     body.unitOfSale ?? 'kg',
+          productType: body.productType as never,
+          rawFamily:   body.rawFamily ? (body.rawFamily as never) : null,
+        },
+        create: {
+          sku,
+          name:        body.name,
+          category,
+          baseUom:     body.unitOfSale ?? 'kg',
+          productType: body.productType as never,
+          rawFamily:   body.rawFamily ? (body.rawFamily as never) : null,
+        },
+      });
+    }
+
     return reply.code(201).send({ data: product });
   });
 

@@ -160,7 +160,7 @@ export default function Procurement() {
   const [poForm, setPoForm] = useState({ supplierId: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, unitPricePen: 0 }] });
   const { data: pos, isLoading: loadPO } = useQuery({ queryKey: ['pos'], queryFn: () => api.get('/v1/procurement/purchase-orders').then(r => r.data) });
   const { data: suppliers, isLoading: loadSup } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.get('/v1/procurement/suppliers').then(r => r.data) });
-  const { data: ingredients } = useQuery({ queryKey: ['ingredients'], queryFn: () => api.get('/v1/inventory/ingredients').then(r => r.data) });
+  const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
   const approvePO = useMutation({
     mutationFn: (id: string) => api.patch(`/v1/procurement/purchase-orders/${id}/approve`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pos'] }); toast.success('OC aprobada'); }
