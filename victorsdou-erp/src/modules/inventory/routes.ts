@@ -24,6 +24,29 @@ export async function inventoryRoutes(app: FastifyInstance) {
   });
 
 
+  // ── GET /v1/inventory/ingredient-master — full ingredient catalog ───────────
+  // Returns every active ingredient (independent of whether it has stock yet) so
+  // dropdowns (purchase orders, stock entry, BOM editor) show newly created
+  // materias primas, not only those from the initial load.
+  app.get('/ingredient-master', {
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { prisma } = await import('../../lib/prisma');
+    const q = req.query as { productType?: string };
+    const ingredients = await prisma.ingredient.findMany({
+      where: {
+        isActive: true,
+        ...(q.productType ? { productType: q.productType as never } : {}),
+      },
+      select: {
+        id: true, sku: true, name: true, category: true, baseUom: true,
+        avgCostPen: true, productType: true, family: true, rawFamily: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+    return reply.send({ data: ingredients });
+  });
+
   // -- POST /v1/inventory/ingredients -- create a new ingredient master record
   app.post('/ingredients', {
     preHandler: [requireAnyOf('OPS_MGR', 'WAREHOUSE', 'SUPER_ADMIN')],

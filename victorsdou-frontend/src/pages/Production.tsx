@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState, useEffect } from 'react';
-import { Plus, Factory, X, CheckCircle2, Loader2, LayoutGrid, Table as TableIcon } from 'lucide-react';
+import { Plus, Factory, X, CheckCircle2, Loader2, LayoutGrid, Table as TableIcon, Tablet } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 
@@ -47,11 +48,79 @@ const KANBAN_COLUMNS: { key: string; label: string; statuses: string[]; head: st
   { key: 'COMPLETED',   label: 'Completadas',  statuses: ['COMPLETED'],                                  head: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
 ];
 
+// ── Batch card (PDF via print) ───────────────────────────────────────────────
+// Builds a printable batch card mirroring the "Cerrar orden" layout, with the
+// real (scaled-to-planned) quantities and BLANK lot columns to fill in by hand.
+async function openBatchCard(order: Order) {
+  try {
+    const r = await api.get(`/v1/production/recipes/${order.recipeId}/bom`);
+    const recipe = r.data?.data;
+    if (!recipe) { toast.error('No se pudo cargar la receta'); return; }
+    const yieldQty = Number(recipe.yieldQty) || 1;
+    const scale = Number(order.plannedQty) / yieldQty;
+    const prodName = order.recipe?.product?.name ?? recipe.product?.name ?? '';
+    const fecha = order.scheduledDate ? new Date(order.scheduledDate).toLocaleDateString('es-PE') : '';
+    const rows = (recipe.bomLines ?? []).map((l: any) => {
+      const qty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+      return `<tr>
+        <td>${l.ingredient?.name ?? ''}</td>
+        <td class="num">${qty.toFixed(3)} ${l.uom ?? ''}</td>
+        <td class="blank"></td>
+        <td class="blank"></td></tr>`;
+    }).join('');
+    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+      <title>Batch Card ${order.orderNumber}</title>
+      <style>
+        *{box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;}
+        body{margin:24px;color:#1A1A1A;}
+        h1{font-size:20px;margin:0;color:#2D6A4F;}
+        .sub{color:#666;font-size:12px;margin:2px 0 16px;}
+        .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 16px;margin-bottom:16px;font-size:13px;}
+        .grid div span{color:#888;display:block;font-size:10px;text-transform:uppercase;letter-spacing:.04em;}
+        .lote{font-family:monospace;font-size:18px;font-weight:bold;color:#2D6A4F;}
+        table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+        th,td{border:1px solid #bbb;padding:6px 8px;text-align:left;}
+        th{background:#F5F0E8;text-transform:uppercase;font-size:10px;letter-spacing:.04em;}
+        td.num{text-align:right;font-family:monospace;}
+        td.blank{height:26px;}
+        .foot{margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:24px;font-size:12px;}
+        .sign{margin-top:36px;border-top:1px solid #888;padding-top:4px;color:#666;}
+        @media print{body{margin:12mm;} button{display:none;}}
+      </style></head><body>
+      <h1>VICTORSDOU — Batch Card</h1>
+      <p class="sub">Hoja de producción · cantidades para ${Number(order.plannedQty)} ${recipe.yieldUom ?? 'und'} planificadas</p>
+      <div class="grid">
+        <div><span>Lote / Orden</span><span class="lote">${order.orderNumber}</span></div>
+        <div><span>Producto</span>${prodName}</div>
+        <div><span>Línea</span>${(order as any).line ?? '—'}</div>
+        <div><span>Fecha programada</span>${fecha}</div>
+        <div><span>Cantidad planificada</span>${Number(order.plannedQty)}</div>
+        <div><span>Rendimiento real</span>__________</div>
+      </div>
+      <table><thead><tr>
+        <th>Materia prima</th><th style="text-align:right">Cantidad</th>
+        <th>Lote utilizado</th><th>Verificado</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+      <div class="foot">
+        <div class="sign">Preparado por</div>
+        <div class="sign">Revisado por</div>
+      </div>
+      <script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Permite ventanas emergentes para descargar el batch card'); return; }
+    w.document.write(html);
+    w.document.close();
+  } catch {
+    toast.error('Error al generar el batch card');
+  }
+}
+
 export default function Production() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
-  const [form, setForm] = useState({ recipeId: '', plannedQty: 1, scheduledDate: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ recipeId: '', plannedQty: 1, line: 'A', scheduledDate: new Date().toISOString().slice(0, 10) });
   const [closingOrder, setClosingOrder] = useState<Order | null>(null);
 
   const { data: orders, isLoading } = useQuery({
@@ -100,6 +169,9 @@ export default function Production() {
               <TableIcon size={15} /> Tabla
             </button>
           </div>
+          <Link to="/tablet" className="btn-secondary flex items-center gap-2">
+            <Tablet size={16} /> Modo Tablet
+          </Link>
           <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
             <Plus size={16} /> Nueva orden
           </button>
@@ -109,7 +181,7 @@ export default function Production() {
       {showForm && (
         <div className="card p-5 space-y-4">
           <h3 className="font-semibold">Nueva orden de producción</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Receta <span className="text-gray-400">(intermedio o terminado)</span>
@@ -130,16 +202,26 @@ export default function Production() {
                 onChange={e => setForm(f => ({ ...f, plannedQty: parseInt(e.target.value)||1 }))} />
             </div>
             <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Línea de producción</label>
+              <select className="input" value={form.line} onChange={e => setForm(f => ({ ...f, line: e.target.value }))}>
+                <option value="A">Línea A</option>
+                <option value="B">Línea B</option>
+                <option value="C">Línea C</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Fecha programada</label>
               <input type="date" className="input" value={form.scheduledDate}
                 onChange={e => setForm(f => ({ ...f, scheduledDate: e.target.value }))} />
             </div>
           </div>
+          <p className="text-[11px] text-gray-400">El lote se genera automáticamente: AA + día del año + línea + Nº de batch (ej. 26001A01).</p>
           <div className="flex gap-2">
             <button className="btn-primary" disabled={!form.recipeId} onClick={() => create.mutate({
               recipeId: form.recipeId,
               recipeVersion: 1,
               plannedQty: form.plannedQty,
+              line: form.line,
               scheduledDate: form.scheduledDate,
             })}>Crear</button>
             <button className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
@@ -187,8 +269,14 @@ export default function Production() {
                           <p className="font-semibold text-gray-700">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE') : '—'}</p>
                         </div>
                       </div>
+                      <button
+                        onClick={() => openBatchCard(o)}
+                        className="mt-3 w-full text-xs border border-brand-200 text-brand-700 hover:bg-brand-50 px-2 py-1.5 rounded-lg font-medium"
+                      >
+                        Batch card (PDF)
+                      </button>
                       {(nextStatus[o.status] || (o.status !== 'COMPLETED' && o.status !== 'CANCELLED')) && (
-                        <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                        <div className="flex gap-2 mt-2 pt-3 border-t border-gray-100">
                           {nextStatus[o.status] && (
                             <button
                               onClick={() => updateStatus.mutate({ id: o.id, status: nextStatus[o.status] })}
@@ -243,6 +331,12 @@ export default function Production() {
                   <td className="px-5 py-3 text-gray-500">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE') : '—'}</td>
                   <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
                   <td className="px-5 py-3 text-center space-x-1">
+                    <button
+                      onClick={() => openBatchCard(o)}
+                      className="text-xs border border-brand-200 text-brand-700 hover:bg-brand-50 px-2 py-1 rounded"
+                    >
+                      Batch card
+                    </button>
                     {nextStatus[o.status] && (
                       <button
                         onClick={() => updateStatus.mutate({ id: o.id, status: nextStatus[o.status] })}

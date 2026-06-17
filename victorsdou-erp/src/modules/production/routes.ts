@@ -4,6 +4,73 @@ import { prisma } from '../../lib/prisma';
 import { getOverheadRate } from '../../lib/settings';
 import * as InventoryService from '../inventory/service';
 
+// ── Lot / order-number helpers ──────────────────────────────────────────────
+// Structured lot number = order number: YY + DDD + Line + BB
+//   YY  = 2-digit year   (26)
+//   DDD = day of year     (001-366)
+//   Line= production line (A | B | C)
+//   BB  = batch # that day+line (01, 02 …)
+//   e.g. 26001A01 = 2026, 1 Jan, line A, batch 1
+function dayOfYear(d: Date): number {
+  const start = Date.UTC(d.getUTCFullYear(), 0, 0);
+  const cur   = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return Math.floor((cur - start) / 86_400_000);
+}
+
+async function generateLotNumber(scheduled: Date, line: string): Promise<string> {
+  const yy     = String(scheduled.getUTCFullYear() % 100).padStart(2, '0');
+  const ddd    = String(dayOfYear(scheduled)).padStart(3, '0');
+  const prefix = `${yy}${ddd}${line}`;
+  const count  = await prisma.productionOrder.count({ where: { orderNumber: { startsWith: prefix } } });
+  return `${prefix}${String(count + 1).padStart(2, '0')}`;
+}
+
+// ── Inventory reservation helpers ───────────────────────────────────────────
+// On order creation we reserve each BOM ingredient (scaled to the planned qty)
+// by incrementing StockLevel.qtyReserved, so it can't be consumed or assigned
+// to another order (recordStockOut already enforces available = onHand − reserved).
+async function reserveForOrder(tx: any, orderId: string, recipe: any, plannedQty: number) {
+  const yieldQty = Number(recipe.yieldQty) || 1;
+  const scale    = plannedQty / yieldQty;
+  for (const l of recipe.bomLines ?? []) {
+    const qty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+    if (!(qty > 0)) continue;
+    const whType = l.ingredient?.productType === 'INTERMEDIATE' ? 'INTERMEDIATE' : 'RAW_MATERIAL';
+    let wh = await tx.warehouse.findFirst({ where: { type: whType as never, isActive: true }, orderBy: { createdAt: 'asc' } });
+    if (!wh) {
+      const anyLevel = await tx.stockLevel.findFirst({ where: { ingredientId: l.ingredientId } });
+      if (anyLevel) wh = await tx.warehouse.findUnique({ where: { id: anyLevel.warehouseId } });
+    }
+    if (!wh) continue;
+    await tx.stockLevel.upsert({
+      where:  { ingredientId_warehouseId: { ingredientId: l.ingredientId, warehouseId: wh.id } },
+      create: { ingredientId: l.ingredientId, warehouseId: wh.id, qtyOnHand: 0, qtyReserved: qty, avgCostPen: Number(l.ingredient?.avgCostPen ?? 0) },
+      update: { qtyReserved: { increment: qty } },
+    });
+    await tx.productionReservation.create({
+      data: { productionOrderId: orderId, ingredientId: l.ingredientId, warehouseId: wh.id, qty },
+    });
+  }
+}
+
+// Release all still-open reservations of an order (close / cancel).
+async function releaseReservations(tx: any, orderId: string) {
+  const reservations = await tx.productionReservation.findMany({ where: { productionOrderId: orderId, releasedAt: null } });
+  for (const r of reservations) {
+    const level = await tx.stockLevel.findUnique({
+      where: { ingredientId_warehouseId: { ingredientId: r.ingredientId, warehouseId: r.warehouseId } },
+    });
+    if (level) {
+      const newReserved = level.qtyReserved.sub(r.qty);
+      await tx.stockLevel.update({
+        where: { ingredientId_warehouseId: { ingredientId: r.ingredientId, warehouseId: r.warehouseId } },
+        data:  { qtyReserved: newReserved.lessThan(0) ? 0 : newReserved },
+      });
+    }
+    await tx.productionReservation.update({ where: { id: r.id }, data: { releasedAt: new Date() } });
+  }
+}
+
 export async function productionRoutes(app: FastifyInstance) {
   app.get('/orders', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR')] }, async (req, reply) => {
     const q = req.query as { status?: string; date?: string };
@@ -21,26 +88,42 @@ export async function productionRoutes(app: FastifyInstance) {
   app.post('/orders', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
     const body = req.body as {
       recipeId: string; recipeVersion: number;
-      plannedQty: number; scheduledDate: string;
+      plannedQty: number; scheduledDate: string; line?: string;
       shift?: string; linkedSalesOrderIds?: string[]; notes?: string;
     };
-    const recipe = await prisma.recipe.findUnique({ where: { id: body.recipeId } });
+    const recipe = await prisma.recipe.findUnique({
+      where:   { id: body.recipeId },
+      include: { bomLines: { include: { ingredient: true } } },
+    });
     if (!recipe) return reply.code(422).send({ error: 'Receta no encontrada' });
     const scheduled = body.scheduledDate ? new Date(body.scheduledDate) : new Date();
     if (isNaN(scheduled.getTime())) return reply.code(400).send({ error: 'Fecha programada invalida' });
     if (!body.plannedQty || body.plannedQty <= 0) return reply.code(400).send({ error: 'Cantidad planificada invalida' });
-    const order = await prisma.productionOrder.create({
-      data: {
-        recipeId:            body.recipeId,
-        recipeVersion:       recipe.version,
-        plannedQty:          body.plannedQty,
-        scheduledDate:       scheduled,
-        shift:               body.shift ?? null,
-        linkedSalesOrderIds: body.linkedSalesOrderIds ?? [],
-        notes:               body.notes ?? null,
-        status:              'DRAFT',
-        createdBy:           req.actor!.sub,
-      },
+    const line = (body.line ?? '').toUpperCase();
+    if (!['A', 'B', 'C'].includes(line)) return reply.code(400).send({ error: 'Línea de producción inválida (A, B o C)' });
+
+    // Lot number = order number, generated from date + line + batch sequence.
+    const orderNumber = await generateLotNumber(scheduled, line);
+
+    const order = await prisma.$transaction(async (tx) => {
+      const created = await tx.productionOrder.create({
+        data: {
+          orderNumber,
+          recipeId:            body.recipeId,
+          recipeVersion:       recipe.version,
+          plannedQty:          body.plannedQty,
+          line:                line as never,
+          scheduledDate:       scheduled,
+          shift:               body.shift ?? null,
+          linkedSalesOrderIds: body.linkedSalesOrderIds ?? [],
+          notes:               body.notes ?? null,
+          status:              'DRAFT',
+          createdBy:           req.actor!.sub,
+        },
+      });
+      // Reserve BOM ingredients so they can't be consumed/assigned elsewhere.
+      await reserveForOrder(tx, created.id, recipe, Number(body.plannedQty));
+      return created;
     });
     return reply.code(201).send({ data: order });
   });
@@ -48,6 +131,10 @@ export async function productionRoutes(app: FastifyInstance) {
   app.patch('/orders/:id/status', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { status } = req.body as { status: string };
+    // Cancelling frees the reserved inventory.
+    if (status === 'CANCELLED') {
+      await releaseReservations(prisma, id);
+    }
     const order = await prisma.productionOrder.update({
       where: { id }, data: { status: status as never,
         ...(status === 'IN_PROGRESS' ? { startedAt: new Date() } : {}),
@@ -59,9 +146,15 @@ export async function productionRoutes(app: FastifyInstance) {
 
   // ── Recipe READ endpoints ─────────────────────────────────────────────────
 
-  app.get('/recipes', { preHandler: [requireAnyOf('OPS_MGR', 'PRODUCTION')] }, async (_req, reply) => {
+  app.get('/recipes', { preHandler: [requireAnyOf('OPS_MGR', 'PRODUCTION')] }, async (req, reply) => {
+    // Optional filters: productId (so each product shows ITS own recipe, not a
+    // shared "base" one) and status (defaults to ACTIVE).
+    const q = req.query as { productId?: string; status?: string };
     const recipes = await prisma.recipe.findMany({
-      where: { status: 'ACTIVE' },
+      where: {
+        status: (q.status as never) ?? ('ACTIVE' as never),
+        ...(q.productId ? { productId: q.productId } : {}),
+      },
       include: { product: true, bomLines: { include: { ingredient: true } } },
     });
     return reply.send({ data: recipes });
@@ -236,6 +329,10 @@ export async function productionRoutes(app: FastifyInstance) {
     const product = order.recipe.product;
     const overheadRate = await getOverheadRate();
 
+    // Release this order's reservations first, so its own consumption isn't
+    // blocked by the stock it had reserved.
+    await releaseReservations(prisma, order.id);
+
     // Pick the destination warehouse based on product type. Default to the
     // first FINISHED_GOODS or INTERMEDIATE warehouse matching the product type.
     const destType = product.productType === 'INTERMEDIATE' ? 'INTERMEDIATE' : 'FINISHED_GOODS';
@@ -372,5 +469,62 @@ export async function productionRoutes(app: FastifyInstance) {
         warehouse:       destWarehouse.name,
       },
     });
+  });
+
+  // ── Shop-floor tablet: per-stage time tracking ───────────────────────────
+  // Stages: DOSIFICADO, AMASADO, PORCIONADO, REPOSO, BOLEADO, LABRADO,
+  //         FERMENTADO, REPOSO_FRIO, PREPARACION, HORNEADO, ENFRIADO, ENVASADO
+
+  const STAGES = [
+    'DOSIFICADO','AMASADO','PORCIONADO','REPOSO','BOLEADO','LABRADO',
+    'FERMENTADO','REPOSO_FRIO','PREPARACION','HORNEADO','ENFRIADO','ENVASADO',
+  ];
+
+  // List stage logs for an order.
+  app.get('/orders/:id/stages', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const logs = await (prisma as any).productionStageLog.findMany({
+      where:   { productionOrderId: id },
+      orderBy: { startedAt: 'asc' },
+    });
+    return reply.send({ data: logs });
+  });
+
+  // Start / end / update a stage. Body: { stage, action: 'START'|'END'|'UPDATE',
+  // quantity?, leftover?, notes? }
+  app.post('/orders/:id/stages', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { stage: string; action?: string; quantity?: number; leftover?: number; notes?: string };
+    const stage = (body.stage ?? '').toUpperCase();
+    if (!STAGES.includes(stage)) return reply.code(400).send({ error: 'Etapa inválida' });
+    const action = (body.action ?? 'UPDATE').toUpperCase();
+
+    const existing = await (prisma as any).productionStageLog.findUnique({
+      where: { productionOrderId_stage: { productionOrderId: id, stage: stage as never } },
+    });
+
+    const data: any = {};
+    if (body.quantity !== undefined) data.quantity = body.quantity;
+    if (body.leftover !== undefined) data.leftover = body.leftover;
+    if (body.notes    !== undefined) data.notes    = body.notes;
+
+    if (action === 'START') {
+      data.startedAt = new Date();
+      data.endedAt   = null;
+      data.durationSec = null;
+    } else if (action === 'END') {
+      const startedAt = existing?.startedAt ?? new Date();
+      const endedAt   = new Date();
+      data.startedAt  = startedAt;
+      data.endedAt    = endedAt;
+      data.durationSec = Math.max(0, Math.round((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+    }
+
+    const log = await (prisma as any).productionStageLog.upsert({
+      where:  { productionOrderId_stage: { productionOrderId: id, stage: stage as never } },
+      create: { productionOrderId: id, stage: stage as never, createdBy: req.actor!.sub, ...data },
+      update: { ...data },
+    });
+    return reply.send({ data: log });
   });
 }
