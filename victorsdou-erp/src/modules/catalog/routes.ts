@@ -123,13 +123,34 @@ export async function catalogRoutes(app: FastifyInstance) {
       orderBy: { name: 'asc' },
     });
 
-    // Attach costs from active recipes
+    // Attach costs from active recipes (finished + intermediate products).
     const productIds = products.map(p => p.id);
     const costs = await getProductCosts(productIds);
-    const enriched = products.map(p => ({
-      ...p,
-      costs: costs[p.id] ?? null,
-    }));
+
+    // Raw materials have no recipe — their unit cost is the weighted-average cost
+    // tracked on the mirrored Ingredient row (updated on every stock receipt).
+    // Surface it as the product's Costo MP / Costo total so the catalog reflects
+    // new purchase entries.
+    const rawSkus = products.filter(p => p.productType === 'RAW_MATERIAL').map(p => p.sku);
+    const rawIngredients = rawSkus.length
+      ? await prisma.ingredient.findMany({
+          where: { sku: { in: rawSkus } },
+          select: { sku: true, avgCostPen: true },
+        })
+      : [];
+    const rawCostBySku: Record<string, number> = {};
+    for (const ing of rawIngredients) rawCostBySku[ing.sku] = Number(ing.avgCostPen);
+
+    const enriched = products.map(p => {
+      let cost = costs[p.id] ?? null;
+      if (!cost && p.productType === 'RAW_MATERIAL') {
+        const rawCost = rawCostBySku[p.sku];
+        if (rawCost != null && rawCost > 0) {
+          cost = { rawCost, overheadCost: 0, totalCost: rawCost };
+        }
+      }
+      return { ...p, costs: cost };
+    });
 
     return reply.send({ data: enriched });
   });
@@ -241,6 +262,53 @@ export async function catalogRoutes(app: FastifyInstance) {
     }
     const product = await prisma.product.update({ where: { id }, data: data as never });
     return reply.send({ data: product });
+  });
+
+  // ── Delete product ──────────────────────────────────────────────────────
+  // Attempts a hard delete of the product, its recipes/BOM lines and the mirrored
+  // Ingredient. If the product (or its ingredient) is still referenced by stock
+  // movements, sales, POs, etc., a hard delete would violate FK constraints — in
+  // that case we fall back to a soft delete (isActive = false) so it disappears
+  // from the catalog without breaking historical records.
+  app.delete('/:id', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const product = await prisma.product.findUnique({ where: { id } });
+    if (!product) return reply.code(404).send({ error: 'NOT_FOUND' });
+
+    const ingredient = await prisma.ingredient.findUnique({ where: { sku: product.sku } });
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        const recipes = await tx.recipe.findMany({ where: { productId: id }, select: { id: true } });
+        const recipeIds = recipes.map(r => r.id);
+        if (recipeIds.length) {
+          await tx.bOMLine.deleteMany({ where: { recipeId: { in: recipeIds } } });
+          await tx.recipe.deleteMany({ where: { id: { in: recipeIds } } });
+        }
+        if (ingredient) {
+          const [moves, boms, poLines] = await Promise.all([
+            tx.stockMovement.count({ where: { ingredientId: ingredient.id } }),
+            tx.bOMLine.count({ where: { ingredientId: ingredient.id } }),
+            tx.purchaseOrderLine.count({ where: { ingredientId: ingredient.id } }),
+          ]);
+          if (moves === 0 && boms === 0 && poLines === 0) {
+            await tx.batch.deleteMany({ where: { ingredientId: ingredient.id } });
+            await tx.ingredient.delete({ where: { id: ingredient.id } });
+          } else {
+            await tx.ingredient.update({ where: { id: ingredient.id }, data: { isActive: false } });
+          }
+        }
+        await tx.product.delete({ where: { id } });
+      });
+      return reply.code(204).send();
+    } catch {
+      // Hard delete blocked by existing references — soft delete instead.
+      await prisma.product.update({ where: { id }, data: { isActive: false } });
+      if (ingredient) {
+        await prisma.ingredient.update({ where: { id: ingredient.id }, data: { isActive: false } }).catch(() => {});
+      }
+      return reply.send({ data: { softDeleted: true } });
+    }
   });
 
   // ── Generate next code (preview) ────────────────────────────────────────

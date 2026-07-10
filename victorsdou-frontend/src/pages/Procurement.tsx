@@ -157,7 +157,8 @@ export default function Procurement() {
   const [showSupForm, setShowSupForm] = useState(false);
   const [editingSup, setEditingSup] = useState<any>(null);
   const [showPOForm, setShowPOForm] = useState(false);
-  const [poForm, setPoForm] = useState({ supplierId: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, unitPricePen: 0 }] });
+  const [poForm, setPoForm] = useState({ supplierId: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] });
+  const UOM_OPTIONS = ['kg', 'g', 'l', 'ml', 'unidad', 'caja', 'saco', 'bolsa', 'paquete'];
   const { data: pos, isLoading: loadPO } = useQuery({ queryKey: ['pos'], queryFn: () => api.get('/v1/procurement/purchase-orders').then(r => r.data) });
   const { data: suppliers, isLoading: loadSup } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.get('/v1/procurement/suppliers').then(r => r.data) });
   const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
@@ -252,15 +253,24 @@ export default function Procurement() {
               </div>
               {poForm.lines.map((l, i) => (
                 <div key={i} className="flex gap-2">
-                  <select className="input" value={l.ingredientId} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, ingredientId: e.target.value} : x) }))}>
+                  <select className="input" value={l.ingredientId} onChange={e => {
+                    const ingId = e.target.value;
+                    const ing = ingredients?.data?.find((x: any) => x.id === ingId);
+                    setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? { ...x, ingredientId: ingId, uom: x.uom || ing?.baseUom || '' } : x) }));
+                  }}>
                     <option value="">Ingrediente...</option>
                     {ingredients?.data?.map((ing: any) => <option key={ing.id} value={ing.id}>{ing.name}</option>)}
                   </select>
-                  <input type="number" className="input w-28" placeholder="Cantidad" min={0} value={l.quantity} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, quantity: parseFloat(e.target.value)||0} : x) }))} />
+                  <input type="number" className="input w-24" placeholder="Cantidad" min={0} value={l.quantity} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, quantity: parseFloat(e.target.value)||0} : x) }))} />
+                  <select className="input w-28" value={l.uom} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, uom: e.target.value} : x) }))} title="Unidad de compra">
+                    <option value="">Unidad...</option>
+                    {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+                    {l.uom && !UOM_OPTIONS.includes(l.uom) && <option value={l.uom}>{l.uom}</option>}
+                  </select>
                   <input type="number" className="input w-32" placeholder="Precio S/" min={0} step="0.01" value={l.unitPricePen} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, unitPricePen: parseFloat(e.target.value)||0} : x) }))} />
                 </div>
               ))}
-              <button className="text-sm text-brand-600 hover:underline" onClick={() => setPoForm(f => ({ ...f, lines: [...f.lines, { ingredientId: '', quantity: 1, unitPricePen: 0 }] }))}>+ Línea</button>
+              <button className="text-sm text-brand-600 hover:underline" onClick={() => setPoForm(f => ({ ...f, lines: [...f.lines, { ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] }))}>+ Línea</button>
               <div className="flex gap-2">
                 <button className="btn-primary" disabled={!poForm.supplierId} onClick={() => createPO.mutate(poForm)}>Crear OC</button>
                 <button className="btn-secondary" onClick={() => setShowPOForm(false)}>Cancelar</button>

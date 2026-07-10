@@ -810,10 +810,15 @@ model Supplier {
   phone              String?
   address            String?
   paymentTermsDays   Int      @default(30)
+  paymentDayOfMonth  String?
   paymentMethod      String?
   bankName           String?
   bankAccount        String?
+  cci                String?
+  creditLimit        Decimal? @db.Decimal(14, 2)
   currency           String   @default("PEN")
+  requiresDetraccion Boolean  @default(false)
+  detraccionRate     Decimal? @db.Decimal(5, 2)
   rating             Int?
   isActive           Boolean  @default(true)
   notes              String?

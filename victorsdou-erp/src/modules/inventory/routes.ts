@@ -202,6 +202,30 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: { success: true } });
   });
 
+  // ── PATCH /v1/inventory/batches/:id — correct a lote's dates / lot number ─────
+  // Allows editing the expiry date (e.g. after a revalidation) or fixing a
+  // registration error on an existing lote.
+  app.patch('/batches/:id', {
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { expiryDate?: string | null; productionDate?: string | null; lotNumber?: string | null };
+    const { prisma } = await import('../../lib/prisma');
+
+    const data: Record<string, unknown> = {};
+    if (body.expiryDate !== undefined)     data.expiryDate     = body.expiryDate ? new Date(body.expiryDate) : null;
+    if (body.productionDate !== undefined) data.productionDate = body.productionDate ? new Date(body.productionDate) : null;
+    if (body.lotNumber !== undefined)      data.supplierLotNo  = body.lotNumber || null;
+
+    if (Object.keys(data).length === 0) {
+      return reply.code(400).send({ error: 'Nada que actualizar' });
+    }
+
+    setAuditContext(req, 'inventory', 'ADJUSTMENT', id);
+    const batch = await prisma.batch.update({ where: { id }, data });
+    return reply.send({ data: batch });
+  });
+
   // ── GET /v1/inventory/warehouses — list all active warehouses ───────────────
   app.get('/warehouses', {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR', 'SUPER_ADMIN')],

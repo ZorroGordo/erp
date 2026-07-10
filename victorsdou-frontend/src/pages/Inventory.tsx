@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import {
   AlertTriangle, Clock, Package, Plus, LayoutGrid, List,
   Settings, X, Loader2, ArrowDownToLine, FileText,
-  ShoppingCart, Bell, Layers, ChevronDown, ChevronRight,
+  ShoppingCart, Bell, Layers, ChevronDown, ChevronRight, Pencil,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
@@ -212,8 +212,11 @@ function ReceiveModal({
 
   // Detect if the selected ingredient corresponds to a finished/intermediate
   // product (we ask for production date in that case).
-  const isFinishedOrIntermediate = ingredients.find(i => i.id === ingredientId)?.productType === 'FINISHED'
-    || ingredients.find(i => i.id === ingredientId)?.productType === 'INTERMEDIATE';
+  const selType = ingredients.find(i => i.id === ingredientId)?.productType;
+  const isFinishedOrIntermediate = selType === 'FINISHED' || selType === 'INTERMEDIATE';
+  // Raw materials are purchased, not produced — no production order and no
+  // internal product lote apply to them.
+  const isRawMaterial = selType === 'RAW_MATERIAL';
 
   const create = useMutation({
     mutationFn: (body: any) => api.post('/v1/inventory/receipts', body),
@@ -223,7 +226,8 @@ function ReceiveModal({
 
   const selIng   = ingredients.find(i => i.id === ingredientId);
   const total    = Number(qty) * Number(unitCost);
-  const canSave  = ingredientId && warehouseId && Number(qty) > 0 && Number(unitCost) >= 0 && lotNumber.trim() && expiryDate;
+  const canSave  = ingredientId && warehouseId && Number(qty) > 0 && Number(unitCost) >= 0 && expiryDate
+    && (isRawMaterial || lotNumber.trim());
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -295,23 +299,27 @@ function ReceiveModal({
               onChange={e => setPoRef(e.target.value)} />
           </div>
 
-          {/* Production Order ref */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              <Package size={11} className="inline mr-1" />Orden de Producción
-            </label>
-            <input className="input font-mono" value={productionOrderRef} placeholder="OP-2026-001"
-              onChange={e => setProductionOrderRef(e.target.value)} />
-          </div>
+          {/* Production Order ref — only for produced items (PI/PT), not raw materials */}
+          {!isRawMaterial && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                <Package size={11} className="inline mr-1" />Orden de Producción
+              </label>
+              <input className="input font-mono" value={productionOrderRef} placeholder="OP-2026-001"
+                onChange={e => setProductionOrderRef(e.target.value)} />
+            </div>
+          )}
 
-          {/* Lot number */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Lote de producto <span className="text-red-500">*</span>
-            </label>
-            <input className="input font-mono" value={lotNumber} placeholder="L-2026-001"
-              onChange={e => setLotNumber(e.target.value)} />
-          </div>
+          {/* Lot number — raw materials don't carry an internal product lote */}
+          {!isRawMaterial && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Lote de producto <span className="text-red-500">*</span>
+              </label>
+              <input className="input font-mono" value={lotNumber} placeholder="L-2026-001"
+                onChange={e => setLotNumber(e.target.value)} />
+            </div>
+          )}
 
           {isFinishedOrIntermediate && (
             <div>
@@ -352,8 +360,8 @@ function ReceiveModal({
               qty: Number(qty), unitCost: Number(unitCost),
               invoiceRef: invoiceRef.trim() || undefined,
               poRef:      poRef.trim()      || undefined,
-              productionOrderRef: productionOrderRef.trim() || undefined,
-              lotNumber:      lotNumber.trim() || undefined,
+              productionOrderRef: isRawMaterial ? undefined : (productionOrderRef.trim() || undefined),
+              lotNumber:      isRawMaterial ? undefined : (lotNumber.trim() || undefined),
               productionDate: productionDate || undefined,
               expiryDate:     expiryDate || undefined,
               notes:      notes.trim()      || undefined,
@@ -635,11 +643,26 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
 
 // ── LotesModal — lotes (batches) with stock for one materia prima / intermedio ──
 function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () => void }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['ingredient-batches', item.id],
     queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/batches`).then(r => r.data),
   });
   const batches: any[] = data?.data ?? [];
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editExpiry, setEditExpiry] = useState('');
+  const toISODate = (d: any) => d ? new Date(d).toISOString().slice(0, 10) : '';
+  const saveExpiry = useMutation({
+    mutationFn: (b: { id: string; expiryDate: string }) =>
+      api.patch(`/v1/inventory/batches/${b.id}`, { expiryDate: b.expiryDate || null }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['ingredient-batches', item.id] });
+      qc.invalidateQueries({ queryKey: ['expiry-alerts'] });
+      toast.success('Fecha de vencimiento actualizada');
+      setEditingId(null);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? 'Error al actualizar'),
+  });
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '85vh' }}>
@@ -669,6 +692,7 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
                   <th className="px-3 py-2 text-right">Recibido</th>
                   <th className="px-3 py-2 text-right">Disponible</th>
                   <th className="px-3 py-2 text-right">Costo unit.</th>
+                  <th className="px-3 py-2 text-center w-px"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -677,10 +701,34 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
                     <td className="px-3 py-2 font-mono">{b.supplierLotNo || <span className="text-gray-300">sin lote</span>}</td>
                     <td className="px-3 py-2 text-gray-500">{b.receivedDate ? new Date(b.receivedDate).toLocaleDateString('es-PE') : '—'}</td>
                     <td className="px-3 py-2 text-gray-500">{b.productionDate ? new Date(b.productionDate).toLocaleDateString('es-PE') : '—'}</td>
-                    <td className="px-3 py-2 text-gray-500">{b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('es-PE') : '—'}</td>
+                    <td className="px-3 py-2 text-gray-500">
+                      {editingId === b.id ? (
+                        <input type="date" className="input py-1 text-xs" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} autoFocus />
+                      ) : (
+                        b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('es-PE') : '—'
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono text-gray-400">{Number(b.qtyReceived).toFixed(2)}</td>
                     <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">{Number(b.qtyRemaining).toFixed(2)} {item.baseUom}</td>
                     <td className="px-3 py-2 text-right font-mono text-gray-500">S/ {Number(b.unitCostPen).toFixed(4)}</td>
+                    <td className="px-3 py-2 text-center whitespace-nowrap">
+                      {editingId === b.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            className="text-xs bg-brand-600 text-white px-2 py-1 rounded disabled:opacity-50"
+                            disabled={saveExpiry.isPending}
+                            onClick={() => saveExpiry.mutate({ id: b.id, expiryDate: editExpiry })}
+                          >Guardar</button>
+                          <button className="text-xs text-gray-500 px-1" onClick={() => setEditingId(null)}>Cancelar</button>
+                        </div>
+                      ) : (
+                        <button
+                          className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                          title="Editar vencimiento"
+                          onClick={() => { setEditingId(b.id); setEditExpiry(toISODate(b.expiryDate)); }}
+                        ><Pencil size={13} /></button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

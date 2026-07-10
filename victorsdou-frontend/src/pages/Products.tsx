@@ -14,6 +14,8 @@ interface Product {
   id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { id: string; name: string };
   productType?: 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED' | null;
   family?: 'CONGELADO' | 'SECO' | null;
+  rawFamily?: string | null;
+  unitOfSale?: string | null;
   linea?: 'MOLDE' | 'HOGAZA' | 'VARIOS' | 'ESTANDAR' | 'SALADOS' | 'DULCES' | 'GALLETAS' | 'HOJALDRES' | 'POSTRES' | null;
   costs?: { rawCost: number; overheadCost: number; totalCost: number } | null;
   ecommerceEnabled?: boolean; ecommercePrice?: string | null;
@@ -84,7 +86,7 @@ interface BOMLineEdit { tempId: string; ingredientId: string; ingredientName: st
 
 const ALLOWED_BOM_TYPES: Record<string, string[]> = {
   FINISHED: ['RAW_MATERIAL', 'INTERMEDIATE'],
-  INTERMEDIATE: ['RAW_MATERIAL'],
+  INTERMEDIATE: ['RAW_MATERIAL', 'INTERMEDIATE'],
 };
 
 interface DashIngredient { id: string; name: string; sku: string; baseUom: string; productType?: string | null; }
@@ -118,7 +120,11 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
     queryFn: () => api.get('/v1/inventory/dashboard').then(r => r.data),
     staleTime: 60_000,
   });
-  const allowedIngs = (ingsData?.data ?? []).filter(i => allowedTypes.includes(typeOf(i.productType)));
+  const allowedIngs = (ingsData?.data ?? [])
+    .filter(i => allowedTypes.includes(typeOf(i.productType)))
+    // An intermediate can use other intermediates, but never itself (avoid a
+    // recipe that references its own output).
+    .filter(i => i.sku !== product.sku);
   const filteredIngs = allowedIngs.filter(i =>
     !ingSearch || i.name?.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
   ).slice(0, 8);
@@ -173,10 +179,15 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
         yieldUom,
         lines: lines.map(l => ({ ingredientId: l.ingredientId, qtyRequired: parseFloat(l.qtyRequired) || 0, uom: l.uom, wasteFactorPct: parseFloat(l.wasteFactorPct) || 0 })),
       });
+      // Activate the recipe so it becomes the product's active receta. Without
+      // this the recipe stays in DRAFT and the panel keeps showing "sin receta
+      // activa", which looked like the formula wasn't being saved.
+      await api.patch(`/v1/production/recipes/${recipeId}/status`, { status: 'ACTIVE' });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['recipe'] });
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
+      qc.invalidateQueries({ queryKey: ['products'] });
       toast.success('Receta guardada');
       onClose();
     },
@@ -184,7 +195,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   });
 
   const UOM_OPTIONS = ['g', 'kg', 'ml', 'l', 'unidades', 'cl', 'dl', 'tsp', 'tbsp'];
-  const allowedLabel = product.productType === 'INTERMEDIATE' ? 'materias primas' : 'materias primas e intermedios';
+  const allowedLabel = 'materias primas e intermedios';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -350,7 +361,8 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', sku: '', basePricePen: '', categoryId: '', isActive: true,
-    productType: '' as string, family: '' as string,
+    productType: '' as string, family: '' as string, rawFamily: '' as string,
+    unitOfSale: 'unidades' as string,
     ecommerceEnabled: false, ecommercePriceEnabled: false, ecommercePrice: '',
     ecommercePriceDisplay: '', // con-IGV display value (what user types)
     ecommerceImages: [] as string[], ecommerceMainImageIndex: 0,
@@ -431,9 +443,13 @@ export default function Products() {
       } else if (data.family && data.productType !== 'INTERMEDIATE') {
         payload.family = data.family;
       }
-      if (data.productType === 'FINISHED') {
-        if (data.categoryId) payload.categoryId = data.categoryId;
-        if (data.linea) payload.linea = data.linea;
+      // Category can be assigned to finished goods and raw materials so the
+      // catalog shows it instead of always falling back to "Sin categoría".
+      if (data.categoryId && (data.productType === 'FINISHED' || data.productType === 'RAW_MATERIAL')) {
+        payload.categoryId = data.categoryId;
+      }
+      if (data.productType === 'FINISHED' && data.linea) {
+        payload.linea = data.linea;
       }
       const familyForCode = data.productType === 'RAW_MATERIAL' ? data.rawFamily : data.family;
       if (data.autoCode && data.productType && familyForCode && data.productType !== 'INTERMEDIATE') {
@@ -472,11 +488,16 @@ export default function Products() {
 
   const patchProduct = useMutation({
     mutationFn: ({ id, data }: { id: string; data: typeof editForm }) => {
+      const isRaw = data.productType === 'RAW_MATERIAL';
       const payload = {
         name: data.name, sku: data.sku, basePricePen: data.basePricePen,
         categoryId: data.categoryId, isActive: data.isActive,
         productType: data.productType || null,
-        family: data.family || null,
+        unitOfSale: data.unitOfSale || 'unidades',
+        // Raw materials carry their family in rawFamily (Harina, Semillas…);
+        // finished goods use family (Congelado/Seco). Keep the other one null.
+        family: isRaw ? null : (data.family || null),
+        rawFamily: isRaw ? (data.rawFamily || null) : null,
         ecommerceEnabled: data.ecommerceEnabled,
         ecommercePrice: data.ecommerceEnabled && data.ecommercePriceEnabled && data.ecommercePrice
           ? data.ecommercePrice : null,
@@ -518,6 +539,8 @@ export default function Products() {
       isActive: p.isActive,
       productType: p.productType ?? '',
       family: p.family ?? '',
+      rawFamily: p.rawFamily ?? '',
+      unitOfSale: p.unitOfSale ?? 'unidades',
       ecommerceEnabled: p.ecommerceEnabled ?? false,
       ecommercePriceEnabled: !!p.ecommercePrice,
       ecommercePrice: p.ecommercePrice ?? '',
@@ -595,14 +618,35 @@ export default function Products() {
                   <option value="FINISHED">Terminado (PT)</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Familia</label>
-                <select className="input w-full" value={editForm.family ?? ''} onChange={e => setEditForm(f => ({ ...f, family: e.target.value || '' }))}>
-                  <option value="">— Sin familia —</option>
-                  <option value="CONGELADO">Congelado</option>
-                  <option value="SECO">Seco</option>
-                </select>
-              </div>
+              {editForm.productType === 'RAW_MATERIAL' ? (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Familia</label>
+                  <select className="input w-full" value={editForm.rawFamily ?? ''} onChange={e => setEditForm(f => ({ ...f, rawFamily: e.target.value || '' }))}>
+                    <option value="">— Sin familia —</option>
+                    {Object.entries(RAW_FAMILY_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Familia</label>
+                  <select className="input w-full" value={editForm.family ?? ''} onChange={e => setEditForm(f => ({ ...f, family: e.target.value || '' }))}>
+                    <option value="">— Sin familia —</option>
+                    <option value="CONGELADO">Congelado</option>
+                    <option value="SECO">Seco</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Unidad de medida</label>
+              <select className="input w-full" value={editForm.unitOfSale} onChange={e => setEditForm(f => ({ ...f, unitOfSale: e.target.value }))}>
+                <option value="gramos">Gramos (g)</option>
+                <option value="kilogramos">Kilogramos (kg)</option>
+                <option value="litros">Litros (l)</option>
+                <option value="ml">Mililitros (ml)</option>
+                <option value="unidades">Unidades</option>
+                <option value="porciones">Porciones</option>
+              </select>
             </div>
             <div className="flex items-center gap-3">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</label>
@@ -903,6 +947,15 @@ export default function Products() {
                 <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.rawFamily} onChange={e => setProductForm(f => ({ ...f, rawFamily: e.target.value }))}>
                   <option value="">— Seleccionar —</option>
                   {Object.entries(RAW_FAMILY_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+            )}
+            {productForm.productType === 'RAW_MATERIAL' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Categoría</label>
+                <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" value={productForm.categoryId} onChange={e => setProductForm(f => ({ ...f, categoryId: e.target.value }))}>
+                  <option value="">Sin categoría</option>
+                  {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
             )}
