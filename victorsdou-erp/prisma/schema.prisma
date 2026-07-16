@@ -72,6 +72,7 @@ enum RawMaterialFamily {
   ESPECIAS
   ADITIVOS
   COBERTURAS_RELLENOS
+  EMPAQUES
 }
 
 enum StockMovementType {
@@ -609,6 +610,7 @@ model Recipe {
   effectiveTo   DateTime?
   yieldQty      Decimal      @db.Decimal(10, 4)
   yieldUom      String
+  doughWeightPerUnitG Decimal? @db.Decimal(10, 2)
   status        RecipeStatus @default(DRAFT)
   changeReason  String?
   approvedBy    String?

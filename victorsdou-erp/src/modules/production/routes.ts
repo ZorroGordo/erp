@@ -188,6 +188,7 @@ export async function productionRoutes(app: FastifyInstance) {
       productId: string;
       yieldQty: number;
       yieldUom: string;
+      doughWeightPerUnitG?: number | null;
       effectiveFrom?: string;
       changeReason?: string;
     };
@@ -203,6 +204,8 @@ export async function productionRoutes(app: FastifyInstance) {
         version,
         yieldQty: body.yieldQty,
         yieldUom: body.yieldUom,
+        doughWeightPerUnitG: body.doughWeightPerUnitG != null && !Number.isNaN(Number(body.doughWeightPerUnitG))
+          ? Number(body.doughWeightPerUnitG) : null,
         effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : new Date(),
         changeReason: body.changeReason,
         status: 'DRAFT',
@@ -216,7 +219,7 @@ export async function productionRoutes(app: FastifyInstance) {
   /** Replace all BOM lines for a recipe (atomic PUT) */
   app.put('/recipes/:id/bom', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { lines } = req.body as {
+    const { lines, yieldQty, yieldUom, doughWeightPerUnitG } = req.body as {
       lines: {
         ingredientId: string;
         qtyRequired: number;
@@ -224,7 +227,22 @@ export async function productionRoutes(app: FastifyInstance) {
         wasteFactorPct?: number;
         notes?: string;
       }[];
+      yieldQty?: number;
+      yieldUom?: string;
+      doughWeightPerUnitG?: number | null;
     };
+    // Persist yield + dough-weight edits that come alongside the BOM (the editor
+    // sends them together); previously these were silently dropped here.
+    const recipeData: any = {};
+    if (yieldQty != null && !Number.isNaN(Number(yieldQty))) recipeData.yieldQty = Number(yieldQty);
+    if (yieldUom) recipeData.yieldUom = yieldUom;
+    if (doughWeightPerUnitG !== undefined) {
+      recipeData.doughWeightPerUnitG = doughWeightPerUnitG != null && !Number.isNaN(Number(doughWeightPerUnitG))
+        ? Number(doughWeightPerUnitG) : null;
+    }
+    if (Object.keys(recipeData).length > 0) {
+      await prisma.recipe.update({ where: { id }, data: recipeData });
+    }
     // Atomic replace: delete existing, create new
     await prisma.bOMLine.deleteMany({ where: { recipeId: id } });
     if (lines.length > 0) {

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ClipboardList, Pencil } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Eye, FileDown, X } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
@@ -151,28 +151,182 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
 }
 
 import { ExcelDownloadButton } from '../components/ExcelDownloadButton';
+
+interface POLineForm { ingredientId: string; quantity: number; uom: string; unitPricePen: number }
+interface POForm {
+  supplierId: string; currency: string; exchangeRate: string;
+  expectedDeliveryDate: string; notes: string; lines: POLineForm[];
+}
+
 export default function Procurement() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'po'|'suppliers'>('po');
   const [showSupForm, setShowSupForm] = useState(false);
   const [editingSup, setEditingSup] = useState<any>(null);
   const [showPOForm, setShowPOForm] = useState(false);
-  const [poForm, setPoForm] = useState({ supplierId: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] });
+  const [editingPOId, setEditingPOId] = useState<string | null>(null);
+  const [viewingPO, setViewingPO] = useState<any>(null);
+  const EMPTY_PO: POForm = { supplierId: '', currency: 'PEN', exchangeRate: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] };
+  const [poForm, setPoForm] = useState<POForm>(EMPTY_PO);
   const UOM_OPTIONS = ['kg', 'g', 'l', 'ml', 'unidad', 'caja', 'saco', 'bolsa', 'paquete'];
+  const openNewPO = () => { setEditingPOId(null); setPoForm(EMPTY_PO); setShowPOForm(true); };
+  const openEditPO = (po: any) => {
+    setEditingPOId(po.id);
+    setPoForm({
+      supplierId: po.supplierId ?? po.supplier?.id ?? '',
+      currency: po.currency ?? 'PEN',
+      exchangeRate: po.exchangeRate != null && Number(po.exchangeRate) !== 1 ? String(po.exchangeRate) : '',
+      expectedDeliveryDate: po.expectedDeliveryDate ? String(po.expectedDeliveryDate).slice(0, 10) : '',
+      notes: po.notes ?? '',
+      lines: (po.lines ?? []).map((l: any) => ({
+        ingredientId: l.ingredientId,
+        quantity: Number(l.qtyOrdered ?? l.quantity ?? 0),
+        uom: l.uom ?? '',
+        unitPricePen: Number(l.unitPrice ?? l.unitPricePen ?? 0),
+      })),
+    });
+    setShowPOForm(true);
+  };
   const { data: pos, isLoading: loadPO } = useQuery({ queryKey: ['pos'], queryFn: () => api.get('/v1/procurement/purchase-orders').then(r => r.data) });
   const { data: suppliers, isLoading: loadSup } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.get('/v1/procurement/suppliers').then(r => r.data) });
   const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
   const approvePO = useMutation({
-    mutationFn: (id: string) => api.patch(`/v1/procurement/purchase-orders/${id}/approve`),
+    mutationFn: (id: string) => api.patch(`/v1/procurement/purchase-orders/${id}/approve`, { approved: true }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pos'] }); toast.success('OC aprobada'); }
   });
   const createPO = useMutation({
-    mutationFn: (b: any) => api.post('/v1/procurement/purchase-orders', b),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pos'] }); toast.success('OC creada'); setShowPOForm(false); },
-    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error')
+    mutationFn: (b: any) => editingPOId
+      ? api.patch(`/v1/procurement/purchase-orders/${editingPOId}`, b)
+      : api.post('/v1/procurement/purchase-orders', b),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pos'] }); toast.success(editingPOId ? 'OC actualizada' : 'OC creada'); setShowPOForm(false); setEditingPOId(null); setPoForm(EMPTY_PO); },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? e.response?.data?.message ?? 'Error')
   });
+
+  const ingName = (id: string) => ingredients?.data?.find((x: any) => x.id === id)?.name ?? id;
+  const supName = (po: any) => po.supplier?.businessName ?? suppliers?.data?.find((s: any) => s.id === po.supplierId)?.businessName ?? '';
+  const supRuc  = (po: any) => po.supplier?.ruc ?? suppliers?.data?.find((s: any) => s.id === po.supplierId)?.ruc ?? '';
+
+  // Open a print-ready window for an approved OC so the user can send / save it
+  // as a PDF for the supplier (mirrors the batch-card print flow in Production).
+  const printPO = (po: any) => {
+    const cur = po.currency && po.currency !== 'PEN' ? po.currency : 'PEN';
+    const rate = Number(po.exchangeRate) || 1;
+    const money = (n: number) => 'S/ ' + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const rows = (po.lines ?? []).map((l: any) => {
+      const qty = Number(l.qtyOrdered ?? l.quantity ?? 0);
+      const price = Number(l.unitPrice ?? l.unitPricePen ?? 0);
+      const lineSoles = Number(l.lineTotalPen ?? qty * price * rate);
+      return `<tr>
+        <td>${l.ingredient?.name ?? ingName(l.ingredientId)}</td>
+        <td style="text-align:right">${qty.toLocaleString('es-PE')}</td>
+        <td style="text-align:center">${l.uom ?? ''}</td>
+        <td style="text-align:right">${cur === 'PEN' ? 'S/' : cur} ${price.toLocaleString('es-PE', { minimumFractionDigits: 2 })}</td>
+        <td style="text-align:right">${money(lineSoles)}</td>
+      </tr>`;
+    }).join('');
+    const deliv = po.expectedDeliveryDate ? new Date(po.expectedDeliveryDate).toLocaleDateString('es-PE') : '—';
+    const created = po.orderedAt || po.createdAt ? new Date(po.orderedAt ?? po.createdAt).toLocaleDateString('es-PE') : '';
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${po.poNumber}</title>
+      <style>
+        body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2937;padding:32px;max-width:800px;margin:0 auto}
+        h1{font-size:20px;margin:0 0 2px} .muted{color:#6b7280;font-size:12px}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #b45309;padding-bottom:12px;margin-bottom:16px}
+        .brand{font-size:22px;font-weight:800;color:#b45309}
+        table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+        th{background:#fdf3e7;color:#92400e;text-align:left;padding:8px;font-size:11px;text-transform:uppercase}
+        td{padding:8px;border-bottom:1px solid #eee}
+        .totals{margin-top:12px;margin-left:auto;width:260px;font-size:13px}
+        .totals div{display:flex;justify-content:space-between;padding:4px 0}
+        .totals .grand{border-top:2px solid #b45309;font-weight:700;font-size:15px;padding-top:8px}
+        .info{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px;margin-bottom:8px}
+        .info b{color:#374151}
+      </style></head><body>
+      <div class="head">
+        <div><div class="brand">Victorsdou</div><div class="muted">Orden de Compra</div></div>
+        <div style="text-align:right"><h1>${po.poNumber}</h1><div class="muted">Emitida: ${created}</div></div>
+      </div>
+      <div class="info">
+        <div><b>Proveedor:</b> ${supName(po)}</div>
+        <div><b>RUC:</b> ${supRuc(po)}</div>
+        <div><b>Fecha de entrega:</b> ${deliv}</div>
+        <div><b>Moneda:</b> ${cur}${cur !== 'PEN' ? ` (TC ${rate.toFixed(4)})` : ''}</div>
+      </div>
+      <table><thead><tr><th>Ítem</th><th style="text-align:right">Cantidad</th><th style="text-align:center">UoM</th><th style="text-align:right">Precio</th><th style="text-align:right">Total S/</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <div class="totals">
+        <div><span>Subtotal</span><span>${money(po.subtotalPen ?? 0)}</span></div>
+        <div><span>IGV 18%</span><span>${money(po.igvPen ?? 0)}</span></div>
+        <div class="grand"><span>Total</span><span>${money(po.totalPen ?? 0)}</span></div>
+      </div>
+      ${po.notes ? `<p class="muted" style="margin-top:16px"><b>Notas:</b> ${po.notes}</p>` : ''}
+      <script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); }
+    else toast.error('Habilita las ventanas emergentes para descargar el PDF');
+  };
+
   return (
     <div className="space-y-6">
+      {viewingPO && (() => {
+        const po = viewingPO;
+        const cur = po.currency && po.currency !== 'PEN' ? po.currency : 'PEN';
+        const rate = Number(po.exchangeRate) || 1;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={() => setViewingPO(null)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div>
+                  <h2 className="font-bold text-gray-900 font-mono">{po.poNumber}</h2>
+                  <p className="text-xs text-gray-400">{po.supplier?.businessName} · <StatusBadge status={po.status} /></p>
+                </div>
+                <button onClick={() => setViewingPO(null)} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div><span className="text-gray-400">Proveedor:</span> <span className="font-medium">{supName(po)}</span></div>
+                  <div><span className="text-gray-400">RUC:</span> <span className="font-mono">{supRuc(po)}</span></div>
+                  <div><span className="text-gray-400">Fecha entrega:</span> {po.expectedDeliveryDate ? new Date(po.expectedDeliveryDate).toLocaleDateString('es-PE') : '—'}</div>
+                  <div><span className="text-gray-400">Moneda:</span> {cur}{cur !== 'PEN' && <span className="text-gray-400"> (TC {rate.toFixed(4)})</span>}</div>
+                </div>
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+                      <tr><th className="px-3 py-2 text-left">Ítem</th><th className="px-3 py-2 text-right">Cantidad</th><th className="px-3 py-2 text-center">UoM</th><th className="px-3 py-2 text-right">Precio {cur === 'PEN' ? 'S/' : cur}</th><th className="px-3 py-2 text-right">Total S/</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {(po.lines ?? []).map((l: any, i: number) => {
+                        const qty = Number(l.qtyOrdered ?? l.quantity ?? 0);
+                        const price = Number(l.unitPrice ?? l.unitPricePen ?? 0);
+                        return (
+                          <tr key={i}>
+                            <td className="px-3 py-2">{l.ingredient?.name ?? ingName(l.ingredientId)}</td>
+                            <td className="px-3 py-2 text-right">{fmtNum(qty)}</td>
+                            <td className="px-3 py-2 text-center text-gray-500">{l.uom}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmtNum(price)}</td>
+                            <td className="px-3 py-2 text-right font-mono">S/ {fmtNum(l.lineTotalPen ?? qty * price * rate)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="ml-auto w-56 text-sm space-y-1">
+                  <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><span className="font-mono">S/ {fmtNum(po.subtotalPen ?? 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">IGV 18%</span><span className="font-mono">S/ {fmtNum(po.igvPen ?? 0)}</span></div>
+                  <div className="flex justify-between border-t border-gray-200 pt-1 font-semibold"><span>Total</span><span className="font-mono">S/ {fmtNum(po.totalPen ?? 0)}</span></div>
+                </div>
+                {po.notes && <p className="text-sm text-gray-500"><span className="text-gray-400">Notas:</span> {po.notes}</p>}
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
+                {po.status === 'DRAFT' && <button onClick={() => { setViewingPO(null); openEditPO(po); }} className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-xl"><Pencil size={14} /> Editar</button>}
+                {(po.status === 'APPROVED' || po.status === 'RECEIVED') && <button onClick={() => printPO(po)} className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700"><FileDown size={14} /> Descargar PDF</button>}
+                <button onClick={() => setViewingPO(null)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold">Compras</h1><p className="text-gray-500 text-sm">Compras y proveedores</p></div>
         {tab === 'po' && (
@@ -202,7 +356,7 @@ export default function Procurement() {
                 ]},
               ]}
             />
-            <button className="btn-primary flex items-center gap-2" onClick={() => setShowPOForm(v => !v)}><Plus size={16} /> Nueva OC</button>
+            <button className="btn-primary flex items-center gap-2" onClick={openNewPO}><Plus size={16} /> Nueva OC</button>
           </div>
         )}
         {tab === 'suppliers' && (
@@ -239,7 +393,7 @@ export default function Procurement() {
         <>
           {showPOForm && (
             <div className="card p-5 space-y-4">
-              <h3 className="font-semibold">Nueva OC</h3>
+              <h3 className="font-semibold">{editingPOId ? 'Editar OC' : 'Nueva OC'}</h3>
               <div className="grid grid-cols-3 gap-4">
                 <div><label className="block text-xs font-medium text-gray-600 mb-1">Proveedor</label>
                   <select className="input" value={poForm.supplierId} onChange={e => setPoForm(f => ({ ...f, supplierId: e.target.value }))}>
@@ -250,7 +404,19 @@ export default function Procurement() {
                   <input type="date" className="input" value={poForm.expectedDeliveryDate} onChange={e => setPoForm(f => ({ ...f, expectedDeliveryDate: e.target.value }))} /></div>
                 <div><label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
                   <input className="input" value={poForm.notes} onChange={e => setPoForm(f => ({ ...f, notes: e.target.value }))} /></div>
+                <div><label className="block text-xs font-medium text-gray-600 mb-1">Moneda de compra</label>
+                  <select className="input" value={poForm.currency} onChange={e => setPoForm(f => ({ ...f, currency: e.target.value, exchangeRate: e.target.value === 'PEN' ? '' : f.exchangeRate }))}>
+                    <option value="PEN">Soles (PEN)</option>
+                    <option value="USD">Dólares (USD)</option>
+                  </select></div>
+                {poForm.currency !== 'PEN' && (
+                  <div><label className="block text-xs font-medium text-gray-600 mb-1">Tipo de cambio (S/ por {poForm.currency})</label>
+                    <input type="number" min={0} step="0.0001" className="input" placeholder="ej. 3.75" value={poForm.exchangeRate} onChange={e => setPoForm(f => ({ ...f, exchangeRate: e.target.value }))} /></div>
+                )}
               </div>
+              {poForm.currency !== 'PEN' && (
+                <p className="text-xs text-gray-500">Los precios se ingresan en {poForm.currency}. Al recibir el stock, los montos se convierten a soles usando el tipo de cambio.</p>
+              )}
               {poForm.lines.map((l, i) => (
                 <div key={i} className="flex gap-2">
                   <select className="input" value={l.ingredientId} onChange={e => {
@@ -267,13 +433,20 @@ export default function Procurement() {
                     {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                     {l.uom && !UOM_OPTIONS.includes(l.uom) && <option value={l.uom}>{l.uom}</option>}
                   </select>
-                  <input type="number" className="input w-32" placeholder="Precio S/" min={0} step="0.01" value={l.unitPricePen} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, unitPricePen: parseFloat(e.target.value)||0} : x) }))} />
+                  <input type="number" className="input w-32" placeholder={`Precio ${poForm.currency === 'PEN' ? 'S/' : poForm.currency}`} min={0} step="0.01" value={l.unitPricePen} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, unitPricePen: parseFloat(e.target.value)||0} : x) }))} />
                 </div>
               ))}
               <button className="text-sm text-brand-600 hover:underline" onClick={() => setPoForm(f => ({ ...f, lines: [...f.lines, { ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] }))}>+ Línea</button>
               <div className="flex gap-2">
-                <button className="btn-primary" disabled={!poForm.supplierId} onClick={() => createPO.mutate(poForm)}>Crear OC</button>
-                <button className="btn-secondary" onClick={() => setShowPOForm(false)}>Cancelar</button>
+                <button className="btn-primary" disabled={!poForm.supplierId || (poForm.currency !== 'PEN' && !(Number(poForm.exchangeRate) > 0))} onClick={() => createPO.mutate({
+                  supplierId: poForm.supplierId,
+                  currency: poForm.currency,
+                  exchangeRate: poForm.currency === 'PEN' ? 1 : (Number(poForm.exchangeRate) || 1),
+                  expectedDeliveryDate: poForm.expectedDeliveryDate || undefined,
+                  notes: poForm.notes || undefined,
+                  lines: poForm.lines,
+                })}>{editingPOId ? 'Guardar cambios' : 'Crear OC'}</button>
+                <button className="btn-secondary" onClick={() => { setShowPOForm(false); setEditingPOId(null); setPoForm(EMPTY_PO); }}>Cancelar</button>
               </div>
             </div>
           )}
@@ -286,15 +459,31 @@ export default function Procurement() {
                   <th className="px-5 py-3 text-left">Proveedor</th>
                   <th className="px-5 py-3 text-right">Total S/</th>
                   <th className="px-5 py-3 text-left">Estado</th>
-                  <th className="px-5 py-3 text-center">Aprobar</th>
+                  <th className="px-5 py-3 text-center">Acciones</th>
                 </tr></thead><tbody className="divide-y divide-gray-100">
                   {pos?.data?.map((po: any) => (
                     <tr key={po.id} className="table-row-hover">
                       <td className="px-5 py-3 font-mono">{po.poNumber}</td>
                       <td className="px-5 py-3 font-medium">{po.supplier?.businessName}</td>
-                      <td className="px-5 py-3 text-right font-mono">S/ {fmtNum(po.totalPen ?? 0)}</td>
+                      <td className="px-5 py-3 text-right font-mono">
+                        S/ {fmtNum(po.totalPen ?? 0)}
+                        {po.currency && po.currency !== 'PEN' && <span className="block text-[10px] text-gray-400">TC {po.currency} {Number(po.exchangeRate).toFixed(4)}</span>}
+                      </td>
                       <td className="px-5 py-3"><StatusBadge status={po.status} /></td>
-                      <td className="px-5 py-3 text-center">{po.status === 'DRAFT' && <button onClick={() => approvePO.mutate(po.id)} className="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded">Aprobar</button>}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => setViewingPO(po)} title="Ver detalle" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Eye size={15} /></button>
+                          {po.status === 'DRAFT' && (
+                            <button onClick={() => openEditPO(po)} title="Editar" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Pencil size={14} /></button>
+                          )}
+                          {po.status === 'DRAFT' && (
+                            <button onClick={() => approvePO.mutate(po.id)} className="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded">Aprobar</button>
+                          )}
+                          {(po.status === 'APPROVED' || po.status === 'RECEIVED') && (
+                            <button onClick={() => printPO(po)} title="Descargar PDF" className="flex items-center gap-1 text-xs bg-brand-50 text-brand-700 hover:bg-brand-100 px-2 py-1 rounded"><FileDown size={13} /> PDF</button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody></table>
