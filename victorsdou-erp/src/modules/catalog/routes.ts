@@ -24,12 +24,14 @@ const FAMILY_CODES: Record<string, string> = {
   ESPECIAS:    'ES',
   ADITIVOS:    'AD',
   COBERTURAS_RELLENOS: 'CR',
+  EMPAQUES:    'EM',
 };
 
 // Map a RawMaterialFamily enum to the free-text Ingredient.category string.
 const RAW_FAMILY_TO_CATEGORY: Record<string, string> = {
   HARINA: 'flour', SEMILLAS: 'seeds', LACTEOS: 'dairy', ENDULZANTES: 'sugar',
   GRASAS: 'fat', ESPECIAS: 'flavoring', ADITIVOS: 'other', COBERTURAS_RELLENOS: 'other',
+  EMPAQUES: 'packaging',
 };
 
 async function generateProductCode(
@@ -64,9 +66,18 @@ async function generateProductCode(
 // ── Cost calculation helper ───────────────────────────────────────────────
 
 function convertQtyToKgOrL(qty: number, uom: string): number {
-  const u = (uom ?? '').toLowerCase();
-  const gramToKg: Record<string, number> = { mg: 0.000001, g: 0.001, kg: 1 };
-  const mlToL: Record<string, number> = { ml: 0.001, cl: 0.01, dl: 0.1, l: 1, litre: 1 };
+  const u = (uom ?? '').toLowerCase().trim();
+  // Accept both short codes (g, kg, ml, l) and the full Spanish unit names the
+  // product/ingredient forms use (gramos, kilogramos, litros, mililitros…).
+  const gramToKg: Record<string, number> = {
+    mg: 0.000001, g: 0.001, gr: 0.001, gramo: 0.001, gramos: 0.001,
+    kg: 1, kgs: 1, kilo: 1, kilos: 1, kilogramo: 1, kilogramos: 1,
+  };
+  const mlToL: Record<string, number> = {
+    ml: 0.001, mililitro: 0.001, mililitros: 0.001, cc: 0.001,
+    cl: 0.01, dl: 0.1,
+    l: 1, lt: 1, litro: 1, litros: 1, litre: 1,
+  };
   if (gramToKg[u] !== undefined) return qty * gramToKg[u];
   if (mlToL[u] !== undefined) return qty * mlToL[u];
   return qty;
@@ -279,19 +290,34 @@ export async function catalogRoutes(app: FastifyInstance) {
 
     try {
       await prisma.$transaction(async (tx) => {
+        // Remove this product's own recipes + their BOM lines.
         const recipes = await tx.recipe.findMany({ where: { productId: id }, select: { id: true } });
         const recipeIds = recipes.map(r => r.id);
         if (recipeIds.length) {
           await tx.bOMLine.deleteMany({ where: { recipeId: { in: recipeIds } } });
           await tx.recipe.deleteMany({ where: { id: { in: recipeIds } } });
         }
+
+        // Finished/intermediate outputs may have stock-level / movement rows that
+        // reference the product directly — clear them so the product row can go.
+        await (tx as any).productStockMovement?.deleteMany?.({ where: { productId: id } }).catch?.(() => {});
+        await (tx as any).productStockLevel?.deleteMany?.({ where: { productId: id } }).catch?.(() => {});
+
         if (ingredient) {
+          // Only hard-delete the mirrored ingredient when nothing depends on it;
+          // otherwise deactivate it so downstream history stays intact.
           const [moves, boms, poLines] = await Promise.all([
             tx.stockMovement.count({ where: { ingredientId: ingredient.id } }),
             tx.bOMLine.count({ where: { ingredientId: ingredient.id } }),
             tx.purchaseOrderLine.count({ where: { ingredientId: ingredient.id } }),
           ]);
           if (moves === 0 && boms === 0 && poLines === 0) {
+            // No transactional history — safe to remove the ingredient and the
+            // ancillary rows that would otherwise block the delete (stock levels,
+            // reorder rules, alert config, empty batches).
+            await tx.stockLevel.deleteMany({ where: { ingredientId: ingredient.id } });
+            await tx.reorderRule.deleteMany({ where: { ingredientId: ingredient.id } }).catch?.(() => {});
+            await (tx as any).ingredientAlert?.deleteMany?.({ where: { ingredientId: ingredient.id } }).catch?.(() => {});
             await tx.batch.deleteMany({ where: { ingredientId: ingredient.id } });
             await tx.ingredient.delete({ where: { id: ingredient.id } });
           } else {
@@ -302,8 +328,9 @@ export async function catalogRoutes(app: FastifyInstance) {
       });
       return reply.code(204).send();
     } catch {
-      // Hard delete blocked by existing references — soft delete instead.
-      await prisma.product.update({ where: { id }, data: { isActive: false } });
+      // Hard delete blocked by existing references — soft delete instead so the
+      // product still disappears from the catalog without breaking history.
+      await prisma.product.update({ where: { id }, data: { isActive: false } }).catch(() => {});
       if (ingredient) {
         await prisma.ingredient.update({ where: { id: ingredient.id }, data: { isActive: false } }).catch(() => {});
       }

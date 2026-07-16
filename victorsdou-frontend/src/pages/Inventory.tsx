@@ -202,6 +202,8 @@ function ReceiveModal({
   const [warehouseId,  setWarehouseId]  = useState(warehouses[0]?.id ?? '');
   const [qty,          setQty]          = useState('');
   const [unitCost,     setUnitCost]     = useState('');
+  const [currency,     setCurrency]     = useState('PEN');
+  const [exchangeRate, setExchangeRate] = useState('');
   const [invoiceRef,   setInvoiceRef]   = useState('');
   const [poRef,        setPoRef]        = useState('');
   const [productionOrderRef, setProductionOrderRef] = useState('');
@@ -225,8 +227,13 @@ function ReceiveModal({
   });
 
   const selIng   = ingredients.find(i => i.id === ingredientId);
-  const total    = Number(qty) * Number(unitCost);
+  // Convert the entered cost to soles when purchasing in a foreign currency, so
+  // WAC / stock valuation is always stored in soles.
+  const rate     = currency === 'PEN' ? 1 : (Number(exchangeRate) || 0);
+  const unitCostPen = Number(unitCost) * rate;
+  const total    = Number(qty) * unitCostPen;
   const canSave  = ingredientId && warehouseId && Number(qty) > 0 && Number(unitCost) >= 0 && expiryDate
+    && (currency === 'PEN' || Number(exchangeRate) > 0)
     && (isRawMaterial || lotNumber.trim());
 
   return (
@@ -274,11 +281,29 @@ function ReceiveModal({
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Costo unitario <span className="text-red-500">*</span></label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">S/</span>
-                <input type="number" min="0" step="0.01" className="input pl-7 font-mono"
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">{currency === 'PEN' ? 'S/' : currency}</span>
+                <input type="number" min="0" step="0.01" className="input pl-9 font-mono"
                   value={unitCost} placeholder="0.00" onChange={e => setUnitCost(e.target.value)} />
               </div>
             </div>
+          </div>
+
+          {/* Currency + exchange rate — cost is converted to soles on save */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
+              <select className="input" value={currency} onChange={e => { setCurrency(e.target.value); if (e.target.value === 'PEN') setExchangeRate(''); }}>
+                <option value="PEN">Soles (PEN)</option>
+                <option value="USD">Dólares (USD)</option>
+              </select>
+            </div>
+            {currency !== 'PEN' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de cambio (S/ por {currency})</label>
+                <input type="number" min="0" step="0.0001" className="input font-mono" placeholder="ej. 3.75"
+                  value={exchangeRate} onChange={e => setExchangeRate(e.target.value)} />
+              </div>
+            )}
           </div>
 
           {/* Invoice ref */}
@@ -345,10 +370,18 @@ function ReceiveModal({
           </div>
 
           {/* Total preview */}
-          {qty && unitCost && (
-            <div className="bg-brand-50 rounded-xl px-4 py-3 flex justify-between text-sm">
-              <span className="text-gray-500">Total estimado</span>
-              <span className="font-semibold text-brand-700">S/ {total.toLocaleString('es-PE', { minimumFractionDigits: 2 })}</span>
+          {qty && unitCost && (currency === 'PEN' || Number(exchangeRate) > 0) && (
+            <div className="bg-brand-50 rounded-xl px-4 py-3 space-y-1 text-sm">
+              {currency !== 'PEN' && (
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>Costo unitario en soles</span>
+                  <span className="font-mono">S/ {unitCostPen.toLocaleString('es-PE', { minimumFractionDigits: 4 })}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-gray-500">Total estimado (S/)</span>
+                <span className="font-semibold text-brand-700">S/ {total.toLocaleString('es-PE', { minimumFractionDigits: 2 })}</span>
+              </div>
             </div>
           )}
         </div>
@@ -357,7 +390,7 @@ function ReceiveModal({
           <button className="btn-primary disabled:opacity-50 flex items-center gap-2"
             disabled={!canSave || create.isPending} onClick={() => create.mutate({
               ingredientId, warehouseId,
-              qty: Number(qty), unitCost: Number(unitCost),
+              qty: Number(qty), unitCost: Number(unitCostPen.toFixed(6)),
               invoiceRef: invoiceRef.trim() || undefined,
               poRef:      poRef.trim()      || undefined,
               productionOrderRef: isRawMaterial ? undefined : (productionOrderRef.trim() || undefined),

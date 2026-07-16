@@ -9,7 +9,7 @@ import { fmtNum } from '../lib/fmt';
 
 interface Ingredient { id: string; name: string; sku: string; baseUom: string; avgCostPen: string; }
 interface BOMLine { id: string; ingredientId: string; ingredient: Ingredient; qtyRequired: string; uom: string; wasteFactorPct: string; notes: string | null; }
-interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; bomLines: BOMLine[]; }
+interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; doughWeightPerUnitG?: string | null; bomLines: BOMLine[]; }
 interface Product {
   id: string; name: string; sku: string; basePricePen: string; isActive: boolean; category?: { id: string; name: string };
   productType?: 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED' | null;
@@ -27,6 +27,7 @@ const FAMILY_LABELS: Record<string, string> = { CONGELADO: 'Congelado', SECO: 'S
 const RAW_FAMILY_LABELS: Record<string, string> = {
   HARINA: 'Harina', SEMILLAS: 'Semillas', LACTEOS: 'Lácteos',
   ENDULZANTES: 'Endulzantes', GRASAS: 'Grasas', ESPECIAS: 'Especias',
+  COBERTURAS_RELLENOS: 'Coberturas/Relleno', ADITIVOS: 'Aditivos', EMPAQUES: 'Empaques',
 };
 const LINEA_LABELS: Record<string, string> = {
   MOLDE: 'Molde', HOGAZA: 'Hogaza', VARIOS: 'Varios', ESTANDAR: 'Estándar',
@@ -40,18 +41,39 @@ interface CostLine extends BOMLine { effectiveQty: number; effectiveQtyStd: numb
 // avgCostPen is ALWAYS stored as S/ per kg (for weight) or S/ per litre (for volume).
 // We must convert any qty to kg or litre before multiplying.
 
+// Map any unit string (short code OR full Spanish word) to a canonical short code.
+// Products/ingredients store units as 'gramos'/'kilogramos'/'litros'/'ml' while the
+// recipe editor used 'g'/'kg'/'l'/'ml' — without this, conversions silently failed
+// and 45 000 g of flour was treated as 45 000 kg (1000× cost error).
+export function normalizeUom(uom: string): string {
+  const u = (uom ?? '').toLowerCase().trim();
+  const map: Record<string, string> = {
+    mg: 'mg',
+    g: 'g', gr: 'g', gramo: 'g', gramos: 'g',
+    kg: 'kg', kgs: 'kg', kilo: 'kg', kilos: 'kg', kilogramo: 'kg', kilogramos: 'kg',
+    ml: 'ml', mililitro: 'ml', mililitros: 'ml', cc: 'ml',
+    cl: 'cl', dl: 'dl',
+    l: 'l', lt: 'l', litro: 'l', litros: 'l', litre: 'l', liter: 'l',
+    unidad: 'unidades', unidades: 'unidades', und: 'unidades', u: 'unidades',
+    porcion: 'porciones', porciones: 'porciones',
+  };
+  return map[u] ?? u;
+}
+
 function convertQtyToStdUnit(qty: number, uom: string): { value: number; unit: string } {
-  const u = (uom ?? '').toLowerCase();
+  const u = normalizeUom(uom);
   const gramToKg: Record<string, number> = { mg: 0.000001, g: 0.001, kg: 1 };
-  const mlToLitre: Record<string, number> = { ml: 0.001, cl: 0.01, dl: 0.1, l: 1, litre: 1, liter: 1 };
+  const mlToLitre: Record<string, number> = { ml: 0.001, cl: 0.01, dl: 0.1, l: 1 };
   if (gramToKg[u] !== undefined) return { value: qty * gramToKg[u], unit: 'kg' };
   if (mlToLitre[u] !== undefined) return { value: qty * mlToLitre[u], unit: 'L' };
   return { value: qty, unit: uom };
 }
 
 function qtyToGrams(qty: number, uom: string): number {
-  const u = (uom ?? '').toLowerCase();
-  const factors: Record<string, number> = { mg: 0.001, g: 1, kg: 1000 };
+  const u = normalizeUom(uom);
+  // Weight-only (grams). Volume is treated as g via density≈1 (water/dough) so the
+  // dough-weight-per-unit figure includes liquids like water and milk.
+  const factors: Record<string, number> = { mg: 0.001, g: 1, kg: 1000, ml: 1, cl: 10, dl: 100, l: 1000 };
   return factors[u] !== undefined ? qty * factors[u] : 0;
 }
 
@@ -74,7 +96,10 @@ function computeCosts(recipe: Recipe | null, overheadRate: number, applyOverhead
     const qty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100);
     return sum + qtyToGrams(qty, l.uom);
   }, 0);
-  const doughWeightG = totalWeightG / yieldQty;
+  // Use the manually entered dough weight per unit when provided; otherwise derive
+  // it from the total batch weight ÷ yield.
+  const storedDough = recipe.doughWeightPerUnitG != null ? Number(recipe.doughWeightPerUnitG) : NaN;
+  const doughWeightG = !Number.isNaN(storedDough) && storedDough > 0 ? storedDough : totalWeightG / yieldQty;
   return { costLines, totalRawCost, effectiveUnitCost, overheadCost, totalProductCost, doughWeightG };
 }
 
@@ -100,13 +125,16 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   const [step, setStep] = useState<'choose' | 'edit'>(recipe ? 'edit' : 'choose');
   const [yieldQty, setYieldQty] = useState(recipe ? String(recipe.yieldQty) : '1');
   const [yieldUom, setYieldUom] = useState(recipe ? recipe.yieldUom : 'unidades');
+  const [doughWeightPerUnitG, setDoughWeightPerUnitG] = useState(
+    recipe?.doughWeightPerUnitG != null ? String(recipe.doughWeightPerUnitG) : ''
+  );
   const [lines, setLines] = useState<BOMLineEdit[]>(() =>
     (recipe?.bomLines ?? []).map(l => ({
       tempId: l.id,
       ingredientId: l.ingredientId,
       ingredientName: l.ingredient.name,
       qtyRequired: String(l.qtyRequired),
-      uom: l.uom,
+      uom: normalizeUom(l.uom),
       wasteFactorPct: String(l.wasteFactorPct),
     }))
   );
@@ -122,9 +150,10 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   });
   const allowedIngs = (ingsData?.data ?? [])
     .filter(i => allowedTypes.includes(typeOf(i.productType)))
-    // An intermediate can use other intermediates, but never itself (avoid a
-    // recipe that references its own output).
-    .filter(i => i.sku !== product.sku);
+    // Intermediates may reference other intermediates AND themselves — e.g. a
+    // masa-madre build uses a portion of existing masa madre as a starter. Only
+    // finished goods are barred from referencing their own output.
+    .filter(i => product.productType === 'INTERMEDIATE' ? true : i.sku !== product.sku);
   const filteredIngs = allowedIngs.filter(i =>
     !ingSearch || i.name?.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
   ).slice(0, 8);
@@ -150,7 +179,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
         ingredientId: l.ingredientId,
         ingredientName: l.ingredient?.name ?? '',
         qtyRequired: String(l.qtyRequired),
-        uom: l.uom,
+        uom: normalizeUom(l.uom),
         wasteFactorPct: String(l.wasteFactorPct),
       }));
     setLines(copied);
@@ -158,7 +187,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
   };
 
   const addIngredient = (ing: DashIngredient) => {
-    setLines(ls => [...ls, { tempId: crypto.randomUUID(), ingredientId: ing.id, ingredientName: ing.name, qtyRequired: '1', uom: ing.baseUom, wasteFactorPct: '0' }]);
+    setLines(ls => [...ls, { tempId: crypto.randomUUID(), ingredientId: ing.id, ingredientName: ing.name, qtyRequired: '1', uom: normalizeUom(ing.baseUom), wasteFactorPct: '0' }]);
     setIngSearch(''); setIngOpen(false);
   };
 
@@ -169,14 +198,17 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      const doughG = doughWeightPerUnitG.trim() !== '' && !Number.isNaN(parseFloat(doughWeightPerUnitG))
+        ? parseFloat(doughWeightPerUnitG) : null;
       let recipeId = recipe?.id;
       if (!recipeId) {
-        const r = await api.post('/v1/production/recipes', { productId: product.id, yieldQty: parseFloat(yieldQty) || 1, yieldUom });
+        const r = await api.post('/v1/production/recipes', { productId: product.id, yieldQty: parseFloat(yieldQty) || 1, yieldUom, doughWeightPerUnitG: doughG });
         recipeId = r.data.data.id;
       }
       await api.put(`/v1/production/recipes/${recipeId}/bom`, {
         yieldQty: parseFloat(yieldQty) || 1,
         yieldUom,
+        doughWeightPerUnitG: doughG,
         lines: lines.map(l => ({ ingredientId: l.ingredientId, qtyRequired: parseFloat(l.qtyRequired) || 0, uom: l.uom, wasteFactorPct: parseFloat(l.wasteFactorPct) || 0 })),
       });
       // Activate the recipe so it becomes the product's active receta. Without
@@ -267,7 +299,13 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
                   {['unidades', 'g', 'kg', 'l', 'ml', 'porciones'].map(u => <option key={u} value={u}>{u}</option>)}
                 </select>
               </div>
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Peso masa / unidad (g)</label>
+                <input type="number" min={0} step={1} className="input w-full" placeholder="auto"
+                  value={doughWeightPerUnitG} onChange={e => setDoughWeightPerUnitG(e.target.value)} />
+              </div>
             </div>
+            <p className="text-xs text-gray-400 -mt-2">Deja el peso de masa por unidad vacío para calcularlo automáticamente desde los ingredientes.</p>
 
             {/* Ingredient search */}
             <div>

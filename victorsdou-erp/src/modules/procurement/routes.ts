@@ -62,6 +62,8 @@ export async function procurementRoutes(app: FastifyInstance) {
   app.post('/purchase-orders', { preHandler: [requireAnyOf('PROCUREMENT')] }, async (req, reply) => {
     const body = req.body as {
       supplierId: string;
+      currency?: string;
+      exchangeRate?: number;
       lines: { ingredientId: string; qtyOrdered?: number; quantity?: number; uom?: string; unitPrice?: number; unitPricePen?: number }[];
       expectedDeliveryDate?: string;
       notes?: string;
@@ -69,10 +71,17 @@ export async function procurementRoutes(app: FastifyInstance) {
 
     if (!body.supplierId) return reply.code(400).send({ error: 'supplierId es requerido' });
 
+    // Currency of the order. Line prices are entered in this currency; totals are
+    // always stored in soles using the exchange rate (S/ per foreign unit) so
+    // stock valuation stays in soles regardless of the purchase currency.
+    const currency = (body.currency || 'PEN').toUpperCase();
+    const rate = currency === 'PEN' ? 1 : (Number(body.exchangeRate) || 1);
+
     // The UI sends { ingredientId, quantity, unitPricePen, uom }; the schema uses
     // qtyOrdered / unitPrice. Map both spellings and coerce to numbers so we never
     // persist NaN (which previously broke the whole create with a misleading
-    // "Argument `supplier` is missing" Prisma error).
+    // "Argument `supplier` is missing" Prisma error). unitPrice is stored in the
+    // PO currency; lineTotalPen is the soles-converted line total.
     const lines = (body.lines ?? [])
       .filter(l => l.ingredientId)
       .map(l => {
@@ -83,7 +92,7 @@ export async function procurementRoutes(app: FastifyInstance) {
           qtyOrdered:   qty,
           uom:          l.uom || 'unidad',
           unitPrice:    price,
-          lineTotalPen: parseFloat((qty * price).toFixed(4)),
+          lineTotalPen: parseFloat((qty * price * rate).toFixed(4)),
         };
       });
 
@@ -94,12 +103,13 @@ export async function procurementRoutes(app: FastifyInstance) {
     const po = await prisma.purchaseOrder.create({
       data: {
         poNumber: `PO-${Date.now()}`, supplierId: body.supplierId,
+        currency, exchangeRate: rate,
         subtotalPen: subtotal, igvPen: igv, totalPen: parseFloat((subtotal + igv).toFixed(4)),
         expectedDeliveryDate: body.expectedDeliveryDate ? new Date(body.expectedDeliveryDate) : undefined,
         notes: body.notes, createdBy: req.actor!.sub,
         lines: { create: lines },
       },
-      include: { lines: true, supplier: true },
+      include: { lines: { include: { ingredient: true } }, supplier: true },
     });
 
     // Fire-and-forget: notify supplier + ops
@@ -114,10 +124,82 @@ export async function procurementRoutes(app: FastifyInstance) {
 
   app.patch('/purchase-orders/:id/approve', { preHandler: [requireAnyOf('OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { approved, reason } = req.body as { approved: boolean; reason?: string };
+    const { approved, reason } = (req.body ?? {}) as { approved?: boolean; reason?: string };
+    // Default to approving: this endpoint is the "Aprobar" action, so an empty
+    // body must approve — previously undefined fell through to CANCELLED.
+    const isApproved = approved !== false;
     const po = await prisma.purchaseOrder.update({
       where: { id },
-      data: { status: approved ? 'APPROVED' : 'CANCELLED', approvedBy: req.actor!.sub, approvedAt: new Date(), notes: reason },
+      data: {
+        status: isApproved ? 'APPROVED' : 'CANCELLED',
+        approvedBy: req.actor!.sub,
+        approvedAt: new Date(),
+        ...(reason ? { notes: reason } : {}),
+      },
+    });
+    return reply.send({ data: po });
+  });
+
+  // ── PATCH /purchase-orders/:id — edit a DRAFT order (supplier, lines, currency) ─
+  app.patch('/purchase-orders/:id', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      supplierId?: string;
+      currency?: string;
+      exchangeRate?: number;
+      expectedDeliveryDate?: string | null;
+      notes?: string | null;
+      lines?: { ingredientId: string; qtyOrdered?: number; quantity?: number; uom?: string; unitPrice?: number; unitPricePen?: number }[];
+    };
+
+    const existing = await prisma.purchaseOrder.findUnique({ where: { id } });
+    if (!existing) return reply.code(404).send({ error: 'OC no encontrada' });
+    if (existing.status !== 'DRAFT') {
+      return reply.code(422).send({ error: 'Solo se pueden editar órdenes en borrador' });
+    }
+
+    const currency = (body.currency || existing.currency || 'PEN').toUpperCase();
+    const rate = currency === 'PEN' ? 1 : (Number(body.exchangeRate) || Number(existing.exchangeRate) || 1);
+
+    const data: any = {
+      ...(body.supplierId ? { supplierId: body.supplierId } : {}),
+      currency,
+      exchangeRate: rate,
+      ...(body.expectedDeliveryDate !== undefined
+        ? { expectedDeliveryDate: body.expectedDeliveryDate ? new Date(body.expectedDeliveryDate) : null }
+        : {}),
+      ...(body.notes !== undefined ? { notes: body.notes } : {}),
+    };
+
+    // Replace lines atomically when provided, and recompute soles totals.
+    if (body.lines) {
+      const lines = body.lines
+        .filter(l => l.ingredientId)
+        .map(l => {
+          const qty   = Number(l.qtyOrdered ?? l.quantity ?? 0) || 0;
+          const price = Number(l.unitPrice ?? l.unitPricePen ?? 0) || 0;
+          return {
+            ingredientId: l.ingredientId,
+            qtyOrdered:   qty,
+            uom:          l.uom || 'unidad',
+            unitPrice:    price,
+            lineTotalPen: parseFloat((qty * price * rate).toFixed(4)),
+          };
+        });
+      if (lines.length === 0) return reply.code(400).send({ error: 'La OC debe tener al menos una línea' });
+      const subtotal = lines.reduce((s, l) => s + l.lineTotalPen, 0);
+      const igv = parseFloat((subtotal * 0.18).toFixed(4));
+      data.subtotalPen = subtotal;
+      data.igvPen = igv;
+      data.totalPen = parseFloat((subtotal + igv).toFixed(4));
+      await prisma.purchaseOrderLine.deleteMany({ where: { purchaseOrderId: id } });
+      data.lines = { create: lines };
+    }
+
+    const po = await prisma.purchaseOrder.update({
+      where: { id },
+      data,
+      include: { lines: { include: { ingredient: true } }, supplier: true },
     });
     return reply.send({ data: po });
   });
