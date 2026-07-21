@@ -419,6 +419,10 @@ export async function registerReceipt(input: {
     notes:        notesParts.join(' | ') || undefined,
     createdBy:    input.createdBy,
   });
+
+  // Return the created batch id (when a lote was recorded) so callers such as
+  // the PO-receive flow can link it into a GoodsReceiptLine for traceability.
+  return { batchId };
 }
 
 // ── Receipt history (all PURCHASE_RECEIPT movements for an ingredient) ─────────

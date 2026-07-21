@@ -226,6 +226,9 @@ export function StatusBadge({ status }: { status: string }) {
     IN_PROGRESS: 'bg-indigo-100 text-indigo-800', COMPLETED: 'bg-green-100 text-green-800',
     CANCELLED: 'bg-red-100 text-red-800', DELIVERED: 'bg-emerald-100 text-emerald-800',
     DRAFT: 'bg-gray-100 text-gray-600', APPROVED: 'bg-cyan-100 text-cyan-800',
+    SENT: 'bg-blue-100 text-blue-800', PARTIAL_RECEIVED: 'bg-amber-100 text-amber-800',
+    FULLY_RECEIVED: 'bg-emerald-100 text-emerald-800', INVOICED: 'bg-violet-100 text-violet-800',
+    PAID: 'bg-green-100 text-green-800',
   };
   return <span className={`badge ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>{status.replace(/_/g, ' ')}</span>;
 }

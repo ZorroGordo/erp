@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { notifyPurchaseOrderCreated } from '../../services/notifications';
+import { registerReceipt } from '../inventory/service';
 
 // Convert '' / null / undefined to null; otherwise coerce to a finite number.
 function toNumberOrNull(v: unknown): number | null {
@@ -138,6 +139,120 @@ export async function procurementRoutes(app: FastifyInstance) {
       },
     });
     return reply.send({ data: po });
+  });
+
+  // ── POST /purchase-orders/:id/receive — ingest an approved OC into inventory ──
+  //
+  // Turns an approved (or partially received / sent) purchase order into actual
+  // stock: for every line it registers a PURCHASE_RECEIPT (WAC + optional lote),
+  // records the received quantity, writes a GoodsReceiptNote for traceability and
+  // moves the OC to FULLY_RECEIVED / PARTIAL_RECEIVED. This is the "dar ingreso al
+  // stock desde el módulo de compras" action requested by the user — it avoids
+  // re-typing every line manually in the Inventory module.
+  app.post('/purchase-orders/:id/receive', {
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PROCUREMENT', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as {
+      warehouseId: string;
+      receivedDate?: string;
+      notes?: string;
+      lines?: {
+        lineId:          string;
+        qtyReceived?:    number;
+        unitCostPen?:    number;
+        lotNumber?:      string;
+        expiryDate?:     string;
+        productionDate?: string;
+      }[];
+    };
+
+    if (!body.warehouseId) return reply.code(400).send({ error: 'Almacén es requerido' });
+
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: { lines: { include: { ingredient: true } } },
+    });
+    if (!po) return reply.code(404).send({ error: 'OC no encontrada' });
+
+    const RECEIVABLE = ['APPROVED', 'SENT', 'PARTIAL_RECEIVED'];
+    if (!RECEIVABLE.includes(po.status)) {
+      return reply.code(422).send({ error: 'Solo se puede dar ingreso a órdenes aprobadas' });
+    }
+    if (!po.lines.length) return reply.code(400).send({ error: 'La OC no tiene líneas' });
+
+    // Index any per-line overrides sent by the UI (qty / cost / lote / vencimiento).
+    const overrides = new Map((body.lines ?? []).map(l => [l.lineId, l]));
+    const rate = Number(po.exchangeRate) || 1;
+
+    // Build the effective receipt for each line (defaulting qty to the remaining
+    // amount and unit cost to the OC price converted to soles), skipping lines
+    // that have nothing left to receive.
+    const toReceive = po.lines
+      .map(line => {
+        const ov        = overrides.get(line.id) ?? ({} as any);
+        const remaining = Number(line.qtyOrdered) - Number(line.qtyReceived);
+        const qty       = ov.qtyReceived != null ? Number(ov.qtyReceived) : remaining;
+        const unitCost  = ov.unitCostPen != null ? Number(ov.unitCostPen) : Number(line.unitPrice) * rate;
+        return { line, ov, qty, unitCost };
+      })
+      .filter(x => x.qty > 0);
+
+    if (!toReceive.length) return reply.code(400).send({ error: 'No hay cantidades por recibir' });
+
+    // Create the GoodsReceiptNote first so every receipt line can hang off it.
+    const grn = await prisma.goodsReceiptNote.create({
+      data: {
+        grnNumber:       `GRN-${Date.now()}`,
+        purchaseOrderId: po.id,
+        receivedDate:    body.receivedDate ? new Date(body.receivedDate) : new Date(),
+        warehouseId:     body.warehouseId,
+        receivedBy:      req.actor!.sub,
+        notes:           body.notes || null,
+      },
+    });
+
+    for (const { line, ov, qty, unitCost } of toReceive) {
+      const { batchId } = await registerReceipt({
+        ingredientId:   line.ingredientId,
+        warehouseId:    body.warehouseId,
+        qty,
+        unitCost,
+        poRef:          po.poNumber,
+        lotNumber:      ov.lotNumber || undefined,
+        expiryDate:     ov.expiryDate || undefined,
+        productionDate: ov.productionDate || undefined,
+        createdBy:      req.actor!.sub,
+      });
+
+      await prisma.goodsReceiptLine.create({
+        data: {
+          grnId:               grn.id,
+          purchaseOrderLineId: line.id,
+          ingredientId:        line.ingredientId,
+          qtyReceived:         qty,
+          batchId:             batchId ?? null,
+          unitCostPen:         unitCost,
+          notes:               ov.lotNumber ? `Lote: ${ov.lotNumber}` : null,
+        },
+      });
+
+      await prisma.purchaseOrderLine.update({
+        where: { id: line.id },
+        data:  { qtyReceived: { increment: qty } },
+      });
+    }
+
+    // Recompute status: fully received only when every line is fully covered.
+    const refreshed = await prisma.purchaseOrderLine.findMany({ where: { purchaseOrderId: po.id } });
+    const fully = refreshed.every(l => Number(l.qtyReceived) >= Number(l.qtyOrdered));
+    const updated = await prisma.purchaseOrder.update({
+      where: { id: po.id },
+      data:  { status: fully ? 'FULLY_RECEIVED' : 'PARTIAL_RECEIVED' },
+      include: { lines: { include: { ingredient: true } }, supplier: true },
+    });
+
+    return reply.code(201).send({ data: updated, grnNumber: grn.grnNumber });
   });
 
   // ── PATCH /purchase-orders/:id — edit a DRAFT order (supplier, lines, currency) ─
