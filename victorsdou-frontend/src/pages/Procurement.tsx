@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ClipboardList, Pencil, Eye, FileDown, X } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2 } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
@@ -158,6 +158,139 @@ interface POForm {
   expectedDeliveryDate: string; notes: string; lines: POLineForm[];
 }
 
+// ── ReceivePOModal ────────────────────────────────────────────────────────────
+// Ingest an approved OC into inventory in one step: pick the almacén, confirm the
+// quantities (defaulting to what's still pending), and optionally record lote +
+// vencimiento per line. Posts to /purchase-orders/:id/receive which registers the
+// stock movements (WAC) and moves the OC to Recibida.
+function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => void; onSuccess: () => void }) {
+  const { data: warehousesResp } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: () => api.get('/v1/inventory/warehouses').then(r => r.data),
+  });
+  const warehouses: any[] = warehousesResp?.data ?? [];
+  const [warehouseId, setWarehouseId] = useState('');
+  const [notes, setNotes] = useState('');
+  // Per-line editable state keyed by line id: qty pending, lote, vencimiento.
+  const [rows, setRows] = useState<Record<string, { qty: string; lot: string; expiry: string }>>(() => {
+    const init: Record<string, { qty: string; lot: string; expiry: string }> = {};
+    for (const l of (po.lines ?? [])) {
+      const remaining = Number(l.qtyOrdered ?? l.quantity ?? 0) - Number(l.qtyReceived ?? 0);
+      init[l.id] = { qty: String(remaining > 0 ? remaining : 0), lot: '', expiry: '' };
+    }
+    return init;
+  });
+  // Default the almacén to the first one once the list loads.
+  if (!warehouseId && warehouses.length) setWarehouseId(warehouses[0].id);
+
+  const setRow = (id: string, k: 'qty' | 'lot' | 'expiry') => (v: string) =>
+    setRows(r => ({ ...r, [id]: { ...r[id], [k]: v } }));
+
+  const receive = useMutation({
+    mutationFn: (b: any) => api.post(`/v1/procurement/purchase-orders/${po.id}/receive`, b),
+    onSuccess: () => { toast.success('Stock ingresado a inventario'); onSuccess(); onClose(); },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? e.response?.data?.message ?? 'Error al ingresar stock'),
+  });
+
+  // A perishable line must carry a vencimiento (mirrors the manual entry rule).
+  const missingExpiry = (po.lines ?? []).some((l: any) =>
+    l.ingredient?.isPerishable && Number(rows[l.id]?.qty) > 0 && !rows[l.id]?.expiry);
+  const anyQty = (po.lines ?? []).some((l: any) => Number(rows[l.id]?.qty) > 0);
+  const canSave = !!warehouseId && anyQty && !missingExpiry;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <PackageCheck size={18} className="text-brand-600" />
+            <div>
+              <h2 className="font-bold text-gray-900">Dar ingreso al stock</h2>
+              <p className="text-xs text-gray-400 font-mono">{po.poNumber} · {po.supplier?.businessName ?? ''}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Almacén <span className="text-red-500">*</span></label>
+              <select className="input" value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>
+                <option value="">— Seleccionar —</option>
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
+              <input className="input" value={notes} placeholder="Opcional" onChange={e => setNotes(e.target.value)} />
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="w-full text-sm">
+              <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left">Ítem</th>
+                  <th className="px-3 py-2 text-right">Cantidad</th>
+                  <th className="px-3 py-2 text-left">Lote</th>
+                  <th className="px-3 py-2 text-left">Vencimiento</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(po.lines ?? []).map((l: any) => {
+                  const remaining = Number(l.qtyOrdered ?? l.quantity ?? 0) - Number(l.qtyReceived ?? 0);
+                  const perishable = !!l.ingredient?.isPerishable;
+                  return (
+                    <tr key={l.id}>
+                      <td className="px-3 py-2">
+                        {l.ingredient?.name ?? l.ingredientId}
+                        {remaining < Number(l.qtyOrdered ?? 0) && <span className="block text-[10px] text-gray-400">Pendiente: {fmtNum(remaining)} {l.uom}</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <input type="number" min={0} step="0.01" className="input w-24 text-right font-mono"
+                          value={rows[l.id]?.qty ?? ''} onChange={e => setRow(l.id, 'qty')(e.target.value)} />
+                        <span className="text-[10px] text-gray-400 ml-1">{l.uom}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input className="input w-28 font-mono" placeholder="Opcional"
+                          value={rows[l.id]?.lot ?? ''} onChange={e => setRow(l.id, 'lot')(e.target.value)} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="date" className="input w-36"
+                          value={rows[l.id]?.expiry ?? ''} onChange={e => setRow(l.id, 'expiry')(e.target.value)} />
+                        {perishable && Number(rows[l.id]?.qty) > 0 && !rows[l.id]?.expiry && <span className="block text-[10px] text-red-500">Requerido</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-gray-500">El costo de cada línea se toma de la OC (convertido a soles) y actualiza el costo promedio (WAC) del inventario.</p>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cancelar</button>
+          <button
+            disabled={!canSave || receive.isPending}
+            onClick={() => receive.mutate({
+              warehouseId,
+              notes: notes.trim() || undefined,
+              lines: (po.lines ?? []).map((l: any) => ({
+                lineId: l.id,
+                qtyReceived: Number(rows[l.id]?.qty) || 0,
+                lotNumber: rows[l.id]?.lot?.trim() || undefined,
+                expiryDate: rows[l.id]?.expiry || undefined,
+              })).filter((x: any) => x.qtyReceived > 0),
+            })}
+            className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50">
+            {receive.isPending && <Loader2 size={14} className="animate-spin" />}
+            <PackageCheck size={14} /> Confirmar ingreso
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Procurement() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'po'|'suppliers'>('po');
@@ -166,6 +299,8 @@ export default function Procurement() {
   const [showPOForm, setShowPOForm] = useState(false);
   const [editingPOId, setEditingPOId] = useState<string | null>(null);
   const [viewingPO, setViewingPO] = useState<any>(null);
+  const [receivingPO, setReceivingPO] = useState<any>(null);
+  const RECEIVABLE_STATUSES = ['APPROVED', 'SENT', 'PARTIAL_RECEIVED'];
   const EMPTY_PO: POForm = { supplierId: '', currency: 'PEN', exchangeRate: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] };
   const [poForm, setPoForm] = useState<POForm>(EMPTY_PO);
   const UOM_OPTIONS = ['kg', 'g', 'l', 'ml', 'unidad', 'caja', 'saco', 'bolsa', 'paquete'];
@@ -268,6 +403,18 @@ export default function Procurement() {
 
   return (
     <div className="space-y-6">
+      {receivingPO && (
+        <ReceivePOModal
+          po={receivingPO}
+          onClose={() => setReceivingPO(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['pos'] });
+            qc.invalidateQueries({ queryKey: ['inventory-dashboard'] });
+            qc.invalidateQueries({ queryKey: ['reorder-alerts'] });
+            qc.invalidateQueries({ queryKey: ['expiry-alerts'] });
+          }}
+        />
+      )}
       {viewingPO && (() => {
         const po = viewingPO;
         const cur = po.currency && po.currency !== 'PEN' ? po.currency : 'PEN';
@@ -320,7 +467,8 @@ export default function Procurement() {
               </div>
               <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2 bg-gray-50 rounded-b-2xl">
                 {po.status === 'DRAFT' && <button onClick={() => { setViewingPO(null); openEditPO(po); }} className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-xl"><Pencil size={14} /> Editar</button>}
-                {(po.status === 'APPROVED' || po.status === 'RECEIVED') && <button onClick={() => printPO(po)} className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700"><FileDown size={14} /> Descargar PDF</button>}
+                {RECEIVABLE_STATUSES.includes(po.status) && <button onClick={() => { setViewingPO(null); setReceivingPO(po); }} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-700"><PackageCheck size={14} /> Dar ingreso al stock</button>}
+                {(RECEIVABLE_STATUSES.includes(po.status) || po.status === 'FULLY_RECEIVED') && <button onClick={() => printPO(po)} className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700"><FileDown size={14} /> Descargar PDF</button>}
                 <button onClick={() => setViewingPO(null)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cerrar</button>
               </div>
             </div>
@@ -351,7 +499,8 @@ export default function Procurement() {
                 { key: 'status', label: 'Estado', type: 'select', options: [
                   { value: 'DRAFT', label: 'Borrador' },
                   { value: 'APPROVED', label: 'Aprobada' },
-                  { value: 'RECEIVED', label: 'Recibida' },
+                  { value: 'PARTIAL_RECEIVED', label: 'Recibida parcial' },
+                  { value: 'FULLY_RECEIVED', label: 'Recibida' },
                   { value: 'CANCELLED', label: 'Cancelada' },
                 ]},
               ]}
@@ -479,7 +628,10 @@ export default function Procurement() {
                           {po.status === 'DRAFT' && (
                             <button onClick={() => approvePO.mutate(po.id)} className="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded">Aprobar</button>
                           )}
-                          {(po.status === 'APPROVED' || po.status === 'RECEIVED') && (
+                          {RECEIVABLE_STATUSES.includes(po.status) && (
+                            <button onClick={() => setReceivingPO(po)} title="Dar ingreso al stock" className="flex items-center gap-1 text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded"><PackageCheck size={13} /> Recibir</button>
+                          )}
+                          {(RECEIVABLE_STATUSES.includes(po.status) || po.status === 'FULLY_RECEIVED') && (
                             <button onClick={() => printPO(po)} title="Descargar PDF" className="flex items-center gap-1 text-xs bg-brand-50 text-brand-700 hover:bg-brand-100 px-2 py-1 rounded"><FileDown size={13} /> PDF</button>
                           )}
                         </div>
