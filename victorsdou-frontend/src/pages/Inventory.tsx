@@ -94,13 +94,14 @@ function GaugeMeter({ available, alertThr, minThr }: { available: number; alertT
 
 // ── IngredientCard ────────────────────────────────────────────────────────────
 function IngredientCard({
-  item, onReceive, onSettings, onHistory, onLotes,
+  item, onReceive, onSettings, onHistory, onLotes, filterWarehouse,
 }: {
   item:       IngredientDashItem;
   onReceive:  (i: IngredientDashItem) => void;
   onSettings: (i: IngredientDashItem) => void;
   onHistory:  (i: IngredientDashItem) => void;
   onLotes:    (i: IngredientDashItem) => void;
+  filterWarehouse?: string;
 }) {
   const UNITS: DashUnit[] = ['qty', 'pct', 'und'];
   const [unit, setUnit] = useState<DashUnit>((item.alertConfig?.dashboardUnit as DashUnit) ?? 'qty');
@@ -108,11 +109,19 @@ function IngredientCard({
   const alertThr = Number(item.alertConfig?.alertThreshold ?? 0);
   const minThr   = Number(item.alertConfig?.minThreshold   ?? 0);
 
+  // Total on-hand across every warehouse (may differ from `available`, which is
+  // net of reservations).
+  const totalOnHand = item.warehouses?.reduce((s, w) => s + Number(w.qty), 0) ?? item.totalQty;
+  // When a warehouse filter is active, the headline reflects that warehouse's
+  // on-hand quantity so stock held in any warehouse is always visible.
+  const filteredWh  = filterWarehouse ? item.warehouses?.find(w => w.warehouseId === filterWarehouse) : undefined;
+  const primaryQty  = filteredWh ? Number(filteredWh.qty) : item.available;
+
   // Compute the counter target value based on unit
   const counterTarget =
-    unit === 'pct' && alertThr > 0 ? Math.min((item.available / alertThr) * 100, 999) :
-    unit === 'und' ? Math.floor(item.available) :
-    item.available;
+    unit === 'pct' && alertThr > 0 ? Math.min((primaryQty / alertThr) * 100, 999) :
+    unit === 'und' ? Math.floor(primaryQty) :
+    primaryQty;
 
   const animated = useCountUp(counterTarget);
   const s = STYLE[item.status];
@@ -128,6 +137,11 @@ function IngredientCard({
     unit === 'pct' ? '% de umbral' :
     unit === 'und' ? 'und' :
     item.baseUom;
+
+  // Context for the headline figure: a specific warehouse when filtered,
+  // otherwise the available (net of reservations) balance.
+  const primaryLabel = filteredWh ? `en ${filteredWh.warehouseName}` : 'disponible';
+  const showTotalHint = !filteredWh && Math.abs(totalOnHand - item.available) > 0.001;
 
   return (
     <div className={`card border-2 ${s.border} p-4 flex flex-col gap-3 hover:shadow-md transition-shadow`}>
@@ -155,8 +169,13 @@ function IngredientCard({
       >
         <div className={`text-2xl font-bold tabular-nums leading-none ${s.num}`}>{displayStr}</div>
         <div className="text-[10px] text-gray-400 mt-1 group-hover:text-brand-500 transition-colors">
-          {unitLabel} <span className="opacity-0 group-hover:opacity-100">↻</span>
+          {unitLabel} · {primaryLabel} <span className="opacity-0 group-hover:opacity-100">↻</span>
         </div>
+        {showTotalHint && unit === 'qty' && (
+          <div className="text-[10px] text-gray-400 mt-0.5">
+            Total: <span className="font-mono">{totalOnHand.toLocaleString('es-PE', { maximumFractionDigits: 2 })}</span> {item.baseUom}
+          </div>
+        )}
       </button>
 
       {/* Gauge */}
@@ -173,15 +192,25 @@ function IngredientCard({
         </button>
       </div>
 
-      {/* Per-warehouse breakdown (only when multiple) */}
-      {item.warehouses.length > 1 && (
+      {/* Per-warehouse breakdown — always shown so stock in ANY warehouse is
+          visible (the filtered warehouse is highlighted). */}
+      {item.warehouses.length > 0 && (
         <div className="text-[11px] text-gray-400 border-t border-gray-100 pt-2 space-y-0.5">
-          {item.warehouses.map(w => (
-            <div key={w.warehouseId} className="flex justify-between">
-              <span>{w.warehouseName}</span>
-              <span className="font-mono">{w.qty.toFixed(2)}</span>
+          {item.warehouses.map(w => {
+            const active = filterWarehouse && w.warehouseId === filterWarehouse;
+            return (
+              <div key={w.warehouseId} className={`flex justify-between ${active ? 'text-brand-700 font-medium' : ''}`}>
+                <span>{w.warehouseName}</span>
+                <span className="font-mono">{Number(w.qty).toFixed(2)}</span>
+              </div>
+            );
+          })}
+          {item.warehouses.length > 1 && (
+            <div className="flex justify-between border-t border-gray-100 pt-1 mt-1 text-gray-500 font-medium">
+              <span>Total</span>
+              <span className="font-mono">{totalOnHand.toFixed(2)} {item.baseUom}</span>
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -1098,6 +1127,7 @@ export default function Inventory() {
               <IngredientCard
                 key={item.id}
                 item={item}
+                filterWarehouse={filterWarehouse || undefined}
                 onReceive={i => { setReceiveItem(i); setShowReceive(true); }}
                 onSettings={setSettingsItem}
                 onHistory={setHistoryItem}

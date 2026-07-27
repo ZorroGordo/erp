@@ -410,58 +410,120 @@ export async function productionRoutes(app: FastifyInstance) {
     const overheadVal = totalCost - rawCost;
     const unitCost    = totalCost / body.actualYieldQty;
 
-    // 3) Upsert ProductStockLevel with WAC against any prior stock.
-    const existingLevel = await (prisma as any).productStockLevel.findUnique({
-      where: { productId_warehouseId: { productId: product.id, warehouseId: destWarehouse.id } },
-    });
-    const currentQty   = existingLevel ? Number(existingLevel.qtyOnHand) : 0;
-    const currentAvg   = existingLevel ? Number(existingLevel.avgCostPen) : 0;
-    const newQty       = currentQty + body.actualYieldQty;
-    const newAvgCost   = newQty > 0
-      ? (currentQty * currentAvg + body.actualYieldQty * unitCost) / newQty
-      : unitCost;
+    // 3) Book the produced output into stock. INTERMEDIATE products are also
+    //    consumed downstream as ingredients, so they must land in the Ingredient
+    //    stock ledger (StockLevel + Batch) — the same place the inventory
+    //    "Materias primas e intermedios" view and BOM consumption read from.
+    //    FINISHED goods live only in the Product/ProductStockLevel tables (shown
+    //    in the "Productos terminados" tab). Previously intermediates were written
+    //    to ProductStockLevel only, so they never appeared in inventory and could
+    //    not be consumed by later orders.
+    let newAvgCost: number;
+    let newQty: number;
 
-    await (prisma as any).productStockLevel.upsert({
-      where:  { productId_warehouseId: { productId: product.id, warehouseId: destWarehouse.id } },
-      create: {
-        productId:      product.id,
-        warehouseId:    destWarehouse.id,
-        qtyOnHand:      body.actualYieldQty,
-        avgCostPen:     unitCost,
-        lastMovementAt: new Date(),
-      },
-      update: {
-        qtyOnHand:      newQty,
-        avgCostPen:     newAvgCost,
-        lastMovementAt: new Date(),
-      },
-    });
+    if (product.productType === 'INTERMEDIATE') {
+      // The catalog mirrors every INTERMEDIATE product into an Ingredient row by
+      // SKU. Find it so we can add the produced quantity to its stock.
+      const ing = await prisma.ingredient.findUnique({ where: { sku: product.sku } });
+      if (!ing) {
+        return reply.code(422).send({ error: `No existe el ingrediente intermedio espejo (SKU ${product.sku}). Vuelve a guardar el producto en Catálogo.` });
+      }
 
-    // 4) Update the running Product.avgCostPen (global WAC for the SKU).
-    await prisma.product.update({
-      where: { id: product.id },
-      data:  { avgCostPen: newAvgCost as never },
-    });
+      const lote = body.finishedLotNumber || order.orderNumber;
+      // Create a lote/Batch so the intermediate can be consumed with FEFO + full
+      // lot traceability downstream.
+      const batch = await prisma.batch.create({
+        data: {
+          ingredientId:   ing.id,
+          supplierLotNo:  lote,
+          receivedDate:   new Date(body.completedAt),
+          productionDate: new Date(body.completedAt),
+          expiryDate:     body.finishedExpiryDate ? new Date(body.finishedExpiryDate) : null,
+          qtyReceived:    body.actualYieldQty,
+          qtyRemaining:   body.actualYieldQty,
+          unitCostPen:    unitCost,
+        },
+      });
 
-    // 5) Insert a PRODUCTION_OUTPUT row into product_stock_movements.
-    await (prisma as any).productStockMovement.create({
-      data: {
-        type:               'PRODUCTION_OUTPUT' as never,
-        productId:          product.id,
-        warehouseId:        destWarehouse.id,
-        qtyIn:              body.actualYieldQty,
-        qtyOut:             0,
-        unitCostPen:        unitCost,
-        totalCostPen:       totalCost,
-        balanceAfter:       newQty,
-        productionOrderRef: order.orderNumber,
-        lotNumber:          body.finishedLotNumber ?? null,
-        productionDate:     new Date(body.completedAt),
-        expiryDate:         body.finishedExpiryDate ? new Date(body.finishedExpiryDate) : null,
-        notes:              body.notes ?? null,
-        createdBy:          req.actor!.sub,
-      },
-    });
+      await InventoryService.recordStockIn({
+        type:         'PRODUCTION_OUTPUT' as never,
+        ingredientId: ing.id,
+        warehouseId:  destWarehouse.id,
+        qty:          body.actualYieldQty,
+        unitCost:     unitCost,
+        batchId:      batch.id,
+        notes:        [`OP: ${order.orderNumber}`, `Lote: ${lote}`].join(' | '),
+        createdBy:    req.actor!.sub,
+        refDocType:   'production_order',
+        refDocId:     order.id,
+      });
+
+      // recordStockIn recomputes the ingredient WAC; mirror it onto the Product
+      // so cost reporting on the product stays consistent.
+      const refreshedIng = await prisma.ingredient.findUnique({ where: { id: ing.id }, select: { avgCostPen: true } });
+      const refreshedLvl = await prisma.stockLevel.findUnique({
+        where: { ingredientId_warehouseId: { ingredientId: ing.id, warehouseId: destWarehouse.id } },
+      });
+      newAvgCost = Number(refreshedIng?.avgCostPen ?? unitCost);
+      newQty     = Number(refreshedLvl?.qtyOnHand ?? body.actualYieldQty);
+      await prisma.product.update({
+        where: { id: product.id },
+        data:  { avgCostPen: newAvgCost as never },
+      });
+    } else {
+      // FINISHED goods → ProductStockLevel with WAC against any prior stock.
+      const existingLevel = await (prisma as any).productStockLevel.findUnique({
+        where: { productId_warehouseId: { productId: product.id, warehouseId: destWarehouse.id } },
+      });
+      const currentQty   = existingLevel ? Number(existingLevel.qtyOnHand) : 0;
+      const currentAvg   = existingLevel ? Number(existingLevel.avgCostPen) : 0;
+      newQty       = currentQty + body.actualYieldQty;
+      newAvgCost   = newQty > 0
+        ? (currentQty * currentAvg + body.actualYieldQty * unitCost) / newQty
+        : unitCost;
+
+      await (prisma as any).productStockLevel.upsert({
+        where:  { productId_warehouseId: { productId: product.id, warehouseId: destWarehouse.id } },
+        create: {
+          productId:      product.id,
+          warehouseId:    destWarehouse.id,
+          qtyOnHand:      body.actualYieldQty,
+          avgCostPen:     unitCost,
+          lastMovementAt: new Date(),
+        },
+        update: {
+          qtyOnHand:      newQty,
+          avgCostPen:     newAvgCost,
+          lastMovementAt: new Date(),
+        },
+      });
+
+      // Update the running Product.avgCostPen (global WAC for the SKU).
+      await prisma.product.update({
+        where: { id: product.id },
+        data:  { avgCostPen: newAvgCost as never },
+      });
+
+      // Insert a PRODUCTION_OUTPUT row into product_stock_movements.
+      await (prisma as any).productStockMovement.create({
+        data: {
+          type:               'PRODUCTION_OUTPUT' as never,
+          productId:          product.id,
+          warehouseId:        destWarehouse.id,
+          qtyIn:              body.actualYieldQty,
+          qtyOut:             0,
+          unitCostPen:        unitCost,
+          totalCostPen:       totalCost,
+          balanceAfter:       newQty,
+          productionOrderRef: order.orderNumber,
+          lotNumber:          body.finishedLotNumber ?? null,
+          productionDate:     new Date(body.completedAt),
+          expiryDate:         body.finishedExpiryDate ? new Date(body.finishedExpiryDate) : null,
+          notes:              body.notes ?? null,
+          createdBy:          req.actor!.sub,
+        },
+      });
+    }
 
     // 6) Update the order itself.
     const updatedOrder = await prisma.productionOrder.update({
@@ -487,6 +549,36 @@ export async function productionRoutes(app: FastifyInstance) {
         warehouse:       destWarehouse.name,
       },
     });
+  });
+
+  // ── GET recorded consumptions for an order (materia prima + lote used) ────
+  // Powers the batch card so a CLOSED order prints the real lots consumed
+  // instead of blank columns.
+  app.get('/orders/:id/consumptions', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const consumptions = await prisma.productionConsumption.findMany({
+      where:   { productionOrderId: id },
+      orderBy: { postedAt: 'asc' },
+    });
+    const out = [];
+    for (const c of consumptions) {
+      const ing = await prisma.ingredient.findUnique({
+        where: { id: c.ingredientId }, select: { name: true, baseUom: true, productType: true },
+      });
+      const batch = c.batchId
+        ? await prisma.batch.findUnique({ where: { id: c.batchId }, select: { supplierLotNo: true, expiryDate: true } })
+        : null;
+      out.push({
+        ingredientId:   c.ingredientId,
+        ingredientName: ing?.name ?? '',
+        baseUom:        ing?.baseUom ?? '',
+        productType:    ing?.productType ?? null,
+        actualQty:      Number(c.actualQty ?? 0),
+        lotNumber:      batch?.supplierLotNo ?? null,
+        expiryDate:     batch?.expiryDate ?? null,
+      });
+    }
+    return reply.send({ data: out });
   });
 
   // ── Shop-floor tablet: per-stage time tracking ───────────────────────────
