@@ -60,14 +60,34 @@ async function openBatchCard(order: Order) {
     const scale = Number(order.plannedQty) / yieldQty;
     const prodName = order.recipe?.product?.name ?? recipe.product?.name ?? '';
     const fecha = order.scheduledDate ? new Date(order.scheduledDate).toLocaleDateString('es-PE') : '';
+
+    // For a CLOSED order, fetch the real consumptions so the card prints the
+    // actual quantities used and the LOTE UTILIZADO for each materia prima.
+    let consMap: Record<string, { actualQty: number; lotNumber: string | null }> = {};
+    const isClosed = order.status === 'COMPLETED';
+    if (isClosed) {
+      try {
+        const cr = await api.get(`/v1/production/orders/${order.id}/consumptions`);
+        for (const c of (cr.data?.data ?? [])) {
+          consMap[c.ingredientId] = { actualQty: Number(c.actualQty) || 0, lotNumber: c.lotNumber ?? null };
+        }
+      } catch { /* fall back to a blank card if consumptions can't be loaded */ }
+    }
+
     const rows = (recipe.bomLines ?? []).map((l: any) => {
-      const qty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+      const planned = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+      const cons = consMap[l.ingredientId];
+      const qty = cons ? cons.actualQty : planned;
+      const loteCell = cons && cons.lotNumber
+        ? `<td class="mono">${cons.lotNumber}</td>`
+        : `<td class="blank"></td>`;
       return `<tr>
         <td>${l.ingredient?.name ?? ''}</td>
         <td class="num">${qty.toFixed(3)} ${l.uom ?? ''}</td>
-        <td class="blank"></td>
+        ${loteCell}
         <td class="blank"></td></tr>`;
     }).join('');
+    const rendimientoReal = isClosed && order.actualQty != null ? `${Number(order.actualQty)}` : '__________';
     const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
       <title>Batch Card ${order.orderNumber}</title>
       <style>
@@ -82,6 +102,7 @@ async function openBatchCard(order: Order) {
         th,td{border:1px solid #bbb;padding:6px 8px;text-align:left;}
         th{background:#F5F0E8;text-transform:uppercase;font-size:10px;letter-spacing:.04em;}
         td.num{text-align:right;font-family:monospace;}
+        td.mono{font-family:monospace;font-size:12px;color:#2D6A4F;}
         td.blank{height:26px;}
         .foot{margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:24px;font-size:12px;}
         .sign{margin-top:36px;border-top:1px solid #888;padding-top:4px;color:#666;}
@@ -95,7 +116,7 @@ async function openBatchCard(order: Order) {
         <div><span>Línea</span>${(order as any).line ?? '—'}</div>
         <div><span>Fecha programada</span>${fecha}</div>
         <div><span>Cantidad planificada</span>${Number(order.plannedQty)}</div>
-        <div><span>Rendimiento real</span>__________</div>
+        <div><span>Rendimiento real</span>${rendimientoReal}</div>
       </div>
       <table><thead><tr>
         <th>Materia prima</th><th style="text-align:right">Cantidad</th>
@@ -147,6 +168,12 @@ export default function Production() {
 
   const allOrders: Order[] = orders?.data ?? [];
 
+  // Unit of measure for the planned quantity comes from the selected recipe's
+  // yield unit (yieldUom) — shown next to the quantity field so the operator
+  // knows what unit they're planning in.
+  const selectedRecipe: Recipe | undefined = recipes?.data?.find((r: Recipe) => r.id === form.recipeId);
+  const plannedUnit = selectedRecipe?.yieldUom || 'und';
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -197,9 +224,16 @@ export default function Production() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad planificada</label>
-              <input type="number" className="input" min={1} value={form.plannedQty}
-                onChange={e => setForm(f => ({ ...f, plannedQty: parseInt(e.target.value)||1 }))} />
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Cantidad planificada <span className="text-gray-400">({plannedUnit})</span>
+              </label>
+              <div className="flex">
+                <input type="number" className="input rounded-r-none" min={1} value={form.plannedQty}
+                  onChange={e => setForm(f => ({ ...f, plannedQty: parseInt(e.target.value)||1 }))} />
+                <span className="inline-flex items-center px-3 rounded-r-lg border border-l-0 border-gray-200 bg-gray-50 text-gray-500 text-sm whitespace-nowrap">
+                  {plannedUnit}
+                </span>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Línea de producción</label>

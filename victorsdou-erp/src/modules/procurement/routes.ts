@@ -3,6 +3,7 @@ import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { notifyPurchaseOrderCreated } from '../../services/notifications';
 import { registerReceipt } from '../inventory/service';
+import { convertQty } from '../../lib/uom';
 
 // Convert '' / null / undefined to null; otherwise coerce to a finite number.
 function toNumberOrNull(v: unknown): number | null {
@@ -213,15 +214,29 @@ export async function procurementRoutes(app: FastifyInstance) {
     });
 
     for (const { line, ov, qty, unitCost } of toReceive) {
+      // Convert the received quantity to the ingredient's master unit (baseUom)
+      // when the purchase unit differs (e.g. bought in "g" but stocked in "kg").
+      // The unit cost is scaled inversely so the line's total value is preserved.
+      // When the units aren't convertible (e.g. "saco", "caja") the quantity is
+      // left untouched.
+      const baseUom = line.ingredient?.baseUom ?? line.uom;
+      const conv = convertQty(qty, line.uom, baseUom);
+      const stockQty      = conv.qty;
+      const stockUnitCost = conv.converted ? unitCost / conv.factor : unitCost;
+      const convNote = conv.converted
+        ? `Conversión: ${qty} ${line.uom} → ${stockQty} ${baseUom}`
+        : null;
+
       const { batchId } = await registerReceipt({
         ingredientId:   line.ingredientId,
         warehouseId:    body.warehouseId,
-        qty,
-        unitCost,
+        qty:            stockQty,
+        unitCost:       stockUnitCost,
         poRef:          po.poNumber,
         lotNumber:      ov.lotNumber || undefined,
         expiryDate:     ov.expiryDate || undefined,
         productionDate: ov.productionDate || undefined,
+        notes:          convNote || undefined,
         createdBy:      req.actor!.sub,
       });
 
@@ -233,7 +248,7 @@ export async function procurementRoutes(app: FastifyInstance) {
           qtyReceived:         qty,
           batchId:             batchId ?? null,
           unitCostPen:         unitCost,
-          notes:               ov.lotNumber ? `Lote: ${ov.lotNumber}` : null,
+          notes:               [ov.lotNumber ? `Lote: ${ov.lotNumber}` : null, convNote].filter(Boolean).join(' · ') || null,
         },
       });
 

@@ -8,6 +8,29 @@ import { fmtNum } from '../lib/fmt';
 import { RucLookupInput } from '../components/RucLookupInput';
 import type { RucResult } from '../components/RucLookupInput';
 
+// Light-weight uom conversion (mirrors the backend src/lib/uom.ts) so the
+// receive modal can show the operator how a purchase-unit quantity converts to
+// the ingredient's master unit before confirming. The backend performs the
+// authoritative conversion.
+const MASS_TO_KG: Record<string, number> = {
+  mg: 0.000001, g: 0.001, gr: 0.001, grs: 0.001, gramo: 0.001, gramos: 0.001,
+  kg: 1, kgs: 1, kilo: 1, kilos: 1, kilogramo: 1, kilogramos: 1,
+  t: 1000, ton: 1000, tonelada: 1000, toneladas: 1000,
+};
+const VOL_TO_L: Record<string, number> = {
+  ml: 0.001, mililitro: 0.001, mililitros: 0.001, cc: 0.001, cl: 0.01, dl: 0.1,
+  l: 1, lt: 1, lts: 1, litro: 1, litros: 1, litre: 1, litres: 1,
+};
+function uomFactor(from: string, to: string): number | null {
+  const f = (from ?? '').toLowerCase().trim().replace(/\.$/, '');
+  const t = (to ?? '').toLowerCase().trim().replace(/\.$/, '');
+  if (!f || !t) return null;
+  if (f === t) return 1;
+  if (MASS_TO_KG[f] !== undefined && MASS_TO_KG[t] !== undefined) return MASS_TO_KG[f] / MASS_TO_KG[t];
+  if (VOL_TO_L[f]  !== undefined && VOL_TO_L[t]  !== undefined) return VOL_TO_L[f] / VOL_TO_L[t];
+  return null;
+}
+
 interface SupForm {
   businessName: string; ruc: string; email: string; phone: string;
   contactName: string; address: string; paymentTermsDays: number;
@@ -249,6 +272,15 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
                         <input type="number" min={0} step="0.01" className="input w-24 text-right font-mono"
                           value={rows[l.id]?.qty ?? ''} onChange={e => setRow(l.id, 'qty')(e.target.value)} />
                         <span className="text-[10px] text-gray-400 ml-1">{l.uom}</span>
+                        {(() => {
+                          const base = l.ingredient?.baseUom;
+                          const f = base ? uomFactor(l.uom, base) : null;
+                          const q = Number(rows[l.id]?.qty);
+                          if (base && f != null && f !== 1 && q > 0) {
+                            return <span className="block text-[10px] text-brand-600">≈ {(q * f).toLocaleString('es-PE', { maximumFractionDigits: 4 })} {base} en stock</span>;
+                          }
+                          return null;
+                        })()}
                       </td>
                       <td className="px-3 py-2">
                         <input className="input w-28 font-mono" placeholder="Opcional"
