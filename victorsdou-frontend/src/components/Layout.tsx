@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBrand } from '../contexts/BrandContext';
-import { useModules } from '../contexts/ModulesContext';
+import { useModules, moduleAllowsRoles } from '../contexts/ModulesContext';
 import { api } from '../lib/api';
 import {
   LayoutDashboard, Package, ShoppingBag, Users, ShoppingCart,
@@ -240,7 +240,23 @@ export default function Layout() {
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+          {moduleAllowsRoles(location.pathname, user?.roles) ? (
+            <Outlet />
+          ) : (
+            <div className="max-w-lg mx-auto mt-20 text-center bg-white border border-brand-200 rounded-2xl p-10">
+              <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-brand-50 flex items-center justify-center">
+                <UserCheck size={26} className="text-brand-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">No tienes acceso a esta sección</h2>
+              <p className="text-sm text-gray-500 mt-2">
+                Tu usuario no cuenta con los permisos para ver <strong>{PATH_LABELS[location.pathname.split('/')[1]] ?? location.pathname.split('/')[1]}</strong>.
+                Si necesitas acceso, solicítalo a un administrador.
+              </p>
+              <button onClick={() => navigate('/dashboard')} className="mt-6 btn-primary">
+                Ir al inicio
+              </button>
+            </div>
+          )}
         </main>
       </div>
     </div>

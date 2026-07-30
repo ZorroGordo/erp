@@ -82,6 +82,11 @@ interface MovementInput {
   batchId?:      string;
   notes?:        string;
   createdBy:     string;
+  // When true, the availability check uses physical on-hand only (ignoring
+  // qtyReserved). Used by production close: the order's own reservation is
+  // released first, and stock physically exists, so other orders' plan-time
+  // reservations must not block the real consumption.
+  ignoreReservations?: boolean;
 }
 
 export async function recordStockIn(input: MovementInput): Promise<void> {
@@ -132,7 +137,9 @@ export async function recordStockOut(input: MovementInput): Promise<void> {
       });
     }
 
-    const available = level.qtyOnHand.sub(level.qtyReserved);
+    const available = input.ignoreReservations
+      ? level.qtyOnHand
+      : level.qtyOnHand.sub(level.qtyReserved);
     if (available.lessThan(new Prisma.Decimal(input.qty))) {
       throw Object.assign(
         new Error(`Insufficient stock. Available: ${available}, Requested: ${input.qty}`),
@@ -508,6 +515,20 @@ export async function getReceiptHistory(ingredientId: string, page = 1, pageSize
     prisma.stockMovement.count({ where: { ingredientId, type: 'PURCHASE_RECEIPT' } }),
   ]);
   return { receipts, total };
+}
+
+// Open production reservations for an ingredient (order created, not yet closed
+// or cancelled). These are NOT stock movements — the stock is only consumed when
+// the order is closed — but we surface them in the movement history so the user
+// can tell "reservado producción" apart from actual "consumo prod.".
+export async function getOpenReservations(ingredientId: string) {
+  const reservations = await prisma.productionReservation.findMany({
+    where:   { ingredientId, releasedAt: null },
+    include: { productionOrder: { select: { orderNumber: true, status: true, scheduledDate: true } }, warehouse: { select: { name: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  // Only orders still in flight actually hold the reservation.
+  return reservations.filter(r => r.productionOrder && !['COMPLETED', 'CANCELLED'].includes(r.productionOrder.status));
 }
 
 export async function getMovementHistory(

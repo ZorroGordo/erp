@@ -59,7 +59,10 @@ async function openBatchCard(order: Order) {
     const yieldQty = Number(recipe.yieldQty) || 1;
     const scale = Number(order.plannedQty) / yieldQty;
     const prodName = order.recipe?.product?.name ?? recipe.product?.name ?? '';
-    const fecha = order.scheduledDate ? new Date(order.scheduledDate).toLocaleDateString('es-PE') : '';
+    // Format in UTC so a date stored at UTC-midnight isn't shifted back a day
+    // when rendered in Peru's timezone (UTC-5) — the batch card must show the
+    // exact scheduled date that was registered.
+    const fecha = order.scheduledDate ? new Date(order.scheduledDate).toLocaleDateString('es-PE', { timeZone: 'UTC' }) : '';
 
     // For a CLOSED order, fetch the real consumptions so the card prints the
     // actual quantities used and the LOTE UTILIZADO for each materia prima.
@@ -163,8 +166,25 @@ export default function Production() {
 
   const updateStatus = useMutation({
     mutationFn: ({ id, status }: any) => api.patch(`/v1/production/orders/${id}/status`, { status }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['production-orders'] }); toast.success('Estado actualizado'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['production-orders'] }); qc.invalidateQueries({ queryKey: ['inventory-dashboard'] }); toast.success('Estado actualizado'); },
   });
+
+  const removeOrder = useMutation({
+    mutationFn: (id: string) => api.delete(`/v1/production/orders/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['production-orders'] }); qc.invalidateQueries({ queryKey: ['inventory-dashboard'] }); toast.success('Orden eliminada'); },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? 'No se pudo eliminar'),
+  });
+
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+
+  const cancelOrder = (o: Order) => {
+    if (!window.confirm(`¿Cancelar la orden ${o.orderNumber}? Se liberará el stock reservado.`)) return;
+    updateStatus.mutate({ id: o.id, status: 'CANCELLED' });
+  };
+  const deleteOrder = (o: Order) => {
+    if (!window.confirm(`¿Eliminar la orden ${o.orderNumber}? Esta acción no se puede deshacer.`)) return;
+    removeOrder.mutate(o.id);
+  };
 
   const allOrders: Order[] = orders?.data ?? [];
 
@@ -292,7 +312,7 @@ export default function Production() {
                       <div className="flex items-center gap-4 mt-3 text-sm">
                         <div>
                           <p className="text-[10px] uppercase tracking-wide text-gray-400">Plan</p>
-                          <p className="font-semibold text-gray-700">{o.plannedQty}</p>
+                          <p className="font-semibold text-gray-700">{o.plannedQty} <span className="text-xs font-normal text-gray-400">{o.recipe?.yieldUom ?? ''}</span></p>
                         </div>
                         <div>
                           <p className="text-[10px] uppercase tracking-wide text-gray-400">Producido</p>
@@ -300,7 +320,7 @@ export default function Production() {
                         </div>
                         <div>
                           <p className="text-[10px] uppercase tracking-wide text-gray-400">Fecha</p>
-                          <p className="font-semibold text-gray-700">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE') : '—'}</p>
+                          <p className="font-semibold text-gray-700">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE', { timeZone: 'UTC' }) : '—'}</p>
                         </div>
                       </div>
                       <button
@@ -329,6 +349,32 @@ export default function Production() {
                           )}
                         </div>
                       )}
+                      {o.status !== 'COMPLETED' && (
+                        <div className="flex gap-2 mt-2">
+                          {o.status !== 'CANCELLED' && (
+                            <>
+                              <button
+                                onClick={() => setEditingOrder(o)}
+                                className="flex-1 text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1.5 rounded-lg font-medium"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                onClick={() => cancelOrder(o)}
+                                className="flex-1 text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-1.5 rounded-lg font-medium"
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => deleteOrder(o)}
+                            className="flex-1 text-xs bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1.5 rounded-lg font-medium"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -350,6 +396,7 @@ export default function Production() {
                 <th className="px-5 py-3 text-left">Producto</th>
                 <th className="px-5 py-3 text-right">Planificado</th>
                 <th className="px-5 py-3 text-right">Producido</th>
+                <th className="px-5 py-3 text-left">Unidad</th>
                 <th className="px-5 py-3 text-left">Fecha</th>
                 <th className="px-5 py-3 text-left">Estado</th>
                 <th className="px-5 py-3 text-center">Acciones</th>
@@ -362,15 +409,24 @@ export default function Production() {
                   <td className="px-5 py-3 font-medium">{o.recipe?.product?.name ?? '—'}</td>
                   <td className="px-5 py-3 text-right">{o.plannedQty}</td>
                   <td className="px-5 py-3 text-right">{o.actualQty ?? '—'}</td>
-                  <td className="px-5 py-3 text-gray-500">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE') : '—'}</td>
+                  <td className="px-5 py-3 text-gray-500">{o.recipe?.yieldUom ?? '—'}</td>
+                  <td className="px-5 py-3 text-gray-500">{o.scheduledDate ? new Date(o.scheduledDate).toLocaleDateString('es-PE', { timeZone: 'UTC' }) : '—'}</td>
                   <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
-                  <td className="px-5 py-3 text-center space-x-1">
+                  <td className="px-5 py-3 text-center space-x-1 whitespace-nowrap">
                     <button
                       onClick={() => openBatchCard(o)}
                       className="text-xs border border-brand-200 text-brand-700 hover:bg-brand-50 px-2 py-1 rounded"
                     >
                       Batch card
                     </button>
+                    {o.status !== 'COMPLETED' && o.status !== 'CANCELLED' && (
+                      <button
+                        onClick={() => setEditingOrder(o)}
+                        className="text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-1 rounded"
+                      >
+                        Editar
+                      </button>
+                    )}
                     {nextStatus[o.status] && (
                       <button
                         onClick={() => updateStatus.mutate({ id: o.id, status: nextStatus[o.status] })}
@@ -385,6 +441,22 @@ export default function Production() {
                         className="text-xs bg-green-600 text-white hover:bg-green-700 px-2 py-1 rounded"
                       >
                         Cerrar orden
+                      </button>
+                    )}
+                    {o.status !== 'COMPLETED' && o.status !== 'CANCELLED' && (
+                      <button
+                        onClick={() => cancelOrder(o)}
+                        className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-1 rounded"
+                      >
+                        Cancelar
+                      </button>
+                    )}
+                    {o.status !== 'COMPLETED' && (
+                      <button
+                        onClick={() => deleteOrder(o)}
+                        className="text-xs bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1 rounded"
+                      >
+                        Eliminar
                       </button>
                     )}
                   </td>
@@ -403,10 +475,91 @@ export default function Production() {
           onClose={() => setClosingOrder(null)}
           onSuccess={() => {
             qc.invalidateQueries({ queryKey: ['production-orders'] });
+            qc.invalidateQueries({ queryKey: ['inventory-dashboard'] });
             setClosingOrder(null);
           }}
         />
       )}
+
+      {editingOrder && (
+        <EditOrderModal
+          order={editingOrder}
+          onClose={() => setEditingOrder(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['production-orders'] });
+            qc.invalidateQueries({ queryKey: ['inventory-dashboard'] });
+            setEditingOrder(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Edit order modal ─────────────────────────────────────────────────────────
+// Edits an open order's planned quantity, line and scheduled date. Changing the
+// quantity re-reserves the BOM stock on the backend.
+function EditOrderModal({ order, onClose, onSuccess }: { order: Order; onClose: () => void; onSuccess: () => void }) {
+  const [plannedQty, setPlannedQty] = useState<number>(Number(order.plannedQty) || 1);
+  const [line, setLine] = useState<string>((order as any).line ?? 'A');
+  const [scheduledDate, setScheduledDate] = useState<string>(
+    order.scheduledDate ? new Date(order.scheduledDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+  );
+  const unit = order.recipe?.yieldUom || 'und';
+
+  const save = useMutation({
+    mutationFn: (body: any) => api.patch(`/v1/production/orders/${order.id}`, body),
+    onSuccess: () => { toast.success('Orden actualizada'); onSuccess(); },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? 'No se pudo actualizar'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div>
+            <h2 className="font-semibold text-gray-900">Editar orden de producción</h2>
+            <p className="text-xs text-gray-500">{order.orderNumber} — {order.recipe?.product?.name ?? ''}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad planificada <span className="text-gray-400">({unit})</span></label>
+            <div className="flex">
+              <input type="number" min={1} className="input rounded-r-none" value={plannedQty}
+                onChange={e => setPlannedQty(parseFloat(e.target.value) || 0)} />
+              <span className="inline-flex items-center px-3 rounded-r-lg border border-l-0 border-gray-200 bg-gray-50 text-gray-500 text-sm">{unit}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Línea</label>
+              <select className="input" value={line} onChange={e => setLine(e.target.value)}>
+                <option value="A">Línea A</option>
+                <option value="B">Línea B</option>
+                <option value="C">Línea C</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Fecha programada</label>
+              <input type="date" className="input" value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} />
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-400">Si cambias la cantidad, se recalcula la reserva de insumos. El número de orden/lote no cambia.</p>
+        </div>
+        <div className="p-5 border-t border-gray-100 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-secondary">Cancelar</button>
+          <button
+            disabled={!(plannedQty > 0) || save.isPending}
+            onClick={() => save.mutate({ plannedQty, line, scheduledDate })}
+            className="btn-primary flex items-center gap-2 disabled:opacity-50"
+          >
+            {save.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
+            Guardar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -466,26 +619,26 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
   const [notes, setNotes] = useState('');
   const [consumptions, setConsumptions] = useState<Record<string, { actualQty: string; lotNumber: string; batchId: string; manual: boolean }>>({});
 
-  // Auto-fill each line's consumption from the recipe, scaled to the units actually
-  // produced. Re-scales when the produced quantity changes, but never overwrites a
-  // line the user edited by hand (so over/under-use can still be tracked).
+  // Auto-fill each line's consumption ONCE from the recipe, scaled to the
+  // PLANNED quantity of the order. Changing the "cantidad real producida"
+  // (rendimiento) must NOT recalculate the formula — the planned consumption is
+  // the reference and the operator adjusts real amounts by hand if needed. So
+  // this only runs when the recipe loads, not when actualYieldQty changes.
   useEffect(() => {
     if (!recipe) return;
-    const producedScale = (Number(actualYieldQty) || 0) / yieldQty;
+    const plannedScale = Number(order.plannedQty) / yieldQty;
     setConsumptions(prev => {
       const next = { ...prev };
       recipe.bomLines.forEach(l => {
-        const perBatch = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * producedScale;
-        const existing = next[l.ingredientId];
-        if (!existing) {
+        const perBatch = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * plannedScale;
+        if (!next[l.ingredientId]) {
           next[l.ingredientId] = { actualQty: perBatch.toFixed(3), lotNumber: '', batchId: '', manual: false };
-        } else if (!existing.manual) {
-          next[l.ingredientId] = { ...existing, actualQty: perBatch.toFixed(3) };
         }
       });
       return next;
     });
-  }, [recipe?.id, actualYieldQty]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe?.id]);
 
   const close = useMutation({
     mutationFn: (body: any) => api.post(`/v1/production/orders/${order.id}/close`, body),

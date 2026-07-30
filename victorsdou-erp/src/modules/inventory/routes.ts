@@ -96,6 +96,15 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.send({ data: result.movements, meta: { total: result.total } });
   });
 
+  // ── GET /v1/inventory/ingredients/:id/reservations — open production holds ────
+  app.get('/ingredients/:id/reservations', {
+    preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR', 'SUPER_ADMIN')],
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const reservations = await InventoryService.getOpenReservations(id);
+    return reply.send({ data: reservations });
+  });
+
   // ── GET /v1/inventory/ingredients/:id/receipts ───────────────────────────────
   app.get('/ingredients/:id/receipts', {
     preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PROCUREMENT', 'SUPER_ADMIN')],
