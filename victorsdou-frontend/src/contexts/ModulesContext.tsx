@@ -21,6 +21,35 @@ export const ALL_MODULES: ModuleDef[] = [
   { path: '/ai',           label: 'IA Forecast' },
 ];
 
+// Minimum roles required to use each module, mirroring the backend route guards
+// (requireAnyOf). A user who has NONE of these roles would only get 403s on that
+// screen, so we hide it from the menu and show a clear "sin acceso" message
+// instead of a blank/frozen page. SUPER_ADMIN always passes. Paths not listed
+// here are open to any authenticated user (e.g. dashboard, catalog).
+export const MODULE_ROLES: Record<string, string[]> = {
+  '/inventory':    ['WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'PROCUREMENT', 'FINANCE_MGR'],
+  '/customers':    ['SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR'],
+  '/sales':        ['SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR'],
+  '/production':   ['PRODUCTION', 'OPS_MGR'],
+  '/procurement':  ['PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR'],
+  '/delivery':     ['OPS_MGR', 'DRIVER', 'SALES_MGR'],
+  '/payroll':      ['FINANCE_MGR', 'OPS_MGR'],
+  '/accounting':   ['ACCOUNTANT', 'FINANCE_MGR'],
+  '/invoices':     ['ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR'],
+  '/comprobantes': ['FINANCE_MGR', 'ACCOUNTANT', 'OPS_MGR', 'PROCUREMENT'],
+  '/ai':           ['OPS_MGR', 'SALES_MGR', 'FINANCE_MGR'],
+};
+
+/** True if the user's roles allow using the given module route. */
+export function moduleAllowsRoles(path: string, userRoles?: string[]): boolean {
+  if (userRoles?.includes('SUPER_ADMIN')) return true;
+  // Match the longest configured prefix (so /invoices/123 maps to /invoices).
+  const key = Object.keys(MODULE_ROLES).find(p => path === p || path.startsWith(p + '/'));
+  if (!key) return true; // no restriction configured → open to any authenticated user
+  if (!userRoles || userRoles.length === 0) return true;
+  return userRoles.some(r => MODULE_ROLES[key].includes(r));
+}
+
 const STORAGE_KEY  = 'vos_enabled_modules';
 const PERM_KEY     = 'vos_role_perms';
 
@@ -64,6 +93,9 @@ export function ModulesProvider({ children }: { children: ReactNode }) {
     if (!enabled.includes(path)) return false;
     // SUPER_ADMIN always sees everything
     if (userRoles?.includes('SUPER_ADMIN')) return true;
+    // Hide modules the user's roles can't actually use (backend would 403),
+    // so they never land on a screen that just fails to load.
+    if (!moduleAllowsRoles(path, userRoles)) return false;
     // If no roles provided, fall back to global toggle only
     if (!userRoles || userRoles.length === 0) return true;
     // Check role permissions

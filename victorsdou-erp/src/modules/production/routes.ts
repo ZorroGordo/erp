@@ -144,6 +144,72 @@ export async function productionRoutes(app: FastifyInstance) {
     return reply.send({ data: order });
   });
 
+  // ── PATCH /orders/:id — edit an open order (qty, date, line, notes) ─────────
+  // Editing a non-closed order. When the planned quantity changes we re-reserve
+  // its BOM ingredients (release the old hold, reserve the new amount).
+  app.patch('/orders/:id', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { plannedQty?: number; scheduledDate?: string; line?: string; notes?: string };
+    const order = await prisma.productionOrder.findUnique({
+      where:   { id },
+      include: { recipe: { include: { bomLines: { include: { ingredient: true } } } } },
+    });
+    if (!order) return reply.code(404).send({ error: 'Orden no encontrada' });
+    if (order.status === 'COMPLETED' || order.status === 'CANCELLED') {
+      return reply.code(422).send({ error: 'No se puede editar una orden completada o cancelada' });
+    }
+
+    const newPlanned = body.plannedQty != null ? Number(body.plannedQty) : Number(order.plannedQty);
+    if (!(newPlanned > 0)) return reply.code(400).send({ error: 'Cantidad planificada inválida' });
+    const line = (body.line ? body.line.toUpperCase() : order.line) || '';
+    if (!['A', 'B', 'C'].includes(line)) return reply.code(400).send({ error: 'Línea de producción inválida (A, B o C)' });
+    let scheduled = order.scheduledDate;
+    if (body.scheduledDate) {
+      const d = new Date(body.scheduledDate);
+      if (isNaN(d.getTime())) return reply.code(400).send({ error: 'Fecha programada inválida' });
+      scheduled = d;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // Re-reserve only when the quantity actually changed.
+      if (newPlanned !== Number(order.plannedQty)) {
+        await releaseReservations(tx, order.id);
+        await tx.productionReservation.deleteMany({ where: { productionOrderId: order.id } });
+        await reserveForOrder(tx, order.id, order.recipe, newPlanned);
+      }
+      return tx.productionOrder.update({
+        where: { id },
+        data:  {
+          plannedQty:    newPlanned,
+          line:          line as never,
+          scheduledDate: scheduled,
+          ...(body.notes !== undefined ? { notes: body.notes } : {}),
+        },
+      });
+    });
+    const full = await prisma.productionOrder.findUnique({ where: { id }, include: { recipe: { include: { product: true } } } });
+    return reply.send({ data: full ?? updated });
+  });
+
+  // ── DELETE /orders/:id — remove an order (releases reserved stock) ──────────
+  // Completed orders already moved inventory, so they can't be deleted here.
+  app.delete('/orders/:id', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const order = await prisma.productionOrder.findUnique({ where: { id } });
+    if (!order) return reply.code(404).send({ error: 'Orden no encontrada' });
+    if (order.status === 'COMPLETED') {
+      return reply.code(422).send({ error: 'No se puede eliminar una orden completada (ya afectó el inventario). Cancélala o ajusta el inventario.' });
+    }
+    await prisma.$transaction(async (tx) => {
+      await releaseReservations(tx, id);
+      await tx.productionReservation.deleteMany({ where: { productionOrderId: id } });
+      await tx.productionConsumption.deleteMany({ where: { productionOrderId: id } });
+      await (tx as any).productionStageLog.deleteMany({ where: { productionOrderId: id } });
+      await tx.productionOrder.delete({ where: { id } });
+    });
+    return reply.code(204).send();
+  });
+
   // ── Recipe READ endpoints ─────────────────────────────────────────────────
 
   app.get('/recipes', { preHandler: [requireAnyOf('OPS_MGR', 'PRODUCTION')] }, async (req, reply) => {
@@ -154,6 +220,11 @@ export async function productionRoutes(app: FastifyInstance) {
       where: {
         status: (q.status as never) ?? ('ACTIVE' as never),
         ...(q.productId ? { productId: q.productId } : {}),
+        // Only recipes of still-active products: when a product is deleted
+        // (soft delete) its formula must NOT keep showing up in the recipe /
+        // production-order dropdowns, nor get re-associated to a product later
+        // recreated with the same name.
+        product: { isActive: true },
       },
       include: { product: true, bomLines: { include: { ingredient: true } } },
     });
@@ -371,17 +442,30 @@ export async function productionRoutes(app: FastifyInstance) {
       const avgCost = Number(ing.avgCostPen);
       rawCost += c.actualQty * avgCost;
 
-      // Find the raw-material warehouse for the consumption.
-      const rawWh = await prisma.warehouse.findFirst({
-        where:   { type: 'RAW_MATERIAL' as never, isActive: true },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (!rawWh) return reply.code(422).send({ error: 'No active RAW_MATERIAL warehouse' });
+      // Pick the warehouse to draw from. Intermediates (e.g. MASA MADRE) are
+      // stocked in the INTERMEDIATE warehouse, raw materials in RAW_MATERIAL —
+      // using a single fixed RAW warehouse for everything caused "ingredient not
+      // found in warehouse" 422s when consuming an intermediate. Prefer the
+      // warehouse where the ingredient actually holds stock; fall back to the
+      // type-matched warehouse.
+      const whType = ing.productType === 'INTERMEDIATE' ? 'INTERMEDIATE' : 'RAW_MATERIAL';
+      let consumeWh = await prisma.stockLevel.findFirst({
+        where:   { ingredientId: c.ingredientId, qtyOnHand: { gt: 0 } },
+        orderBy: { qtyOnHand: 'desc' },
+        select:  { warehouseId: true },
+      }).then(sl => sl?.warehouseId ?? null);
+      if (!consumeWh) {
+        const typeWh = await prisma.warehouse.findFirst({
+          where: { type: whType as never, isActive: true }, orderBy: { createdAt: 'asc' },
+        });
+        consumeWh = typeWh?.id ?? null;
+      }
+      if (!consumeWh) return reply.code(422).send({ error: `No hay almacén con stock para ${ing.name}` });
 
       await InventoryService.recordStockOut({
         type:         'PRODUCTION_CONSUMPTION' as never,
         ingredientId: c.ingredientId,
-        warehouseId:  rawWh.id,
+        warehouseId:  consumeWh,
         qty:          c.actualQty,
         unitCost:     avgCost,
         notes:        [c.lotNumber ? `Lote: ${c.lotNumber}` : null, `OP: ${order.orderNumber}`].filter(Boolean).join(' | '),
@@ -389,6 +473,7 @@ export async function productionRoutes(app: FastifyInstance) {
         refDocType:   'production_order',
         refDocId:     order.id,
         batchId:      c.batchId,
+        ignoreReservations: true,
       });
 
       // Record the consumption row for traceability.

@@ -330,7 +330,12 @@ export async function catalogRoutes(app: FastifyInstance) {
     } catch {
       // Hard delete blocked by existing references — soft delete instead so the
       // product still disappears from the catalog without breaking history.
-      await prisma.product.update({ where: { id }, data: { isActive: false } }).catch(() => {});
+      // IMPORTANT: also archive the product's recipes and clear activeRecipeId so
+      // the deleted product's formula stops appearing in recipe/production-order
+      // lists and can't be re-associated to a product recreated with the same
+      // name later.
+      await prisma.product.update({ where: { id }, data: { isActive: false, activeRecipeId: null } }).catch(() => {});
+      await prisma.recipe.updateMany({ where: { productId: id, status: { not: 'ARCHIVED' } }, data: { status: 'ARCHIVED' } }).catch(() => {});
       if (ingredient) {
         await prisma.ingredient.update({ where: { id: ingredient.id }, data: { isActive: false } }).catch(() => {});
       }

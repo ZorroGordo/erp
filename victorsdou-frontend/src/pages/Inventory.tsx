@@ -114,8 +114,10 @@ function IngredientCard({
   const totalOnHand = item.warehouses?.reduce((s, w) => s + Number(w.qty), 0) ?? item.totalQty;
   // When a warehouse filter is active, the headline reflects that warehouse's
   // on-hand quantity so stock held in any warehouse is always visible.
+  // Headline shows physical ON-HAND stock (matches the list view); reservations
+  // are shown separately below rather than subtracted from the headline.
   const filteredWh  = filterWarehouse ? item.warehouses?.find(w => w.warehouseId === filterWarehouse) : undefined;
-  const primaryQty  = filteredWh ? Number(filteredWh.qty) : item.available;
+  const primaryQty  = filteredWh ? Number(filteredWh.qty) : totalOnHand;
 
   // Compute the counter target value based on unit
   const counterTarget =
@@ -139,9 +141,10 @@ function IngredientCard({
     item.baseUom;
 
   // Context for the headline figure: a specific warehouse when filtered,
-  // otherwise the available (net of reservations) balance.
-  const primaryLabel = filteredWh ? `en ${filteredWh.warehouseName}` : 'disponible';
-  const showTotalHint = !filteredWh && Math.abs(totalOnHand - item.available) > 0.001;
+  // otherwise total physical stock on hand.
+  const primaryLabel = filteredWh ? `en ${filteredWh.warehouseName}` : 'en stock';
+  const totalReserved = Number(item.totalReserved ?? 0);
+  const showReservedHint = !filteredWh && totalReserved > 0.001;
 
   return (
     <div className={`card border-2 ${s.border} p-4 flex flex-col gap-3 hover:shadow-md transition-shadow`}>
@@ -171,9 +174,9 @@ function IngredientCard({
         <div className="text-[10px] text-gray-400 mt-1 group-hover:text-brand-500 transition-colors">
           {unitLabel} · {primaryLabel} <span className="opacity-0 group-hover:opacity-100">↻</span>
         </div>
-        {showTotalHint && unit === 'qty' && (
-          <div className="text-[10px] text-gray-400 mt-0.5">
-            Total: <span className="font-mono">{totalOnHand.toLocaleString('es-PE', { maximumFractionDigits: 2 })}</span> {item.baseUom}
+        {showReservedHint && unit === 'qty' && (
+          <div className="text-[10px] text-amber-600 mt-0.5">
+            Reservado prod.: <span className="font-mono">{totalReserved.toLocaleString('es-PE', { maximumFractionDigits: 2 })}</span> {item.baseUom}
           </div>
         )}
       </button>
@@ -593,16 +596,28 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
     queryKey: ['movements', item.id],
     queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/movements?pageSize=200`).then(r => r.data),
   });
+  // Open production reservations (order created, not yet closed) — shown as
+  // "Reservado prod." so they read differently from actual consumption.
+  const { data: resvData } = useQuery({
+    queryKey: ['reservations', item.id],
+    queryFn:  () => api.get(`/v1/inventory/ingredients/${item.id}/reservations`).then(r => r.data),
+  });
 
   function parseRefs(notes: string | null) {
-    if (!notes) return { inv: null, po: null, extra: null };
+    if (!notes) return { inv: null, po: null, op: null, extra: null };
     const inv  = notes.match(/Factura:\s*([^\s|]+)/)?.[1]  ?? null;
     const po   = notes.match(/OC:\s*([^\s|]+)/)?.[1]       ?? null;
-    const rest = notes.replace(/Factura:\s*[^\s|]+\s*\|?\s*/g, '').replace(/OC:\s*[^\s|]+\s*\|?\s*/g, '').trim() || null;
-    return { inv, po, extra: rest };
+    const op   = notes.match(/OP:\s*([^\s|]+)/)?.[1]       ?? null;
+    const rest = notes
+      .replace(/Factura:\s*[^\s|]+\s*\|?\s*/g, '')
+      .replace(/OC:\s*[^\s|]+\s*\|?\s*/g, '')
+      .replace(/OP:\s*[^\s|]+\s*\|?\s*/g, '')
+      .trim() || null;
+    return { inv, po, op, extra: rest };
   }
 
   const receipts = data?.data ?? [];
+  const reservations = resvData?.data ?? [];
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -637,14 +652,14 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
                   <th className="px-4 py-3 text-right">Costo unit.</th>
                   <th className="px-4 py-3 text-right">Total</th>
                   <th className="px-4 py-3 text-left">Factura</th>
-                  <th className="px-4 py-3 text-left">Orden de Compra</th>
+                  <th className="px-4 py-3 text-left">Documento</th>
                   <th className="px-4 py-3 text-left">Almacén</th>
                   <th className="px-4 py-3 text-left">Notas</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {receipts.map((r: any) => {
-                  const { inv, po, extra } = parseRefs(r.notes);
+                  const { inv, po, op, extra } = parseRefs(r.notes);
                   const qIn  = Number(r.qtyIn ?? 0);
                   const qOut = Number(r.qtyOut ?? 0);
                   const isIn = qIn > 0;
@@ -683,13 +698,40 @@ function HistoryModal({ item, onClose }: { item: IngredientDashItem; onClose: ()
                         {inv ? <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded font-mono">{inv}</span> : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        {po ? <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded font-mono">{po}</span> : <span className="text-gray-300 text-xs">—</span>}
+                        {po
+                          ? <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded font-mono" title="Orden de compra">{po}</span>
+                          : op
+                          ? <span className="bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded font-mono" title="Orden de producción">{op}</span>
+                          : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-xs">{r.warehouse?.name ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-400 text-xs">{extra ?? '—'}</td>
                     </tr>
                   );
                 })}
+                {reservations.map((rv: any) => (
+                  <tr key={`resv-${rv.id}`} className="bg-amber-50/40">
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                      {new Date(rv.createdAt).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Reservado prod.</span>
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono font-semibold text-amber-700">
+                      {fmtNum(rv.qty)} {item.baseUom}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-300 text-xs">—</td>
+                    <td className="px-4 py-3 text-right text-gray-300 text-xs">—</td>
+                    <td className="px-4 py-3"><span className="text-gray-300 text-xs">—</span></td>
+                    <td className="px-4 py-3">
+                      {rv.productionOrder?.orderNumber
+                        ? <span className="bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded font-mono" title="Orden de producción">{rv.productionOrder.orderNumber}</span>
+                        : <span className="text-gray-300 text-xs">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">{rv.warehouse?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">Reservado (orden abierta, aún no consumido)</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
@@ -1156,7 +1198,7 @@ export default function Inventory() {
                     <th className="px-5 py-3 text-left">Materia prima</th>
                     <th className="px-5 py-3 text-left">Tipo</th>
                     <th className="px-5 py-3 text-left">Categoría</th>
-                    <th className="px-5 py-3 text-right">Disponible</th>
+                    <th className="px-5 py-3 text-right">En stock</th>
                     <th className="px-5 py-3 text-right">Alerta 🟡</th>
                     <th className="px-5 py-3 text-right">Mínimo 🔴</th>
                     <th className="px-5 py-3 text-right">Costo prom.</th>
@@ -1177,7 +1219,7 @@ export default function Inventory() {
                           {!item.productType && !item.family && <span className="text-gray-300">—</span>}
                         </td>
                         <td className="px-5 py-3 text-gray-500">{item.category}</td>
-                        <td className="px-5 py-3 text-right font-mono">{item.available.toFixed(2)}</td>
+                        <td className="px-5 py-3 text-right font-mono">{Number(item.totalQty ?? 0).toFixed(2)}</td>
                         <td className="px-5 py-3 text-right font-mono text-amber-600">
                           {item.alertConfig?.alertThreshold ? fmtNum(item.alertConfig.alertThreshold) : <span className="text-gray-300">—</span>}
                         </td>
