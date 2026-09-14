@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2 } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2, Paperclip, Trash2, Upload, Ruler, ShieldCheck } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
@@ -181,6 +181,282 @@ interface POForm {
   expectedDeliveryDate: string; notes: string; lines: POLineForm[];
 }
 
+
+// ── Document helpers ─────────────────────────────────────────────────────────
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+
+/** Read a File into base64 (without the data: prefix), as the API expects. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    r.readAsDataURL(file);
+  });
+}
+
+const ATT_KINDS = [
+  { value: 'FACTURA',             label: 'Factura' },
+  { value: 'CERTIFICADO_CALIDAD', label: 'Certificado de calidad' },
+  { value: 'COTIZACION',          label: 'Cotización' },
+  { value: 'GUIA_REMISION',       label: 'Guía de remisión' },
+  { value: 'OTRO',                label: 'Otro' },
+];
+const KIND_LABEL: Record<string, string> = Object.fromEntries(ATT_KINDS.map(k => [k.value, k.label]));
+
+// ── POAttachmentsModal ───────────────────────────────────────────────────────
+// Factura, certificado de calidad and any other document that belongs to the OC.
+// Uploading a factura also registers it as comprobante (Control de pagos);
+// uploading a certificado runs the lot/expiry reader, and what it finds is what
+// pre-fills the stock-entry form.
+function POAttachmentsModal({ po, onClose }: { po: any; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [kind, setKind] = useState('FACTURA');
+  const [busy, setBusy] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['po-attachments', po.id],
+    queryFn: () => api.get(`/v1/procurement/purchase-orders/${po.id}/attachments`).then(r => r.data),
+  });
+  const items: any[] = data?.data ?? [];
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const res = await api.post(`/v1/procurement/purchase-orders/${po.id}/attachments`, {
+        kind, nombreArchivo: file.name, mimeType: file.type || 'application/pdf',
+        tamanoBytes: file.size, dataBase64,
+      });
+      const lotes = res.data?.lotesDetectados ?? 0;
+      toast.success(
+        kind === 'CERTIFICADO_CALIDAD'
+          ? (lotes ? `Certificado cargado · ${lotes} lote(s) detectado(s)` : 'Certificado cargado · sin lotes detectados')
+          : kind === 'FACTURA' ? 'Factura cargada y registrada en comprobantes' : 'Documento cargado');
+      qc.invalidateQueries({ queryKey: ['po-attachments', po.id] });
+      qc.invalidateQueries({ queryKey: ['comprobantes'] });
+    } catch (e: any) {
+      toast.error(e.response?.data?.error ?? 'Error al cargar el documento');
+    } finally { setBusy(false); }
+  };
+
+  const open = async (att: any) => {
+    try {
+      const r = await api.get(`/v1/procurement/purchase-orders/attachments/${att.id}/data`);
+      const { dataBase64, mimeType, nombreArchivo } = r.data.data;
+      const bin = atob(dataBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = nombreArchivo;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch { toast.error('No se pudo abrir el archivo'); }
+  };
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/v1/procurement/purchase-orders/attachments/${id}`),
+    onSuccess: () => { toast.success('Documento eliminado'); qc.invalidateQueries({ queryKey: ['po-attachments', po.id] }); },
+    onError: () => toast.error('No se pudo eliminar'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Paperclip size={18} className="text-brand-600" />
+            <div>
+              <h2 className="font-bold text-gray-900">Documentos de la OC</h2>
+              <p className="text-xs text-gray-400 font-mono">{po.poNumber} · {po.supplier?.businessName ?? ''}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="flex flex-wrap items-end gap-3 p-4 rounded-xl bg-gray-50 border border-gray-200">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de documento</label>
+              <select className="input w-56" value={kind} onChange={e => setKind(e.target.value)}>
+                {ATT_KINDS.map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
+              </select>
+            </div>
+            <label className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer ${busy ? 'bg-gray-200 text-gray-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Subir archivo
+              <input type="file" className="hidden" accept="application/pdf,image/*,application/xml,text/xml"
+                disabled={busy}
+                onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />
+            </label>
+            <p className="text-xs text-gray-500 flex-1 min-w-[16rem]">
+              La <strong>factura</strong> se registra también en Control de pagos. Del <strong>certificado de calidad</strong> se leen
+              los lotes y vencimientos para precargar el ingreso al stock.
+            </p>
+          </div>
+
+          {isLoading ? <p className="text-center text-gray-400 py-6">Cargando...</p> : !items.length ? (
+            <p className="text-center text-gray-400 py-6">Sin documentos aún</p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full text-sm">
+                <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Tipo</th>
+                    <th className="px-3 py-2 text-left">Archivo</th>
+                    <th className="px-3 py-2 text-left">Detalle</th>
+                    <th className="px-3 py-2 text-left">Cargado</th>
+                    <th className="px-3 py-2 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {items.map(a => {
+                    const lotes: any[] = Array.isArray(a.lotesDetected) ? a.lotesDetected : [];
+                    return (
+                      <tr key={a.id} className="table-row-hover">
+                        <td className="px-3 py-2">
+                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">{KIND_LABEL[a.kind] ?? a.kind}</span>
+                        </td>
+                        <td className="px-3 py-2 max-w-[16rem] truncate" title={a.nombreArchivo}>{a.nombreArchivo}</td>
+                        <td className="px-3 py-2 text-xs text-gray-500">
+                          {a.kind === 'CERTIFICADO_CALIDAD'
+                            ? (lotes.length
+                                ? lotes.slice(0, 3).map((l, i) => (
+                                    <span key={i} className="block">
+                                      {l.lotNumber ? <>Lote <span className="font-mono">{l.lotNumber}</span></> : 'Lote —'}
+                                      {l.expiryDate ? ` · vence ${fmtDate(l.expiryDate)}` : ''}
+                                    </span>))
+                                : <span className="text-amber-600">Sin lotes detectados — cargar manualmente</span>)
+                            : (<>
+                                {a.numero && <span className="block font-mono">{a.numero}</span>}
+                                {a.total != null && <span className="block">Total {fmtNum(a.total)}</span>}
+                                {a.comprobanteId && <span className="block text-green-600">Registrado en comprobantes</span>}
+                              </>)}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-gray-500">{fmtDate(a.createdAt)}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={() => open(a)} title="Abrir / descargar" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600"><FileDown size={15} /></button>
+                            <button onClick={() => remove.mutate(a.id)} title="Eliminar" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-red-600"><Trash2 size={15} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── UomConversionsPanel ──────────────────────────────────────────────────────
+// "1 saco = 50 kg". Dimensional units (kg↔g, l↔ml) are built in; presentations
+// are not — their size depends on the ingredient, so they're configured here and
+// applied to both the OC line and the stock entry.
+function UomConversionsPanel() {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({ fromUom: 'saco', toUom: 'kg', factor: '', ingredientId: '' });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['uom-conversions'],
+    queryFn: () => api.get('/v1/procurement/uom-conversions').then(r => r.data),
+  });
+  const { data: ingredients } = useQuery({
+    queryKey: ['ingredient-master'],
+    queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data),
+  });
+
+  const save = useMutation({
+    mutationFn: (b: any) => api.post('/v1/procurement/uom-conversions', b),
+    onSuccess: () => {
+      toast.success('Presentación guardada');
+      setForm(f => ({ ...f, factor: '', ingredientId: '' }));
+      qc.invalidateQueries({ queryKey: ['uom-conversions'] });
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error ?? 'Error al guardar'),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/v1/procurement/uom-conversions/${id}`),
+    onSuccess: () => { toast.success('Eliminada'); qc.invalidateQueries({ queryKey: ['uom-conversions'] }); },
+  });
+
+  const rows: any[] = data?.data ?? [];
+  const canSave = !!form.fromUom.trim() && !!form.toUom.trim() && Number(form.factor) > 0 && form.fromUom.trim() !== form.toUom.trim();
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+        <Ruler size={18} className="text-gray-400" />
+        <div>
+          <h2 className="font-semibold">Presentaciones</h2>
+          <p className="text-xs text-gray-400">Cómo se convierte la unidad de compra a la unidad de stock</p>
+        </div>
+      </div>
+
+      <div className="p-5 flex flex-wrap items-end gap-3 border-b border-gray-100 bg-gray-50">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">1 unidad de compra</label>
+          <input className="input w-32" placeholder="saco" value={form.fromUom} onChange={e => setForm(f => ({ ...f, fromUom: e.target.value }))} />
+        </div>
+        <span className="pb-2 text-gray-400">=</span>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad</label>
+          <input type="number" min={0} step="0.0001" className="input w-28 text-right font-mono" placeholder="50" value={form.factor} onChange={e => setForm(f => ({ ...f, factor: e.target.value }))} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Unidad de stock</label>
+          <input className="input w-28" placeholder="kg" value={form.toUom} onChange={e => setForm(f => ({ ...f, toUom: e.target.value }))} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Ingrediente</label>
+          <select className="input w-64" value={form.ingredientId} onChange={e => setForm(f => ({ ...f, ingredientId: e.target.value }))}>
+            <option value="">Todos (general)</option>
+            {ingredients?.data?.map((i: any) => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        </div>
+        <button className="btn-primary" disabled={!canSave || save.isPending}
+          onClick={() => save.mutate({
+            fromUom: form.fromUom.trim(), toUom: form.toUom.trim(),
+            factor: Number(form.factor), ingredientId: form.ingredientId || null,
+          })}>Guardar</button>
+      </div>
+
+      {isLoading ? <p className="p-8 text-center text-gray-400">Cargando...</p> : !rows.length ? (
+        <p className="p-8 text-center text-gray-400">Sin presentaciones configuradas. Ejemplo: 1 saco = 50 kg.</p>
+      ) : (
+        <div className="table-container">
+          <table className="w-full text-sm">
+            <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide"><tr>
+              <th className="px-5 py-3 text-left">Conversión</th>
+              <th className="px-5 py-3 text-left">Aplica a</th>
+              <th className="px-5 py-3 text-center">Acciones</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.map(r => (
+                <tr key={r.id} className="table-row-hover">
+                  <td className="px-5 py-3 font-mono">1 {r.fromUom} = {fmtNum(r.factor)} {r.toUom}</td>
+                  <td className="px-5 py-3 text-gray-500">{r.ingredientName ?? 'Todos los ingredientes'}</td>
+                  <td className="px-5 py-3 text-center">
+                    <button onClick={() => remove.mutate(r.id)} className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-red-600"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ReceivePOModal ────────────────────────────────────────────────────────────
 // Ingest an approved OC into inventory in one step: pick the almacén, confirm the
 // quantities (defaulting to what's still pending), and optionally record lote +
@@ -194,6 +470,16 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
   const warehouses: any[] = warehousesResp?.data ?? [];
   const [warehouseId, setWarehouseId] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Lotes / vencimientos read off the certificados de calidad attached to this
+  // OC. They arrive as a suggestion: pre-filled, flagged, and editable — nothing
+  // moves stock until the operator confirms.
+  const { data: suggestionResp } = useQuery({
+    queryKey: ['po-receive-suggestion', po.id],
+    queryFn: () => api.get(`/v1/procurement/purchase-orders/${po.id}/receive-suggestion`).then(r => r.data),
+  });
+  const suggestion = suggestionResp?.data;
+  const [prefilled, setPrefilled] = useState<Record<string, boolean>>({});
   // Per-line editable state keyed by line id: qty pending, lote, vencimiento.
   const [rows, setRows] = useState<Record<string, { qty: string; lot: string; expiry: string }>>(() => {
     const init: Record<string, { qty: string; lot: string; expiry: string }> = {};
@@ -205,6 +491,26 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
   });
   // Default the almacén to the first one once the list loads.
   if (!warehouseId && warehouses.length) setWarehouseId(warehouses[0].id);
+
+  // Apply the suggestion once, and only to fields the operator hasn't typed in.
+  const [applied, setApplied] = useState(false);
+  if (suggestion && !applied) {
+    setApplied(true);
+    const hits: Record<string, boolean> = {};
+    setRows(r => {
+      const next = { ...r };
+      for (const sug of (suggestion.lines ?? [])) {
+        const cur = next[sug.lineId];
+        if (!cur) continue;
+        const lot    = !cur.lot    && sug.lotNumber  ? sug.lotNumber  : cur.lot;
+        const expiry = !cur.expiry && sug.expiryDate ? sug.expiryDate : cur.expiry;
+        if (lot !== cur.lot || expiry !== cur.expiry) hits[sug.lineId] = true;
+        next[sug.lineId] = { ...cur, lot, expiry };
+      }
+      return next;
+    });
+    if (Object.keys(hits).length) setPrefilled(hits);
+  }
 
   const setRow = (id: string, k: 'qty' | 'lot' | 'expiry') => (v: string) =>
     setRows(r => ({ ...r, [id]: { ...r[id], [k]: v } }));
@@ -248,6 +554,21 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
               <input className="input" value={notes} placeholder="Opcional" onChange={e => setNotes(e.target.value)} />
             </div>
           </div>
+          {Object.keys(prefilled).length > 0 && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-green-50 border border-green-200 text-xs text-green-800">
+              <ShieldCheck size={16} className="shrink-0 mt-0.5" />
+              <span>
+                Lote y vencimiento precargados desde el certificado de calidad
+                {suggestion?.certificados?.length ? ` (${suggestion.certificados.map((c: any) => c.nombreArchivo).join(', ')})` : ''}.
+                Revísalos antes de confirmar.
+              </span>
+            </div>
+          )}
+          {!suggestion?.certificados?.length && (
+            <p className="text-xs text-gray-500">
+              Sin certificado de calidad adjunto — los lotes y vencimientos se ingresan manualmente.
+            </p>
+          )}
           <div className="overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
@@ -283,8 +604,9 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
                         })()}
                       </td>
                       <td className="px-3 py-2">
-                        <input className="input w-28 font-mono" placeholder="Opcional"
-                          value={rows[l.id]?.lot ?? ''} onChange={e => setRow(l.id, 'lot')(e.target.value)} />
+                        <input className={`input w-28 font-mono ${prefilled[l.id] ? 'border-green-400 bg-green-50' : ''}`} placeholder="Opcional"
+                          value={rows[l.id]?.lot ?? ''} onChange={e => { setPrefilled(p => ({ ...p, [l.id]: false })); setRow(l.id, 'lot')(e.target.value); }} />
+                        {prefilled[l.id] && <span className="block text-[10px] text-green-600">Del certificado</span>}
                       </td>
                       <td className="px-3 py-2">
                         <input type="date" className="input w-36"
@@ -325,13 +647,14 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
 
 export default function Procurement() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<'po'|'suppliers'>('po');
+  const [tab, setTab] = useState<'po'|'suppliers'|'presentaciones'>('po');
   const [showSupForm, setShowSupForm] = useState(false);
   const [editingSup, setEditingSup] = useState<any>(null);
   const [showPOForm, setShowPOForm] = useState(false);
   const [editingPOId, setEditingPOId] = useState<string | null>(null);
   const [viewingPO, setViewingPO] = useState<any>(null);
   const [receivingPO, setReceivingPO] = useState<any>(null);
+  const [attachmentsPO, setAttachmentsPO] = useState<any>(null);
   const RECEIVABLE_STATUSES = ['APPROVED', 'SENT', 'PARTIAL_RECEIVED'];
   const EMPTY_PO: POForm = { supplierId: '', currency: 'PEN', exchangeRate: '', expectedDeliveryDate: '', notes: '', lines: [{ ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] };
   const [poForm, setPoForm] = useState<POForm>(EMPTY_PO);
@@ -435,6 +758,7 @@ export default function Procurement() {
 
   return (
     <div className="space-y-6">
+      {attachmentsPO && <POAttachmentsModal po={attachmentsPO} onClose={() => setAttachmentsPO(null)} />}
       {receivingPO && (
         <ReceivePOModal
           po={receivingPO}
@@ -564,9 +888,9 @@ export default function Procurement() {
         )}
       </div>
       <div className="flex gap-2 border-b border-gray-200">
-        {(['po', 'suppliers'] as const).map(t => (
+        {(['po', 'suppliers', 'presentaciones'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab===t ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-            {t === 'po' ? 'Órdenes de compra' : 'Proveedores'}
+            {t === 'po' ? 'Órdenes de compra' : t === 'suppliers' ? 'Proveedores' : 'Presentaciones'}
           </button>
         ))}
       </div>
@@ -636,6 +960,7 @@ export default function Procurement() {
             {loadPO ? <div className="p-8 text-center text-gray-400">Cargando...</div> : (
               <div className="table-container">
                 <table className="w-full text-sm"><thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide"><tr>
+                  <th className="px-5 py-3 text-left">Fecha</th>
                   <th className="px-5 py-3 text-left">Nro. OC</th>
                   <th className="px-5 py-3 text-left">Proveedor</th>
                   <th className="px-5 py-3 text-right">Total S/</th>
@@ -644,6 +969,7 @@ export default function Procurement() {
                 </tr></thead><tbody className="divide-y divide-gray-100">
                   {pos?.data?.map((po: any) => (
                     <tr key={po.id} className="table-row-hover">
+                      <td className="px-5 py-3 text-gray-600 whitespace-nowrap">{fmtDate(po.createdAt)}</td>
                       <td className="px-5 py-3 font-mono">{po.poNumber}</td>
                       <td className="px-5 py-3 font-medium">{po.supplier?.businessName}</td>
                       <td className="px-5 py-3 text-right font-mono">
@@ -654,6 +980,7 @@ export default function Procurement() {
                       <td className="px-5 py-3">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => setViewingPO(po)} title="Ver detalle" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Eye size={15} /></button>
+                          <button onClick={() => setAttachmentsPO(po)} title="Documentos (factura, certificado de calidad)" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Paperclip size={15} /></button>
                           {po.status === 'DRAFT' && (
                             <button onClick={() => openEditPO(po)} title="Editar" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Pencil size={14} /></button>
                           )}
@@ -677,6 +1004,7 @@ export default function Procurement() {
           </div>
         </>
       )}
+      {tab === 'presentaciones' && <UomConversionsPanel />}
       {tab === 'suppliers' && (
         <>
           {showSupForm && <SupplierFormModal initial={editingSup} onClose={() => { setShowSupForm(false); setEditingSup(null); }} onSaved={() => { setShowSupForm(false); setEditingSup(null); }} />}
