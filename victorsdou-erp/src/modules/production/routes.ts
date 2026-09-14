@@ -85,6 +85,216 @@ export async function productionRoutes(app: FastifyInstance) {
     return reply.send({ data: orders });
   });
 
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  DEMANDA — de las órdenes de pedido a las órdenes de producción
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Sales orders that still need producing. Delivered, cancelled and returned
+  // orders are out; everything between DRAFT and READY counts as demand.
+  const DEMAND_STATUSES = [
+    'DRAFT', 'PENDING_PAYMENT', 'PAID', 'CONFIRMED', 'ACCEPTED', 'IN_PRODUCTION',
+  ] as const;
+
+  // ── GET /demand ───────────────────────────────────────────────────────────
+  // What the commercial team has sold, aggregated by product, with the batch
+  // the system recommends: a recipe yields a fixed batch (Recipe.yieldQty), so
+  // producing 130 units of something that batches in 50 means 3 batches / 150
+  // units. The UI shows that as an editable default — the operator can round it
+  // down to 100 or up to 200 before the orders are generated.
+  app.get('/demand', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR', 'SALES_MGR')] }, async (req, reply) => {
+    const q = req.query as { desde?: string; hasta?: string; incluirSinFecha?: string };
+
+    const desde = q.desde ? new Date(q.desde) : new Date();
+    const hasta = q.hasta ? new Date(q.hasta + 'T23:59:59') : new Date(desde.getTime() + 7 * 86400_000);
+
+    const deliveryFilter = q.incluirSinFecha === 'true'
+      ? { OR: [{ deliveryDate: { gte: desde, lte: hasta } }, { deliveryDate: null }] }
+      : { deliveryDate: { gte: desde, lte: hasta } };
+
+    const orders = await prisma.salesOrder.findMany({
+      where: { status: { in: DEMAND_STATUSES as never }, ...deliveryFilter },
+      select: {
+        id: true, orderNumber: true, deliveryDate: true, status: true,
+        customer: { select: { displayName: true } },
+        lines: { select: { productId: true, qty: true, product: { select: { id: true, sku: true, name: true, unitOfSale: true, activeRecipeId: true } } } },
+      },
+      orderBy: { deliveryDate: 'asc' },
+    });
+
+    // Which of these orders are already covered by a live production order?
+    const openProdOrders = await prisma.productionOrder.findMany({
+      where: { status: { notIn: ['CANCELLED', 'COMPLETED'] as never } },
+      select: { id: true, orderNumber: true, linkedSalesOrderIds: true },
+    });
+    const coveredSalesOrderIds = new Set(openProdOrders.flatMap(o => o.linkedSalesOrderIds));
+
+    type Agg = {
+      productId: string; sku: string | null; nombre: string; uom: string | null;
+      qtySolicitada: number; pedidos: { id: string; orderNumber: string; cliente: string | null; qty: number; deliveryDate: Date | null; yaEnProduccion: boolean }[];
+      primeraEntrega: Date | null;
+    };
+    const byProduct = new Map<string, Agg>();
+
+    for (const o of orders) {
+      for (const l of o.lines) {
+        if (!l.productId) continue;
+        const cur = byProduct.get(l.productId) ?? {
+          productId: l.productId,
+          sku: l.product?.sku ?? null,
+          nombre: l.product?.name ?? l.productId,
+          uom: l.product?.unitOfSale ?? null,
+          qtySolicitada: 0,
+          pedidos: [],
+          primeraEntrega: null,
+        };
+        cur.qtySolicitada += Number(l.qty);
+        cur.pedidos.push({
+          id: o.id, orderNumber: o.orderNumber,
+          cliente: o.customer?.displayName ?? null,
+          qty: Number(l.qty), deliveryDate: o.deliveryDate,
+          yaEnProduccion: coveredSalesOrderIds.has(o.id),
+        });
+        if (o.deliveryDate && (!cur.primeraEntrega || o.deliveryDate < cur.primeraEntrega)) {
+          cur.primeraEntrega = o.deliveryDate;
+        }
+        byProduct.set(l.productId, cur);
+      }
+    }
+
+    // Attach the active recipe of each product and compute the batch suggestion.
+    const productIds = [...byProduct.keys()];
+    const recipes = productIds.length
+      ? await prisma.recipe.findMany({
+          where: { productId: { in: productIds }, status: 'ACTIVE' },
+          select: { id: true, productId: true, version: true, yieldQty: true, yieldUom: true },
+          orderBy: { version: 'desc' },
+        })
+      : [];
+    const products = productIds.length
+      ? await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, activeRecipeId: true } })
+      : [];
+    const activeByProduct = new Map(products.map(p => [p.id, p.activeRecipeId]));
+
+    const recipeFor = (productId: string) => {
+      const active = activeByProduct.get(productId);
+      if (active) {
+        const hit = recipes.find(r => r.id === active);
+        if (hit) return hit;
+      }
+      // Fall back to the highest ACTIVE version (recipes are ordered desc).
+      return recipes.find(r => r.productId === productId) ?? null;
+    };
+
+    const items = [...byProduct.values()].map(a => {
+      const recipe   = recipeFor(a.productId);
+      const yieldQty = recipe ? Number(recipe.yieldQty) || 0 : 0;
+      const batches  = yieldQty > 0 ? Math.ceil(a.qtySolicitada / yieldQty) : 0;
+      return {
+        ...a,
+        recipeId:      recipe?.id ?? null,
+        recipeVersion: recipe?.version ?? null,
+        yieldQty:      yieldQty || null,
+        yieldUom:      recipe?.yieldUom ?? null,
+        batchesSugeridos:    batches || null,
+        plannedQtySugerida:  yieldQty > 0 ? batches * yieldQty : a.qtySolicitada,
+        yaEnProduccion:      a.pedidos.every(p => p.yaEnProduccion),
+        sinReceta:           !recipe,
+        salesOrderIds:       [...new Set(a.pedidos.map(p => p.id))],
+      };
+    }).sort((x, y) => {
+      const dx = x.primeraEntrega ? new Date(x.primeraEntrega).getTime() : Infinity;
+      const dy = y.primeraEntrega ? new Date(y.primeraEntrega).getTime() : Infinity;
+      return dx - dy || y.qtySolicitada - x.qtySolicitada;
+    });
+
+    return reply.send({
+      data: {
+        rango: { desde: desde.toISOString().slice(0, 10), hasta: hasta.toISOString().slice(0, 10) },
+        pedidos: orders.length,
+        items,
+      },
+    });
+  });
+
+  // ── POST /orders/bulk ─────────────────────────────────────────────────────
+  // Accept the demand screen: one production order per product, each reserving
+  // its BOM and linked back to the sales orders it covers. Items are created
+  // one by one so a single bad line doesn't sink the whole batch — the response
+  // says exactly which ones failed and why.
+  app.post('/orders/bulk', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      scheduledDate?: string;
+      line?: string;
+      shift?: string;
+      marcarEnProduccion?: boolean;
+      items?: { recipeId: string; plannedQty: number; line?: string; shift?: string; linkedSalesOrderIds?: string[]; notes?: string }[];
+    };
+    const items = body.items ?? [];
+    if (!items.length) return reply.code(400).send({ error: 'No hay productos por generar' });
+
+    const scheduled = body.scheduledDate ? new Date(body.scheduledDate) : new Date();
+    if (isNaN(scheduled.getTime())) return reply.code(400).send({ error: 'Fecha programada inválida' });
+
+    const creados: { orderNumber: string; id: string; recipeId: string; plannedQty: number }[] = [];
+    const errores: { recipeId: string; error: string }[] = [];
+    const linkedAll = new Set<string>();
+
+    for (const it of items) {
+      const line = (it.line ?? body.line ?? '').toUpperCase();
+      if (!['A', 'B', 'C'].includes(line)) { errores.push({ recipeId: it.recipeId, error: 'Línea de producción inválida (A, B o C)' }); continue; }
+      if (!it.recipeId) { errores.push({ recipeId: '', error: 'Producto sin receta activa' }); continue; }
+      const plannedQty = Number(it.plannedQty);
+      if (!(plannedQty > 0)) { errores.push({ recipeId: it.recipeId, error: 'Cantidad a producir inválida' }); continue; }
+
+      const recipe = await prisma.recipe.findUnique({
+        where: { id: it.recipeId },
+        include: { bomLines: { include: { ingredient: true } } },
+      });
+      if (!recipe) { errores.push({ recipeId: it.recipeId, error: 'Receta no encontrada' }); continue; }
+
+      try {
+        const orderNumber = await generateLotNumber(scheduled, line);
+        const created = await prisma.$transaction(async (tx) => {
+          const o = await tx.productionOrder.create({
+            data: {
+              orderNumber,
+              recipeId:            recipe.id,
+              recipeVersion:       recipe.version,
+              plannedQty,
+              line:                line as never,
+              scheduledDate:       scheduled,
+              shift:               it.shift ?? body.shift ?? null,
+              linkedSalesOrderIds: it.linkedSalesOrderIds ?? [],
+              notes:               it.notes ?? null,
+              status:              'DRAFT',
+              createdBy:           req.actor!.sub,
+            },
+          });
+          await reserveForOrder(tx, o.id, recipe, plannedQty);
+          return o;
+        });
+        creados.push({ orderNumber: created.orderNumber, id: created.id, recipeId: recipe.id, plannedQty });
+        for (const sid of it.linkedSalesOrderIds ?? []) linkedAll.add(sid);
+      } catch (err) {
+        errores.push({ recipeId: it.recipeId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Optionally move the covered sales orders to IN_PRODUCTION so they stop
+    // showing up as pending demand.
+    if (body.marcarEnProduccion && linkedAll.size) {
+      await prisma.salesOrder.updateMany({
+        where: { id: { in: [...linkedAll] }, status: { in: ['DRAFT', 'PENDING_PAYMENT', 'PAID', 'CONFIRMED', 'ACCEPTED'] as never } },
+        data:  { status: 'IN_PRODUCTION' as never },
+      });
+    }
+
+    return reply.code(creados.length ? 201 : 422).send({
+      data: { creados, errores, resumen: { solicitados: items.length, creados: creados.length, conError: errores.length } },
+    });
+  });
+
   app.post('/orders', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
     const body = req.body as {
       recipeId: string; recipeVersion: number;

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState, useEffect } from 'react';
-import { Plus, Factory, X, CheckCircle2, Loader2, LayoutGrid, Table as TableIcon, Tablet } from 'lucide-react';
+import { Plus, Factory, X, CheckCircle2, Loader2, LayoutGrid, Table as TableIcon, Tablet, ClipboardList, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
@@ -143,6 +143,7 @@ async function openBatchCard(order: Order) {
 export default function Production() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const [showDemanda, setShowDemanda] = useState(false);
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [form, setForm] = useState({ recipeId: '', plannedQty: 1, line: 'A', scheduledDate: new Date().toISOString().slice(0, 10) });
   const [closingOrder, setClosingOrder] = useState<Order | null>(null);
@@ -196,6 +197,12 @@ export default function Production() {
 
   return (
     <div className="space-y-6">
+      {showDemanda && (
+        <DemandaModal
+          onClose={() => setShowDemanda(false)}
+          onCreated={() => { qc.invalidateQueries({ queryKey: ['production-orders'] }); }}
+        />
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Producción</h1>
@@ -219,6 +226,9 @@ export default function Production() {
           <Link to="/tablet" className="btn-secondary flex items-center gap-2">
             <Tablet size={16} /> Modo Tablet
           </Link>
+          <button className="btn-secondary flex items-center gap-2" onClick={() => setShowDemanda(true)}>
+            <ClipboardList size={16} /> Desde pedidos
+          </button>
           <button className="btn-primary flex items-center gap-2" onClick={() => setShowForm(v => !v)}>
             <Plus size={16} /> Nueva orden
           </button>
@@ -771,3 +781,237 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
     </div>
   );
 }
+
+// ── DemandaModal ─────────────────────────────────────────────────────────────
+// "Los productos solicitados deben aparecer en el módulo de producción con un
+// listado con las cantidades solicitadas y un campo editable con el batch
+// recomendado por sistema."
+//
+// Aggregates the open sales orders by product over a delivery-date window. The
+// recommended quantity is the requested amount rounded up to whole batches
+// (Recipe.yieldQty); it is pre-filled and editable, and only the rows that are
+// checked generate a production order.
+function DemandaModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [desde, setDesde] = useState(today);
+  const [hasta, setHasta] = useState(new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10));
+  const [incluirSinFecha, setIncluirSinFecha] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState(today);
+  const [line, setLine] = useState('A');
+  const [marcarEnProduccion, setMarcarEnProduccion] = useState(true);
+  const [rows, setRows] = useState<Record<string, { qty: string; checked: boolean; line: string }>>({});
+  const [creating, setCreating] = useState(false);
+  const [resultado, setResultado] = useState<any>(null);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['production-demand', desde, hasta, incluirSinFecha],
+    queryFn: () => api.get('/v1/production/demand', {
+      params: { desde, hasta, incluirSinFecha: incluirSinFecha ? 'true' : undefined },
+    }).then(r => r.data),
+  });
+  const items: any[] = data?.data?.items ?? [];
+
+  // Seed the editable quantities from the suggestion whenever the window
+  // changes; rows already covered by a live production order start unchecked.
+  useEffect(() => {
+    if (!items.length) { setRows({}); return; }
+    setRows(prev => {
+      const next: typeof prev = {};
+      for (const it of items) {
+        next[it.productId] = prev[it.productId] ?? {
+          qty: String(it.plannedQtySugerida ?? it.qtySolicitada ?? 0),
+          checked: !it.sinReceta && !it.yaEnProduccion,
+          line,
+        };
+      }
+      return next;
+    });
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setRow = (id: string, k: 'qty' | 'checked' | 'line', v: any) =>
+    setRows(r => ({ ...r, [id]: { ...r[id], [k]: v } }));
+
+  const seleccionados = items.filter(i => rows[i.productId]?.checked && !i.sinReceta);
+
+  const generar = async () => {
+    if (!seleccionados.length) return;
+    setCreating(true);
+    try {
+      const res = await api.post('/v1/production/orders/bulk', {
+        scheduledDate,
+        line,
+        marcarEnProduccion,
+        items: seleccionados.map(i => ({
+          recipeId: i.recipeId,
+          plannedQty: Number(rows[i.productId].qty) || 0,
+          line: rows[i.productId].line || line,
+          linkedSalesOrderIds: i.salesOrderIds,
+          notes: `Generada desde pedidos (${i.pedidos.length} pedido/s)`,
+        })),
+      });
+      const d = res.data.data;
+      setResultado(d);
+      if (d.resumen.creados) {
+        toast.success(`${d.resumen.creados} orden(es) de producción creadas`);
+        onCreated();
+        await refetch();
+      }
+      if (d.resumen.conError) toast.error(`${d.resumen.conError} con error`);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error ?? 'Error al generar las órdenes');
+    } finally { setCreating(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <ClipboardList size={18} className="text-brand-600" />
+            <div>
+              <h2 className="font-bold text-gray-900">Producción desde pedidos</h2>
+              <p className="text-xs text-gray-400">Cantidades solicitadas por producto y el batch recomendado</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Entrega desde</label>
+            <input type="date" className="input text-sm" value={desde} onChange={e => setDesde(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Hasta</label>
+            <input type="date" className="input text-sm" value={hasta} onChange={e => setHasta(e.target.value)} />
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 pb-2">
+            <input type="checkbox" checked={incluirSinFecha} onChange={e => setIncluirSinFecha(e.target.checked)} />
+            Incluir pedidos sin fecha
+          </label>
+          <div className="ml-auto flex items-end gap-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Producir el</label>
+              <input type="date" className="input text-sm" value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Línea</label>
+              <select className="input text-sm w-20" value={line}
+                onChange={e => { setLine(e.target.value); setRows(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, line: e.target.value }]))); }}>
+                {['A', 'B', 'C'].map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {isLoading ? <p className="text-center text-gray-400 py-10">Cargando pedidos…</p>
+            : !items.length ? <p className="text-center text-gray-400 py-10">No hay pedidos con entrega en ese rango.</p> : (
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full text-sm">
+                <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-3 py-2 w-8"></th>
+                    <th className="px-3 py-2 text-left">Producto</th>
+                    <th className="px-3 py-2 text-right">Solicitado</th>
+                    <th className="px-3 py-2 text-left">Pedidos</th>
+                    <th className="px-3 py-2 text-left">1ª entrega</th>
+                    <th className="px-3 py-2 text-right">Batch</th>
+                    <th className="px-3 py-2 text-right">A producir</th>
+                    <th className="px-3 py-2 text-center">Línea</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {items.map(it => {
+                    const row = rows[it.productId];
+                    const qty = Number(row?.qty) || 0;
+                    const falta = qty < it.qtySolicitada;
+                    return (
+                      <tr key={it.productId} className={it.sinReceta ? 'bg-amber-50' : ''}>
+                        <td className="px-3 py-2">
+                          <input type="checkbox" disabled={it.sinReceta}
+                            checked={!!row?.checked}
+                            onChange={e => setRow(it.productId, 'checked', e.target.checked)} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="font-medium">{it.nombre}</span>
+                          {it.sku && <span className="block text-[10px] text-gray-400 font-mono">{it.sku}</span>}
+                          {it.sinReceta && (
+                            <span className="flex items-center gap-1 text-[10px] text-amber-700 mt-0.5">
+                              <AlertTriangle size={11} /> Sin receta activa — no se puede generar
+                            </span>
+                          )}
+                          {it.yaEnProduccion && !it.sinReceta && (
+                            <span className="block text-[10px] text-gray-400 mt-0.5">Ya cubierto por una orden abierta</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">{it.qtySolicitada}{it.uom ? <span className="text-gray-400 text-[10px] ml-1">{it.uom}</span> : null}</td>
+                        <td className="px-3 py-2 text-xs text-gray-500">
+                          {it.pedidos.length} pedido(s)
+                          <span className="block text-[10px] text-gray-400 truncate max-w-[14rem]">
+                            {[...new Set(it.pedidos.map((p: any) => p.cliente).filter(Boolean))].slice(0, 3).join(', ')}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-gray-500">
+                          {it.primeraEntrega ? new Date(it.primeraEntrega).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit' }) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right text-xs text-gray-500">
+                          {it.yieldQty ? <>{it.batchesSugeridos} × {it.yieldQty}{it.yieldUom ? ` ${it.yieldUom}` : ''}</> : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input type="number" min={0} step="0.01" disabled={it.sinReceta}
+                            className="input w-24 text-right font-mono"
+                            value={row?.qty ?? ''} onChange={e => setRow(it.productId, 'qty', e.target.value)} />
+                          {falta && qty > 0 && <span className="block text-[10px] text-amber-600">Bajo lo solicitado</span>}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <select className="input w-16 text-sm" disabled={it.sinReceta}
+                            value={row?.line ?? line} onChange={e => setRow(it.productId, 'line', e.target.value)}>
+                            {['A', 'B', 'C'].map(l => <option key={l} value={l}>{l}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {resultado && (
+            <div className="space-y-2">
+              {!!resultado.creados?.length && (
+                <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800">
+                  {resultado.creados.map((c: any) => <div key={c.id}>Orden {c.orderNumber} · {c.plannedQty}</div>)}
+                </div>
+              )}
+              {!!resultado.errores?.length && (
+                <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700">
+                  {resultado.errores.map((e: any, i: number) => <div key={i}>{e.error}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 bg-gray-50 rounded-b-2xl">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+            <input type="checkbox" checked={marcarEnProduccion} onChange={e => setMarcarEnProduccion(e.target.checked)} />
+            Marcar los pedidos como "En producción"
+          </label>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cerrar</button>
+            <button
+              disabled={!seleccionados.length || creating}
+              onClick={generar}
+              className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50">
+              {creating && <Loader2 size={14} className="animate-spin" />}
+              <Factory size={14} /> Generar {seleccionados.length} orden(es)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
