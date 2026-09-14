@@ -30,6 +30,7 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
 import { simpleParser } from 'mailparser';
 import { config } from '../../config';
+import { ingestQuote } from '../procurement/quoteService';
 import {
   autoExtract,
   archivoTipoFromMime,
@@ -161,6 +162,33 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
               { s3Key: key, subject, from: fromText },
               '[inbound-email] No document attachments — no Comprobante created',
             );
+            continue;
+          }
+
+          // ── 3b. ¿Es una cotización de proveedor? ───────────────────────────
+          // Quotes arriving at QUOTES_INBOX take the purchasing path instead of
+          // becoming a comprobante: extract the lines, match the ingredients and
+          // email the approver a link. Everything else behaves exactly as before.
+          const inbox = config.QUOTES_INBOX.toLowerCase();
+          const esCotizacion = toText.toLowerCase().includes(inbox);
+          if (esCotizacion) {
+            try {
+              const quote = await ingestQuote({
+                archivos: docAttachments.map((att) => ({
+                  nombreArchivo: att.filename ?? `cotizacion_${Date.now()}`,
+                  mimeType:      att.contentType,
+                  dataBase64:    att.content.toString('base64'),
+                  tamanoBytes:   att.size ?? att.content.length,
+                })),
+                senderEmail:  fromText,
+                emailSubject: subject,
+                messageId:    parsed.messageId ?? null,
+                source:       'EMAIL',
+              });
+              app.log.info({ quoteId: quote.id, from: fromText, subject }, '[inbound-email] Cotización registrada');
+            } catch (err) {
+              app.log.error({ err, from: fromText, subject }, '[inbound-email] Error al registrar la cotización');
+            }
             continue;
           }
 

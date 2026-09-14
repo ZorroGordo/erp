@@ -468,6 +468,7 @@ model Ingredient {
   poLines          PurchaseOrderLine[]
   alertConfig      IngredientAlert?
   reservations     ProductionReservation[]
+  quoteLines       SupplierQuoteLine[]
 
   @@map("ingredients")
 }
@@ -833,6 +834,7 @@ model Supplier {
   comprobanteProveedor Comprobante[]   @relation("ComprobanteProveedor")
 
   @@map("suppliers")
+  supplierQuotes SupplierQuote[] @relation("SupplierQuoteProveedor")
 }
 
 model SupplierPriceList {
@@ -968,6 +970,116 @@ enum POAttachmentKind {
   COTIZACION
   GUIA_REMISION
   OTRO
+}
+
+/// A supplier quote (cotización) received by email or uploaded by hand.
+/// This is the front door of the purchasing flow: the quote arrives, its lines
+/// are extracted, an approver gets a link, and approving it generates the OC.
+/// Distinct from `Quotation`, which is a quote WE send to a customer.
+model SupplierQuote {
+  id              String   @id @default(uuid())
+  quoteNumber     String   @unique          // COT-<timestamp>
+
+  supplierId      String?
+  supplier        Supplier? @relation("SupplierQuoteProveedor", fields: [supplierId], references: [id])
+  /// What the document said, before (or without) a match to a Supplier row.
+  supplierNameRaw String?
+  supplierRuc     String?
+
+  currency        String   @default("PEN")
+  exchangeRate    Decimal  @default(1) @db.Decimal(8, 4)
+  subtotal        Decimal? @db.Decimal(14, 4)
+  igv             Decimal? @db.Decimal(14, 4)
+  total           Decimal? @db.Decimal(14, 4)
+  validUntil      DateTime?
+
+  status          SupplierQuoteStatus @default(RECIBIDA)
+  source          ComprobanteSource   @default(EMAIL)
+
+  // Email provenance
+  senderEmail     String?
+  emailSubject    String?
+  /// Message-Id of the source email, so a redelivered SNS notification doesn't
+  /// create the quote twice.
+  messageId       String?  @unique
+
+  /// Raw LLM/heuristic output kept for debugging a bad extraction.
+  extractedJson   Json?
+  extractionNotes String?
+
+  // Approval by email link
+  approvalToken          String?   @unique
+  approvalTokenExpiresAt DateTime?
+  approvedAt      DateTime?
+  approvedBy      String?           // user id, when approved inside the ERP
+  approvedByEmail String?           // who clicked the link
+  rejectedReason  String?
+
+  /// The OC generated from this quote.
+  purchaseOrderId String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?
+
+  lines    SupplierQuoteLine[]
+  archivos SupplierQuoteArchivo[]
+
+  @@index([status])
+  @@index([supplierId])
+  @@index([createdAt])
+  @@map("supplier_quotes")
+}
+
+model SupplierQuoteLine {
+  id             String        @id @default(uuid())
+  quoteId        String
+  quote          SupplierQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  /// The line exactly as the quote wrote it.
+  descripcionRaw String
+  /// Matched ingredient, when the description could be resolved with confidence.
+  ingredientId   String?
+  ingredient     Ingredient?   @relation(fields: [ingredientId], references: [id])
+
+  qty            Decimal       @db.Decimal(14, 4)   // cantidad por presentación
+  uom            String                              // presentación: saco, caja, kg…
+  unitPrice      Decimal       @db.Decimal(12, 4)   // sin IGV
+  subtotal       Decimal?      @db.Decimal(14, 4)
+  igv            Decimal?      @db.Decimal(14, 4)
+  total          Decimal?      @db.Decimal(14, 4)
+
+  // Presentation converted to the ingredient's stock unit (1 saco = 50 kg).
+  qtyBase          Decimal? @db.Decimal(14, 4)
+  baseUom          String?
+  conversionFactor Decimal? @db.Decimal(14, 8)
+
+  orden          Int      @default(0)
+
+  @@index([quoteId])
+  @@map("supplier_quote_lines")
+}
+
+model SupplierQuoteArchivo {
+  id            String        @id @default(uuid())
+  quoteId       String
+  quote         SupplierQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  nombreArchivo String
+  mimeType      String
+  tamanoBytes   Int
+  dataBase64    String        @db.Text
+  createdAt     DateTime      @default(now())
+
+  @@index([quoteId])
+  @@map("supplier_quote_archivos")
+}
+
+enum SupplierQuoteStatus {
+  RECIBIDA        // ingested, extraction done (or attempted)
+  EN_APROBACION   // approval email sent, waiting on the link
+  APROBADA        // approved; OC generated
+  RECHAZADA
+  ERROR           // extraction failed badly enough to need a human
 }
 
 model GoodsReceiptNote {

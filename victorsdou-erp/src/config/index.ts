@@ -64,6 +64,23 @@ const envSchema = z.object({
   // Peru lookup APIs (apis.net.pe — free tier, register at https://apis.net.pe)
   APIS_NET_PE_TOKEN: z.string().optional(),
 
+  // Claude — used to read supplier quotes (layouts vary too much for regex).
+  // Without a key the quote still gets registered; its lines are just left for
+  // a human to complete.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-5'),
+
+  // Cotizaciones por correo
+  /// Mailbox the SES receipt rule delivers supplier quotes to. Anything else
+  /// arriving at the inbound webhook is treated as a comprobante, as before.
+  QUOTES_INBOX: z.string().default('compras@erp.victorsdou.pe'),
+  /// Who gets the approval link. Comma-separated.
+  PURCHASE_APPROVER_EMAILS: z.string().optional(),
+  /// Public base URL of the API, used to build the approval link in the email.
+  PUBLIC_API_URL: z.string().default('https://erp-api.victorsdou.pe'),
+  /// How long an approval link stays valid.
+  QUOTE_APPROVAL_TTL_DAYS: z.coerce.number().default(14),
+
 });
 
 function loadConfig() {
