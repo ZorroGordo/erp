@@ -89,7 +89,7 @@ const envSchema = z.object({
   LLM_MAX_INPUT_CHARS: z.coerce.number().default(60_000),
 
   ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-5'),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-5'),
 
   // Cotizaciones por correo
   /// Mailboxes whose inbound mail is treated as a supplier quote, comma-separated.
