@@ -71,13 +71,23 @@ const envSchema = z.object({
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-5'),
 
   // Cotizaciones por correo
-  /// Mailbox the SES receipt rule delivers supplier quotes to. Anything else
-  /// arriving at the inbound webhook is treated as a comprobante, as before.
-  QUOTES_INBOX: z.string().default('compras@erp.victorsdou.pe'),
-  /// Who gets the approval link. Comma-separated.
+  /// Mailboxes whose inbound mail is treated as a supplier quote, comma-separated.
+  /// Both spellings are accepted by default so the flow works whether the SES
+  /// receipt rule covers the erp.victorsdou.pe subdomain (no DNS change) or the
+  /// main victorsdou.com domain (MX change). Mail to any other address is still
+  /// registered as a comprobante, exactly as before.
+  QUOTES_INBOX: z.string().default('compras@erp.victorsdou.pe,compras@victorsdou.com,cotizaciones@erp.victorsdou.pe'),
+  /// Also treat mail as a quote when the subject or an attachment name says so,
+  /// whatever address it arrived at. Lets suppliers keep writing to the mailbox
+  /// that already has a receipt rule.
+  QUOTES_SUBJECT_KEYWORDS: z.string().default('cotizacion,cotización,cotizacón,proforma,quotation,quote,presupuesto'),
+  /// Who gets the approval link. Comma-separated. Falls back to OPS_ALERT_EMAIL.
   PURCHASE_APPROVER_EMAILS: z.string().optional(),
   /// Public base URL of the API, used to build the approval link in the email.
-  PUBLIC_API_URL: z.string().default('https://erp-api.victorsdou.pe'),
+  /// Default is the Railway service the frontend already proxies to — note the
+  /// Vercel rewrite only forwards /api/v1/*, so the link has to point straight
+  /// at the backend rather than at the app domain.
+  PUBLIC_API_URL: z.string().default('https://erp-production-10eb.up.railway.app'),
   /// How long an approval link stays valid.
   QUOTE_APPROVAL_TTL_DAYS: z.coerce.number().default(14),
 

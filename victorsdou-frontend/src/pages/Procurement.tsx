@@ -721,7 +721,9 @@ function CotizacionesPanel() {
         <Mail size={18} className="text-gray-400" />
         <div>
           <h2 className="font-semibold">Cotizaciones</h2>
-          <p className="text-xs text-gray-400">Las que llegan al correo de compras entran solas; también puedes subir una aquí</p>
+          <p className="text-xs text-gray-400">
+            Entran solas las que llegan al correo de compras, y las que traen "cotización" o "proforma" en el asunto; también puedes subir una aquí
+          </p>
         </div>
         <label className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer ${uploading ? 'bg-gray-200 text-gray-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Subir cotización

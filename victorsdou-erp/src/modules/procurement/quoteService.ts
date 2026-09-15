@@ -135,18 +135,36 @@ export function matchIngredient(
   return best && best.score >= 0.6 ? best.ing : null;
 }
 
-/** Try to attach the quote to a known supplier, by RUC first and name second. */
-export async function matchSupplier(ruc?: string | null, nombre?: string | null) {
-  if (ruc) {
-    const byRuc = await prisma.supplier.findFirst({ where: { ruc: ruc.replace(/\D/g, '') } });
+/**
+ * Attach the quote to a known supplier. RUC first (exact, unambiguous), then the
+ * sender's email against the supplier's registered address, then the business
+ * name — and only when the name matches exactly one supplier. The sender's
+ * domain is deliberately NOT used as a name: "ventas@distribuidoracesar.com"
+ * matching some other "Distribuidora" by substring is how a quote gets billed to
+ * the wrong company.
+ */
+export async function matchSupplier(opts: { ruc?: string | null; nombre?: string | null; email?: string | null }) {
+  const ruc = (opts.ruc ?? '').replace(/\D/g, '');
+  if (ruc.length >= 8) {
+    const byRuc = await prisma.supplier.findFirst({ where: { ruc } });
     if (byRuc) return byRuc;
   }
-  if (nombre) {
-    const n = nombre.trim();
-    const byName = await prisma.supplier.findFirst({
-      where: { businessName: { contains: n, mode: 'insensitive' } },
+
+  const email = (opts.email ?? '').trim().toLowerCase();
+  if (email) {
+    const byEmail = await prisma.supplier.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
     });
-    if (byName) return byName;
+    if (byEmail) return byEmail;
+  }
+
+  const nombre = (opts.nombre ?? '').trim();
+  if (nombre.length >= 4) {
+    const matches = await prisma.supplier.findMany({
+      where: { businessName: { contains: nombre, mode: 'insensitive' } },
+      take: 2,
+    });
+    if (matches.length === 1) return matches[0];
   }
   return null;
 }
@@ -180,7 +198,12 @@ export async function ingestQuote(input: IngestInput) {
 
   const { parsed, nota } = await extractQuote(principal.mimeType, principal.dataBase64);
 
-  const supplier = await matchSupplier(parsed?.ruc, parsed?.proveedor ?? input.senderEmail?.split('@')[1]);
+  const supplier = await matchSupplier({
+    ruc: parsed?.ruc,
+    nombre: parsed?.proveedor,
+    // The From: header is "Nombre <correo@dominio>"; keep just the address.
+    email: (input.senderEmail ?? '').match(/[^<\s]+@[^>\s]+/)?.[0] ?? null,
+  });
   const ingredients = await prisma.ingredient.findMany({
     where: { isActive: true },
     select: { id: true, name: true, baseUom: true },
@@ -279,7 +302,9 @@ export async function sendApprovalEmail(quoteId: string) {
   });
   if (!quote) throw new Error('Cotización no encontrada');
 
-  const to = (config.PURCHASE_APPROVER_EMAILS ?? '')
+  // Approvers, or the ops alert address as a fallback, so the link still gets
+  // somewhere useful before anyone configures the dedicated variable.
+  const to = (config.PURCHASE_APPROVER_EMAILS || config.OPS_ALERT_EMAIL || '')
     .split(',').map(s => s.trim()).filter(Boolean);
   if (!to.length) {
     console.warn('[quote] PURCHASE_APPROVER_EMAILS sin configurar — no se envía el link de aprobación');

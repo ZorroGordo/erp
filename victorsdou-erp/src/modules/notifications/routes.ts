@@ -31,6 +31,7 @@ import { PrismaClient } from '@prisma/client';
 import { simpleParser } from 'mailparser';
 import { config } from '../../config';
 import { ingestQuote } from '../procurement/quoteService';
+import { clasificarCorreo } from '../procurement/quoteRouting';
 import {
   autoExtract,
   archivoTipoFromMime,
@@ -166,12 +167,17 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
           }
 
           // ── 3b. ¿Es una cotización de proveedor? ───────────────────────────
-          // Quotes arriving at QUOTES_INBOX take the purchasing path instead of
+          // Recognised by the recipient mailbox OR by the subject/attachment
+          // name (see quoteRouting.ts) — so the flow works without waiting on a
+          // DNS or SES change. A quote takes the purchasing path instead of
           // becoming a comprobante: extract the lines, match the ingredients and
           // email the approver a link. Everything else behaves exactly as before.
-          const inbox = config.QUOTES_INBOX.toLowerCase();
-          const esCotizacion = toText.toLowerCase().includes(inbox);
-          if (esCotizacion) {
+          const clasificacion = clasificarCorreo({
+            to: toText,
+            subject,
+            filenames: docAttachments.map(att => att.filename),
+          });
+          if (clasificacion.esCotizacion) {
             try {
               const quote = await ingestQuote({
                 archivos: docAttachments.map((att) => ({
@@ -185,7 +191,10 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
                 messageId:    parsed.messageId ?? null,
                 source:       'EMAIL',
               });
-              app.log.info({ quoteId: quote.id, from: fromText, subject }, '[inbound-email] Cotización registrada');
+              app.log.info(
+                { quoteId: quote.id, from: fromText, to: toText, subject, motivo: clasificacion.motivo },
+                '[inbound-email] Cotización registrada',
+              );
             } catch (err) {
               app.log.error({ err, from: fromText, subject }, '[inbound-email] Error al registrar la cotización');
             }
