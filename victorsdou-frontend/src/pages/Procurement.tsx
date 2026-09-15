@@ -697,6 +697,14 @@ function CotizacionesPanel() {
     queryKey: ['supplier-quotes'],
     queryFn: () => api.get('/v1/procurement/quotes').then(r => r.data),
   });
+  // Which model is reading the quotes — so a provider change is visible here
+  // instead of only showing up as empty line items later.
+  const { data: llm } = useQuery({
+    queryKey: ['quotes-llm-status'],
+    queryFn: () => api.get('/v1/procurement/quotes/llm-status').then(r => r.data),
+    retry: false,
+  });
+  const llmInfo = llm?.data;
   const rows: any[] = data?.data ?? [];
   const refresh = () => { qc.invalidateQueries({ queryKey: ['supplier-quotes'] }); qc.invalidateQueries({ queryKey: ['pos'] }); };
 
@@ -724,6 +732,11 @@ function CotizacionesPanel() {
           <p className="text-xs text-gray-400">
             Entran solas las que llegan a compras@erp.victorsdou.pe, y las que traen "cotización" o "proforma" en el asunto; también puedes subir una aquí
           </p>
+          {llmInfo && (
+            llmInfo.configured
+              ? <p className="text-[10px] text-gray-400 mt-0.5">Lectura automática: {llmInfo.model}</p>
+              : <p className="text-[10px] text-amber-600 mt-0.5">Lectura automática desactivada — las líneas se completan a mano</p>
+          )}
         </div>
         <label className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer ${uploading ? 'bg-gray-200 text-gray-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Subir cotización

@@ -64,9 +64,30 @@ const envSchema = z.object({
   // Peru lookup APIs (apis.net.pe — free tier, register at https://apis.net.pe)
   APIS_NET_PE_TOKEN: z.string().optional(),
 
-  // Claude — used to read supplier quotes (layouts vary too much for regex).
-  // Without a key the quote still gets registered; its lines are just left for
-  // a human to complete.
+  // ── LLM used to read supplier quotes ──────────────────────────────────────
+  // Layouts vary too much for regex, so one model call turns the quote's text
+  // into line items. Provider-agnostic on purpose: nearly every vendor (OpenAI,
+  // Groq, DeepSeek, Mistral, Together, OpenRouter) and every self-hosted runner
+  // (Ollama, vLLM, llama.cpp) speaks the OpenAI /chat/completions shape, so one
+  // driver plus a base URL covers all of them.
+  //
+  //   LLM_PROVIDER=openai  LLM_BASE_URL=https://api.openai.com/v1
+  //                        LLM_API_KEY=...  LLM_MODEL=gpt-4o-mini
+  //   LLM_PROVIDER=openai  LLM_BASE_URL=https://api.groq.com/openai/v1  …
+  //   LLM_PROVIDER=openai  LLM_BASE_URL=http://localhost:11434/v1  (Ollama, no key)
+  //   LLM_PROVIDER=anthropic  ANTHROPIC_API_KEY=…  ANTHROPIC_MODEL=…
+  //   LLM_PROVIDER=off     → quotes still register; lines are filled by hand
+  //
+  // Left unset, it picks openai when LLM_API_KEY/LLM_BASE_URL are present,
+  // anthropic when ANTHROPIC_API_KEY is, and otherwise stays off.
+  LLM_PROVIDER: z.enum(['anthropic', 'openai', 'off']).optional(),
+  LLM_BASE_URL: z.string().optional(),
+  LLM_API_KEY: z.string().optional(),
+  LLM_MODEL: z.string().optional(),
+  /// Hard ceiling per extraction call, so a pathological 80-page PDF can't run
+  /// up a bill on any provider.
+  LLM_MAX_INPUT_CHARS: z.coerce.number().default(60_000),
+
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-5'),
 

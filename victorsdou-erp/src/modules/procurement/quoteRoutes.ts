@@ -6,6 +6,7 @@ import { prisma } from '../../lib/prisma';
 import {
   ingestQuote, sendApprovalEmail, generatePurchaseOrder, escapeHtml,
 } from './quoteService';
+import { llmStatus } from '../../lib/llm';
 
 const LIST_SELECT = {
   id: true, quoteNumber: true, supplierId: true, supplierNameRaw: true, supplierRuc: true,
@@ -18,6 +19,12 @@ const LIST_SELECT = {
 } as const;
 
 export async function supplierQuoteRoutes(app: FastifyInstance) {
+  // ── WHICH MODEL IS READING THE QUOTES ─────────────────────────────────────
+  // Lets anyone confirm the provider actually took effect after changing the
+  // env vars, without redeploying blind or leaking the key.
+  app.get('/quotes/llm-status', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'SUPER_ADMIN')] },
+    async (_req, reply) => reply.send({ data: llmStatus() }));
+
   // ── LIST ──────────────────────────────────────────────────────────────────
   app.get('/quotes', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const q = req.query as { status?: string; supplierId?: string; limit?: string };

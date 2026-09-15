@@ -80,7 +80,7 @@ function extractionPrompt(text: string): string {
 }
 
 --- TEXTO DE LA COTIZACIÓN ---
-${text.slice(0, 60_000)}
+${text}
 --- FIN ---`;
 }
 
@@ -91,7 +91,7 @@ export async function extractQuote(mimeType: string, dataBase64: string): Promis
     return { parsed: null, text: text ?? '', nota: 'No se pudo leer texto del documento (¿escaneo de baja calidad?)' };
   }
   if (!llmEnabled()) {
-    return { parsed: null, text, nota: 'Extracción con IA no configurada (falta ANTHROPIC_API_KEY): completar las líneas a mano' };
+    return { parsed: null, text, nota: 'Extracción con IA no configurada (ver LLM_PROVIDER): completar las líneas a mano' };
   }
   const parsed = await llmJson<ExtractedQuote>(extractionPrompt(text), { system: EXTRACTION_SYSTEM, maxTokens: 4096 });
   if (!parsed) return { parsed: null, text, nota: 'La extracción automática no devolvió un resultado utilizable' };
