@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2, Paperclip, Trash2, Upload, Ruler, ShieldCheck } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2, Paperclip, Trash2, Upload, Ruler, ShieldCheck, Mail, Send, Check, AlertTriangle } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
@@ -457,6 +457,337 @@ function UomConversionsPanel() {
   );
 }
 
+
+// ── CotizacionesPanel ────────────────────────────────────────────────────────
+// Quotes that arrived at the purchasing mailbox (or were uploaded here). The
+// extraction is a draft: each line's ingredient, quantity, unit and price are
+// editable, because approving generates the OC and a wrong line buys the wrong
+// thing. Approving from here is the same action as clicking the emailed link.
+const QUOTE_STATUS: Record<string, { label: string; cls: string }> = {
+  RECIBIDA:      { label: 'Recibida',       cls: 'bg-blue-50 text-blue-700' },
+  EN_APROBACION: { label: 'En aprobación',  cls: 'bg-amber-50 text-amber-700' },
+  APROBADA:      { label: 'Aprobada',       cls: 'bg-green-50 text-green-700' },
+  RECHAZADA:     { label: 'Rechazada',      cls: 'bg-gray-100 text-gray-600' },
+  ERROR:         { label: 'Revisar',        cls: 'bg-red-50 text-red-700' },
+};
+
+function QuoteDetailModal({ quoteId, onClose, onChanged }: { quoteId: string; onClose: () => void; onChanged: () => void }) {
+  const [edits, setEdits] = useState<Record<string, { ingredientId: string; qty: string; uom: string; unitPrice: string }>>({});
+  const [supplierId, setSupplierId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['supplier-quote', quoteId],
+    queryFn: () => api.get(`/v1/procurement/quotes/${quoteId}`).then(r => r.data),
+  });
+  const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
+  const { data: suppliers }   = useQuery({ queryKey: ['suppliers'], queryFn: () => api.get('/v1/procurement/suppliers').then(r => r.data) });
+
+  const quote = data?.data;
+  const [seeded, setSeeded] = useState(false);
+  if (quote && !seeded) {
+    setSeeded(true);
+    setSupplierId(quote.supplierId ?? '');
+    const next: typeof edits = {};
+    for (const l of quote.lines ?? []) {
+      next[l.id] = {
+        ingredientId: l.ingredientId ?? '',
+        qty: String(Number(l.qty)),
+        uom: l.uom ?? '',
+        unitPrice: String(Number(l.unitPrice)),
+      };
+    }
+    setEdits(next);
+  }
+
+  const setLine = (id: string, k: keyof (typeof edits)[string], v: string) =>
+    setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
+
+  const guardar = async () => {
+    setBusy(true);
+    try {
+      await api.patch(`/v1/procurement/quotes/${quoteId}`, {
+        supplierId: supplierId || null,
+        lines: Object.entries(edits).map(([id, v]) => ({
+          id, ingredientId: v.ingredientId || null,
+          qty: Number(v.qty) || 0, uom: v.uom, unitPrice: Number(v.unitPrice) || 0,
+        })),
+      });
+      toast.success('Cotización actualizada');
+      await refetch(); onChanged();
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'Error al guardar'); }
+    finally { setBusy(false); }
+  };
+
+  const aprobar = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post(`/v1/procurement/quotes/${quoteId}/approve`);
+      toast.success(`OC ${res.data.data.poNumber} generada`);
+      onChanged(); onClose();
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'No se pudo generar la OC'); }
+    finally { setBusy(false); }
+  };
+
+  const rechazar = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/v1/procurement/quotes/${quoteId}/reject`, {});
+      toast.success('Cotización rechazada');
+      onChanged(); onClose();
+    } catch { toast.error('No se pudo rechazar'); }
+    finally { setBusy(false); }
+  };
+
+  const enviarAprobacion = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/v1/procurement/quotes/${quoteId}/send-approval`);
+      toast.success('Link de aprobación enviado');
+      await refetch(); onChanged();
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'No se pudo enviar'); }
+    finally { setBusy(false); }
+  };
+
+  const verArchivo = async (a: any) => {
+    try {
+      const r = await api.get(`/v1/procurement/quotes/archivos/${a.id}/data`);
+      const { dataBase64, mimeType, nombreArchivo } = r.data.data;
+      const bin = atob(dataBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      const el = document.createElement('a');
+      el.href = url; el.target = '_blank'; el.rel = 'noopener'; el.download = nombreArchivo;
+      el.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch { toast.error('No se pudo abrir el archivo'); }
+  };
+
+  const cur = quote?.currency === 'USD' ? '$' : 'S/';
+  const sinIngrediente = (quote?.lines ?? []).filter((l: any) => !edits[l.id]?.ingredientId).length;
+  const puedeAprobar = !!supplierId && (quote?.lines ?? []).some((l: any) => edits[l.id]?.ingredientId) && quote?.status !== 'APROBADA';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Mail size={18} className="text-brand-600" />
+            <div>
+              <h2 className="font-bold text-gray-900">{quote?.quoteNumber ?? 'Cotización'}</h2>
+              <p className="text-xs text-gray-400">
+                {quote?.senderEmail ?? quote?.supplierNameRaw ?? '—'}{quote?.emailSubject ? ` · ${quote.emailSubject}` : ''}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {isLoading ? <p className="text-center text-gray-400 py-10">Cargando…</p> : !quote ? null : (
+            <>
+              {quote.extractionNotes && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                  <AlertTriangle size={15} className="shrink-0 mt-0.5" /> <span>{quote.extractionNotes}</span>
+                </div>
+              )}
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Proveedor</label>
+                  <select className="input w-72" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+                    <option value="">— Vincular proveedor —</option>
+                    {suppliers?.data?.map((s: any) => <option key={s.id} value={s.id}>{s.businessName}</option>)}
+                  </select>
+                  {!supplierId && <p className="text-[10px] text-amber-600 mt-0.5">Requerido para generar la OC</p>}
+                </div>
+                <div className="text-sm text-gray-500 pb-2">
+                  Total cotizado: <strong className="text-gray-900">{cur} {fmtNum(quote.total ?? 0)}</strong>
+                </div>
+                <div className="ml-auto flex items-center gap-2 pb-1">
+                  {(quote.archivos ?? []).map((a: any) => (
+                    <button key={a.id} onClick={() => verArchivo(a)} className="flex items-center gap-1 text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded">
+                      <FileDown size={13} /> {a.nombreArchivo}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Producto en la cotización</th>
+                      <th className="px-3 py-2 text-left">Ingrediente</th>
+                      <th className="px-3 py-2 text-right">Cantidad</th>
+                      <th className="px-3 py-2 text-left">Unidad</th>
+                      <th className="px-3 py-2 text-right">P. unit. s/IGV</th>
+                      <th className="px-3 py-2 text-right">En stock</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(quote.lines ?? []).map((l: any) => (
+                      <tr key={l.id} className={!edits[l.id]?.ingredientId ? 'bg-amber-50' : ''}>
+                        <td className="px-3 py-2 max-w-[18rem]">{l.descripcionRaw}</td>
+                        <td className="px-3 py-2">
+                          <select className="input w-56 text-sm" value={edits[l.id]?.ingredientId ?? ''}
+                            onChange={e => setLine(l.id, 'ingredientId', e.target.value)}>
+                            <option value="">— Sin identificar —</option>
+                            {ingredients?.data?.map((i: any) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input type="number" min={0} step="0.01" className="input w-24 text-right font-mono"
+                            value={edits[l.id]?.qty ?? ''} onChange={e => setLine(l.id, 'qty', e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input className="input w-24 text-sm" value={edits[l.id]?.uom ?? ''}
+                            onChange={e => setLine(l.id, 'uom', e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input type="number" min={0} step="0.0001" className="input w-28 text-right font-mono"
+                            value={edits[l.id]?.unitPrice ?? ''} onChange={e => setLine(l.id, 'unitPrice', e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2 text-right text-xs text-gray-500">
+                          {l.qtyBase != null ? `${fmtNum(l.qtyBase)} ${l.baseUom ?? ''}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {sinIngrediente > 0 && (
+                <p className="text-xs text-amber-600">
+                  {sinIngrediente} línea(s) sin ingrediente: no entrarán en la OC hasta que las asignes.
+                </p>
+              )}
+              {quote.purchaseOrderId && (
+                <p className="text-xs text-green-600">Ya generó una orden de compra.</p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-2 bg-gray-50 rounded-b-2xl">
+          <button onClick={rechazar} disabled={busy || quote?.status === 'APROBADA'}
+            className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-xl disabled:opacity-40">Rechazar</button>
+          <div className="flex gap-2">
+            <button onClick={enviarAprobacion} disabled={busy}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-xl disabled:opacity-40">
+              <Send size={14} /> Enviar link de aprobación
+            </button>
+            <button onClick={guardar} disabled={busy} className="btn-secondary text-sm">Guardar cambios</button>
+            <button onClick={aprobar} disabled={busy || !puedeAprobar}
+              className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50">
+              {busy && <Loader2 size={14} className="animate-spin" />} <Check size={14} /> Aprobar y generar OC
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CotizacionesPanel() {
+  const qc = useQueryClient();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['supplier-quotes'],
+    queryFn: () => api.get('/v1/procurement/quotes').then(r => r.data),
+  });
+  // Which model is reading the quotes — so a provider change is visible here
+  // instead of only showing up as empty line items later.
+  const { data: llm } = useQuery({
+    queryKey: ['quotes-llm-status'],
+    queryFn: () => api.get('/v1/procurement/quotes/llm-status').then(r => r.data),
+    retry: false,
+  });
+  const llmInfo = llm?.data;
+  const rows: any[] = data?.data ?? [];
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['supplier-quotes'] }); qc.invalidateQueries({ queryKey: ['pos'] }); };
+
+  const subir = async (file: File) => {
+    setUploading(true);
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const res = await api.post('/v1/procurement/quotes', {
+        archivos: [{ nombreArchivo: file.name, mimeType: file.type || 'application/pdf', tamanoBytes: file.size, dataBase64 }],
+      });
+      toast.success('Cotización registrada');
+      refresh();
+      setOpenId(res.data.data.id);
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'Error al registrar la cotización'); }
+    finally { setUploading(false); }
+  };
+
+  return (
+    <div className="card overflow-hidden">
+      {openId && <QuoteDetailModal quoteId={openId} onClose={() => setOpenId(null)} onChanged={refresh} />}
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+        <Mail size={18} className="text-gray-400" />
+        <div>
+          <h2 className="font-semibold">Cotizaciones</h2>
+          <p className="text-xs text-gray-400">
+            Entran solas las que llegan a compras@erp.victorsdou.pe, y las que traen "cotización" o "proforma" en el asunto; también puedes subir una aquí
+          </p>
+          {llmInfo && (
+            llmInfo.configured
+              ? <p className="text-[10px] text-gray-400 mt-0.5">Lectura automática: {llmInfo.model}</p>
+              : <p className="text-[10px] text-amber-600 mt-0.5">Lectura automática desactivada — las líneas se completan a mano</p>
+          )}
+        </div>
+        <label className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer ${uploading ? 'bg-gray-200 text-gray-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
+          {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Subir cotización
+          <input type="file" className="hidden" accept="application/pdf,image/*" disabled={uploading}
+            onChange={e => { const f = e.target.files?.[0]; if (f) subir(f); e.target.value = ''; }} />
+        </label>
+      </div>
+
+      {isLoading ? <p className="p-8 text-center text-gray-400">Cargando...</p>
+        : !rows.length ? <p className="p-8 text-center text-gray-400">Sin cotizaciones aún</p> : (
+        <div className="table-container">
+          <table className="w-full text-sm">
+            <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide"><tr>
+              <th className="px-5 py-3 text-left">Fecha</th>
+              <th className="px-5 py-3 text-left">Proveedor</th>
+              <th className="px-5 py-3 text-left">Origen</th>
+              <th className="px-5 py-3 text-right">Total</th>
+              <th className="px-5 py-3 text-center">Líneas</th>
+              <th className="px-5 py-3 text-left">Estado</th>
+              <th className="px-5 py-3 text-center">Acciones</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.map(q => {
+                const st = QUOTE_STATUS[q.status] ?? { label: q.status, cls: 'bg-gray-100 text-gray-600' };
+                return (
+                  <tr key={q.id} className="table-row-hover">
+                    <td className="px-5 py-3 text-gray-600 whitespace-nowrap">{fmtDate(q.createdAt)}</td>
+                    <td className="px-5 py-3">
+                      <span className="font-medium">{q.supplier?.businessName ?? q.supplierNameRaw ?? '—'}</span>
+                      {!q.supplierId && <span className="block text-[10px] text-amber-600">Sin vincular</span>}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-gray-500 max-w-[14rem] truncate">{q.senderEmail ?? (q.source === 'MANUAL' ? 'Carga manual' : '—')}</td>
+                    <td className="px-5 py-3 text-right font-mono">{q.currency === 'USD' ? '$' : 'S/'} {fmtNum(q.total ?? 0)}</td>
+                    <td className="px-5 py-3 text-center text-gray-500">{q._count?.lines ?? 0}</td>
+                    <td className="px-5 py-3"><span className={`px-2 py-0.5 rounded text-[11px] font-medium ${st.cls}`}>{st.label}</span></td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => setOpenId(q.id)} title="Revisar" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600"><Eye size={15} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ReceivePOModal ────────────────────────────────────────────────────────────
 // Ingest an approved OC into inventory in one step: pick the almacén, confirm the
 // quantities (defaulting to what's still pending), and optionally record lote +
@@ -647,7 +978,7 @@ function ReceivePOModal({ po, onClose, onSuccess }: { po: any; onClose: () => vo
 
 export default function Procurement() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<'po'|'suppliers'|'presentaciones'>('po');
+  const [tab, setTab] = useState<'po'|'cotizaciones'|'suppliers'|'presentaciones'>('po');
   const [showSupForm, setShowSupForm] = useState(false);
   const [editingSup, setEditingSup] = useState<any>(null);
   const [showPOForm, setShowPOForm] = useState(false);
@@ -888,9 +1219,9 @@ export default function Procurement() {
         )}
       </div>
       <div className="flex gap-2 border-b border-gray-200">
-        {(['po', 'suppliers', 'presentaciones'] as const).map(t => (
+        {(['po', 'cotizaciones', 'suppliers', 'presentaciones'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab===t ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-            {t === 'po' ? 'Órdenes de compra' : t === 'suppliers' ? 'Proveedores' : 'Presentaciones'}
+            {t === 'po' ? 'Órdenes de compra' : t === 'cotizaciones' ? 'Cotizaciones' : t === 'suppliers' ? 'Proveedores' : 'Presentaciones'}
           </button>
         ))}
       </div>
@@ -1004,6 +1335,7 @@ export default function Procurement() {
           </div>
         </>
       )}
+      {tab === 'cotizaciones' && <CotizacionesPanel />}
       {tab === 'presentaciones' && <UomConversionsPanel />}
       {tab === 'suppliers' && (
         <>

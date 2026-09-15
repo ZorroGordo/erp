@@ -30,6 +30,8 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
 import { simpleParser } from 'mailparser';
 import { config } from '../../config';
+import { ingestQuote } from '../procurement/quoteService';
+import { clasificarCorreo } from '../procurement/quoteRouting';
 import {
   autoExtract,
   archivoTipoFromMime,
@@ -161,6 +163,41 @@ export async function notificationsWebhookRoutes(app: FastifyInstance) {
               { s3Key: key, subject, from: fromText },
               '[inbound-email] No document attachments — no Comprobante created',
             );
+            continue;
+          }
+
+          // ── 3b. ¿Es una cotización de proveedor? ───────────────────────────
+          // Recognised by the recipient mailbox OR by the subject/attachment
+          // name (see quoteRouting.ts) — so the flow works without waiting on a
+          // DNS or SES change. A quote takes the purchasing path instead of
+          // becoming a comprobante: extract the lines, match the ingredients and
+          // email the approver a link. Everything else behaves exactly as before.
+          const clasificacion = clasificarCorreo({
+            to: toText,
+            subject,
+            filenames: docAttachments.map(att => att.filename),
+          });
+          if (clasificacion.esCotizacion) {
+            try {
+              const quote = await ingestQuote({
+                archivos: docAttachments.map((att) => ({
+                  nombreArchivo: att.filename ?? `cotizacion_${Date.now()}`,
+                  mimeType:      att.contentType,
+                  dataBase64:    att.content.toString('base64'),
+                  tamanoBytes:   att.size ?? att.content.length,
+                })),
+                senderEmail:  fromText,
+                emailSubject: subject,
+                messageId:    parsed.messageId ?? null,
+                source:       'EMAIL',
+              });
+              app.log.info(
+                { quoteId: quote.id, from: fromText, to: toText, subject, motivo: clasificacion.motivo },
+                '[inbound-email] Cotización registrada',
+              );
+            } catch (err) {
+              app.log.error({ err, from: fromText, subject }, '[inbound-email] Error al registrar la cotización');
+            }
             continue;
           }
 

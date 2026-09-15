@@ -19,6 +19,7 @@ import { authRoutes }       from './modules/auth/routes';
 import { inventoryRoutes }  from './modules/inventory/routes';
 import { productionRoutes } from './modules/production/routes';
 import { procurementRoutes }from './modules/procurement/routes';
+import { supplierQuoteRoutes, supplierQuotePublicRoutes } from './modules/procurement/quoteRoutes';
 import { catalogRoutes }    from './modules/catalog/routes';
 import { customersRoutes }  from './modules/customers/routes';
 import { salesRoutes }      from './modules/sales/routes';
@@ -126,6 +127,7 @@ export async function buildApp() {
     await api.register(inventoryRoutes,   { prefix: '/inventory' });
     await api.register(productionRoutes,  { prefix: '/production' });
     await api.register(procurementRoutes, { prefix: '/procurement' });
+    await api.register(supplierQuoteRoutes, { prefix: '/procurement' });
     await api.register(catalogRoutes,     { prefix: '/products' });
     await api.register(customersRoutes,   { prefix: '/customers' });
     await api.register(salesRoutes,       { prefix: '/sales-orders' });
@@ -159,6 +161,9 @@ export async function buildApp() {
       return reply.send({ received: true });
     });
     await wh.register(notificationsWebhookRoutes);
+    // Public approval page for supplier quotes — no auth; guarded by a
+    // single-use, expiring token embedded in the link we email the approver.
+    await wh.register(supplierQuotePublicRoutes);
   }, { prefix: '/webhooks' });
 
   // ── 404 Handler ───────────────────────────────────────────────────────────
