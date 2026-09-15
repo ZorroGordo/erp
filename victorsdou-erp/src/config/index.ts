@@ -77,9 +77,13 @@ const envSchema = z.object({
   /// main victorsdou.com domain (MX change). Mail to any other address is still
   /// registered as a comprobante, exactly as before.
   QUOTES_INBOX: z.string().default('compras@erp.victorsdou.pe,compras@victorsdou.com,cotizaciones@erp.victorsdou.pe'),
-  /// Also treat mail as a quote when the subject or an attachment name says so,
-  /// whatever address it arrived at. Lets suppliers keep writing to the mailbox
-  /// that already has a receipt rule.
+  /// Mailboxes reserved for comprobantes. Mail addressed here is ALWAYS filed as
+  /// a comprobante and is never reclassified by the subject heuristic below, so
+  /// the inbox Wilfredo already uses keeps its exact current behaviour.
+  DOCS_INBOX: z.string().default('docs@erp.victorsdou.pe'),
+  /// For any other address, also treat mail as a quote when the subject or an
+  /// attachment name says so. Catches quotes sent to whatever address a supplier
+  /// happens to have on file. Set empty to disable the heuristic entirely.
   QUOTES_SUBJECT_KEYWORDS: z.string().default('cotizacion,cotización,cotizacón,proforma,quotation,quote,presupuesto'),
   /// Who gets the approval link. Comma-separated. Falls back to OPS_ALERT_EMAIL.
   PURCHASE_APPROVER_EMAILS: z.string().optional(),

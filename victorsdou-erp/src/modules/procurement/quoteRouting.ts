@@ -1,17 +1,24 @@
 // ── ¿Este correo entrante es una cotización? ─────────────────────────────────
 //
-// All inbound mail lands on the same SES → S3 → SNS webhook, so the routing
-// decision is made here rather than in AWS. Two independent signals, either of
-// which is enough:
+// The SES receipt rule matches the whole erp.victorsdou.pe domain and writes
+// every message to s3://victorsdou-docs/incoming/, which notifies SNS, which
+// calls the inbound webhook. So ALL inbound mail arrives here regardless of the
+// address, and the routing decision belongs in code rather than in AWS —
+// compras@erp.victorsdou.pe needs no new rule, no new DNS.
+//
+// Two signals, either of which is enough:
 //
 //   1. the recipient is one of the purchasing mailboxes (QUOTES_INBOX), or
 //   2. the subject or an attachment's filename says "cotización" / "proforma" /
 //      "quotation" (QUOTES_SUBJECT_KEYWORDS).
 //
-// (2) exists so the flow works on day one without touching DNS or the SES
-// receipt rules: a supplier can keep writing to the mailbox that already has a
-// rule, and a quote still reaches the purchasing flow. Everything that matches
-// neither signal is registered as a comprobante, exactly as before.
+// (2) catches a quote a supplier sent to whatever address they had on file. It
+// deliberately does NOT apply to DOCS_INBOX: that mailbox is already in daily
+// use for comprobantes, and silently rerouting a document out of it because of
+// a word in the subject is a behaviour change nobody asked for.
+//
+// Everything that matches neither signal is registered as a comprobante,
+// exactly as before.
 
 import { config } from '../../config';
 
@@ -21,7 +28,10 @@ const strip = (v: string) =>
 const listOf = (raw: string) =>
   (raw ?? '').split(',').map(s => strip(s).trim()).filter(Boolean);
 
-export type QuoteMatch = { esCotizacion: boolean; motivo: 'buzon' | 'asunto' | 'adjunto' | null };
+export type QuoteMatch = {
+  esCotizacion: boolean;
+  motivo: 'buzon' | 'asunto' | 'adjunto' | null;
+};
 
 export function clasificarCorreo(input: {
   to?: string | null;
@@ -34,6 +44,11 @@ export function clasificarCorreo(input: {
 
   for (const inbox of listOf(config.QUOTES_INBOX)) {
     if (inbox && to.includes(inbox)) return { esCotizacion: true, motivo: 'buzon' };
+  }
+
+  // The comprobantes mailbox is never reclassified by subject.
+  for (const inbox of listOf(config.DOCS_INBOX)) {
+    if (inbox && to.includes(inbox)) return { esCotizacion: false, motivo: null };
   }
 
   const keywords = listOf(config.QUOTES_SUBJECT_KEYWORDS);
