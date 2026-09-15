@@ -1828,9 +1828,18 @@ model Comprobante {
   emailSubject    String?           // original email subject
 
   // Payment & supplier link
+  /// When the document is actually due. The UI used to overload fechaPago for
+  /// this (it was coloured red when past); that data was migrated here.
+  fechaVencimiento DateTime?
+  /// When it was actually paid. Set automatically once the payments recorded
+  /// against this comprobante cover its total.
   fechaPago       DateTime?
   proveedorId     String?
   proveedor       Supplier?         @relation("ComprobanteProveedor", fields: [proveedorId], references: [id])
+
+  /// Free-text expense label used to group spend in the Control de pagos
+  /// report ("Insumos", "Servicios", "Mantenimiento"…).
+  glosa           String?
 
   // Status & metadata
   estado          ComprobanteEstado @default(PENDIENTE)
@@ -1841,13 +1850,45 @@ model Comprobante {
   updatedAt       DateTime          @updatedAt
 
   archivos        ComprobanteArchivo[]
+  pagos           ComprobantePago[]
 
   @@index([fecha])
   @@index([estado])
   @@index([source])
   @@index([purchaseOrderId])
   @@index([fechaPago])
+  @@index([fechaVencimiento])
+  @@index([glosa])
   @@map("comprobantes")
+}
+
+/// A payment made against a received invoice, with its voucher attached.
+/// A comprobante can be settled in several transfers, so this is a list, not a
+/// field; Comprobante.fechaPago is set once the payments cover the total.
+model ComprobantePago {
+  id            String      @id @default(uuid())
+  comprobanteId String
+  comprobante   Comprobante @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+
+  fechaPago     DateTime
+  monto         Decimal     @db.Decimal(14, 4)
+  moneda        String      @default("PEN")
+  medio         String?     // TRANSFERENCIA / YAPE / PLIN / EFECTIVO / CHEQUE…
+  referencia    String?     // nro. de operación
+  notas         String?
+
+  // Voucher (base64, same pattern as ComprobanteArchivo)
+  nombreArchivo String?
+  mimeType      String?
+  tamanoBytes   Int?
+  dataBase64    String?     @db.Text
+
+  createdAt     DateTime    @default(now())
+  createdBy     String
+
+  @@index([comprobanteId])
+  @@index([fechaPago])
+  @@map("comprobante_pagos")
 }
 
 model ComprobanteArchivo {

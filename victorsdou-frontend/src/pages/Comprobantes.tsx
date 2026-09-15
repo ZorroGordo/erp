@@ -11,6 +11,7 @@ import {
   ChevronRight, Download, Loader2, Link2, Building2,
   Calendar, DollarSign, Tag, Paperclip, ClipboardList,
   ReceiptText, Truck, ArrowUpDown, Info, Mail, Users,
+  Wallet, BarChart3, CreditCard,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../lib/api';
@@ -66,11 +67,31 @@ interface Comprobante {
   emailSubject: string | null;
   createdAt: string;
   archivos: ComprobanteArchivo[];
+  /// When the document falls due (used to be overloaded onto fechaPago).
+  fechaVencimiento: string | null;
+  /// When it was actually paid — set once the recorded payments cover the total.
   fechaPago: string | null;
+  /// Expense label used to group spend in the Control de pagos report.
+  glosa: string | null;
+  pagos?: Pago[];
   proveedorId: string | null;
   proveedor?: { id: string; businessName: string; ruc: string } | null;
   purchaseOrder?: { id: string; poNumber: string; supplier?: { businessName: string } } | null;
   invoice?: { id: string; docType: string; series: string; correlative: string; entityName: string } | null;
+}
+
+interface Pago {
+  id: string;
+  fechaPago: string;
+  monto: number;
+  moneda?: string;
+  medio: string | null;
+  referencia: string | null;
+  notas?: string | null;
+  nombreArchivo: string | null;
+  mimeType?: string | null;
+  tamanoBytes?: number | null;
+  createdAt?: string;
 }
 
 interface Stats {
@@ -79,6 +100,8 @@ interface Stats {
   validados: number;
   mesActual: number;
   emailPendientes: number;
+  porPagar?: number;
+  vencidas?: number;
   montoTotalPen: number;
 }
 
@@ -147,6 +170,7 @@ const fmtDate = (s: string | null | undefined) => {
   return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+/** Colour a due date: red once past, amber within a week, green otherwise. */
 const fmtPagoColor = (fechaPago: string | null | undefined): { label: string; cls: string } => {
   if (!fechaPago) return { label: ''  , cls: 'text-gray-400' };
   const days = Math.ceil((new Date(fechaPago).getTime() - Date.now()) / 86400_000);
@@ -212,7 +236,8 @@ export default function Comprobantes() {
   const [fechaDesde,    setFechaDesde]   = useState('');
   const [fechaHasta,    setFechaHasta]   = useState('');
   const [filterMoneda,  setFilterMoneda] = useState<'USD'|'PEN'|''>('');
-  const [filterPago,    setFilterPago]   = useState<'vencida'|'proxima'|'sin_fecha'|''>('');
+  const [filterPago,    setFilterPago]   = useState<'vencida'|'proxima'|'sin_fecha'|'pendiente'|'pagada'|''>('');
+  const [filterGlosa,   setFilterGlosa]  = useState('');
 
   // ── Detail Panel ─────────────────────────────────────────────────────────
   const [selectedId,   setSelectedId]   = useState<string | null>(null);
@@ -220,7 +245,8 @@ export default function Comprobantes() {
   const [detailLoad,     setDetailLoad]     = useState(false);
   const [editFields,     setEditFields]     = useState<{
     descripcion: string; montoTotal: string; moneda: string;
-    fechaRecibido: string; fechaPago: string; proveedorId: string; proveedorName: string;
+    fechaRecibido: string; fechaVencimiento: string; glosa: string;
+    proveedorId: string; proveedorName: string;
   } | null>(null);
   const [editSaving,     setEditSaving]     = useState(false);
   const [editProvOpts,   setEditProvOpts]   = useState<SupplierOption[]>([]);
@@ -234,6 +260,7 @@ export default function Comprobantes() {
   const [newFecha,     setNewFecha]     = useState(new Date().toISOString().slice(0, 10));
   const [newMoneda,    setNewMoneda]    = useState('PEN');
   const [newNotas,     setNewNotas]     = useState('');
+  const [newGlosa,     setNewGlosa]     = useState('');
   const [newPoSearch,  setNewPoSearch]  = useState('');
   const [newPoSel,     setNewPoSel]     = useState<PurchaseOrderOption | null>(null);
   const [poOptions,    setPoOptions]    = useState<PurchaseOrderOption[]>([]);
@@ -312,6 +339,7 @@ export default function Comprobantes() {
       if (fechaHasta)    params.fechaHasta   = fechaHasta;
       if (filterMoneda)  params.moneda       = filterMoneda;
       if (filterPago)    params.fechaPago     = filterPago;
+      if (filterGlosa)   params.glosa         = filterGlosa;
 
       const res = await api.get('/v1/comprobantes', { params });
       setItems(res.data.data);
@@ -321,7 +349,7 @@ export default function Comprobantes() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, filterEstado, filterDoc, filterSource, fechaDesde, fechaHasta, filterMoneda, filterPago]);
+  }, [page, search, filterEstado, filterDoc, filterSource, fechaDesde, fechaHasta, filterMoneda, filterPago, filterGlosa]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -329,6 +357,19 @@ export default function Comprobantes() {
       setStats(res.data.data);
     } catch { /* silent */ }
   }, []);
+
+  // ── Control de pagos ──────────────────────────────────────────────────────
+  const [glosas,    setGlosas]    = useState<{ glosa: string; usos: number }[]>([]);
+  const [pagosFor,  setPagosFor]  = useState<Comprobante | null>(null);
+  const [showReporte, setShowReporte] = useState(false);
+
+  const loadGlosas = useCallback(async () => {
+    try {
+      const res = await api.get('/v1/comprobantes/glosas');
+      setGlosas(res.data.data ?? []);
+    } catch { /* silent */ }
+  }, []);
+  useEffect(() => { loadGlosas(); }, [loadGlosas]);
 
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoad(true);
@@ -358,7 +399,8 @@ export default function Comprobantes() {
       montoTotal:    detail.montoTotal != null ? String(Number(detail.montoTotal)) : arch?.total != null ? String(Number(arch.total)) : '',
       moneda:        detail.moneda ?? arch?.monedaDoc ?? 'PEN',
       fechaRecibido: detail.fecha ? detail.fecha.slice(0, 10) : '',
-      fechaPago:     detail.fechaPago ? detail.fechaPago.slice(0, 10) : '',
+      fechaVencimiento: detail.fechaVencimiento ? detail.fechaVencimiento.slice(0, 10) : '',
+      glosa:         detail.glosa ?? '',
       proveedorId:   detail.proveedorId ?? '',
       proveedorName: detail.proveedor?.businessName ?? (arch?.emisorNombre ?? ''),
     });
@@ -480,6 +522,8 @@ export default function Comprobantes() {
         montoTotal:  computedTotal > 0 ? parseFloat(computedTotal.toFixed(2)) : undefined,
         notas:       [selectedCustomer ? `Cliente: ${selectedCustomer.displayName}${selectedCustomer.ruc ? ` (RUC ${selectedCustomer.ruc})` : ''}` : null, newNotas.trim() || null].filter(Boolean).join('\n') || null,
         purchaseOrderId: newPoSel?.id ?? null,
+        glosa:           newGlosa.trim() || undefined,
+        proveedorId:     selectedProveedor?.id ?? undefined,
       };
       if (firstFile) {
         body.archivo = {
@@ -526,9 +570,10 @@ export default function Comprobantes() {
         descripcion: editFields.descripcion || undefined,
         montoTotal:  editFields.montoTotal ? parseFloat(editFields.montoTotal) : null,
         moneda:      editFields.moneda || undefined,
-        fecha:       editFields.fechaRecibido || undefined,
-        fechaPago:   editFields.fechaPago || null,
-        proveedorId: editFields.proveedorId || null,
+        fecha:            editFields.fechaRecibido || undefined,
+        fechaVencimiento: editFields.fechaVencimiento || null,
+        glosa:            editFields.glosa.trim() || null,
+        proveedorId:      editFields.proveedorId || null,
       });
       toast.success('Guardado');
       await loadItems();
@@ -551,7 +596,7 @@ export default function Comprobantes() {
 
   const resetNewModal = () => {
     setNewTipoDoc(null); setNewDesc(''); setNewFecha(new Date().toISOString().slice(0, 10));
-    setNewMoneda('PEN'); setNewNotas(''); setNewPoSearch(''); setNewPoSel(null);
+    setNewMoneda('PEN'); setNewNotas(''); setNewGlosa(''); setNewPoSearch(''); setNewPoSel(null);
     setPendingFiles([]); setPoOptions([]);
     setNewCustomerMode(null); setCustomerSearch(''); setCustomerOptions([]); setSelectedCustomer(null);
     setRucSearch(''); setRucResult(null);
@@ -687,12 +732,13 @@ export default function Comprobantes() {
 
       {/* Summary Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
           {[
             { label: 'Total',       value: stats.total,       cls: 'text-gray-900'  },
             { label: 'Pendientes',  value: stats.pendientes,  cls: 'text-amber-600' },
             { label: 'Validados',   value: stats.validados,   cls: 'text-green-600' },
-            { label: 'Este mes',    value: stats.mesActual,   cls: 'text-blue-600'  },
+            { label: 'Por pagar',   value: stats.porPagar ?? 0, cls: 'text-blue-600' },
+            { label: 'Vencidas',    value: stats.vencidas ?? 0, cls: (stats.vencidas ?? 0) > 0 ? 'text-red-600' : 'text-gray-900' },
             { label: 'Monto total', value: fmtMoney(stats.montoTotalPen), cls: 'text-gray-900' },
           ].map(({ label, value, cls }) => (
             <div key={label} className="bg-white rounded-xl border border-gray-200 p-4">
@@ -745,15 +791,25 @@ export default function Comprobantes() {
           <option value="USD">$ USD</option>
         </select>
         <select className="input text-sm w-40" value={filterPago}
-          onChange={e => { setFilterPago(e.target.value as 'vencida'|'proxima'|'sin_fecha'|''); setPage(1); }}>
-          <option value="">F. Pago</option>
+          onChange={e => { setFilterPago(e.target.value as 'vencida'|'proxima'|'sin_fecha'|'pendiente'|'pagada'|''); setPage(1); }}>
+          <option value="">Pago</option>
           <option value="vencida">🔴 Vencidas</option>
-          <option value="proxima">🟡 Prox. 7 dias</option>
-          <option value="sin_fecha">Sin fecha pago</option>
+          <option value="proxima">🟡 Vencen en 7 días</option>
+          <option value="pendiente">Por pagar</option>
+          <option value="pagada">Pagadas</option>
+          <option value="sin_fecha">Sin vencimiento</option>
         </select>
-        {(search || filterEstado || filterDoc || filterSource || fechaDesde || fechaHasta || filterMoneda || filterPago) && (
+        <select className="input text-sm w-40" value={filterGlosa}
+          onChange={e => { setFilterGlosa(e.target.value); setPage(1); }}>
+          <option value="">Glosa</option>
+          {glosas.map(g => <option key={g.glosa} value={g.glosa}>{g.glosa}</option>)}
+        </select>
+        <button className="btn-secondary text-xs px-2 py-1.5 flex items-center gap-1" onClick={() => setShowReporte(true)}>
+          <BarChart3 size={13} /> Reporte
+        </button>
+        {(search || filterEstado || filterDoc || filterSource || fechaDesde || fechaHasta || filterMoneda || filterPago || filterGlosa) && (
           <button className="btn-secondary text-xs px-2 py-1.5"
-            onClick={() => { setSearch(''); setFilterEstado(''); setFilterDoc(''); setFilterSource(''); setFechaDesde(''); setFechaHasta(''); setFilterMoneda(''); setFilterPago(''); setPage(1); }}>
+            onClick={() => { setSearch(''); setFilterEstado(''); setFilterDoc(''); setFilterSource(''); setFechaDesde(''); setFechaHasta(''); setFilterMoneda(''); setFilterPago(''); setFilterGlosa(''); setPage(1); }}>
             <X size={13} />
           </button>
         )}
@@ -783,7 +839,9 @@ export default function Comprobantes() {
                   <th className="text-left px-4 py-3">Documentos</th>
                   <th className="text-left px-4 py-3">Emisor</th>
                   <th className="text-right px-4 py-3">Monto</th>
-                  <th className="text-left px-4 py-3">F. Pago</th>
+                  <th className="text-left px-4 py-3">Glosa</th>
+                  <th className="text-left px-4 py-3">Vencimiento</th>
+                  <th className="text-left px-4 py-3">Pago</th>
                   <th className="text-left px-4 py-3">Estado</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -856,8 +914,26 @@ export default function Comprobantes() {
                           (item.archivos[0]?.monedaDoc ?? item.moneda) as string,
                         )}
                       </td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[120px] truncate">
+                        {item.glosa ?? <span className="text-gray-300 text-xs">&#8212;</span>}
+                      </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        {(() => { const p = fmtPagoColor(item.fechaPago); return p.label ? <span className={p.cls}>{p.label}</span> : <span className="text-gray-300 text-xs">&#8212;</span>; })()}
+                        {item.fechaPago
+                          ? <span className="text-gray-400">{fmtDate(item.fechaVencimiento)}</span>
+                          : (() => { const p = fmtPagoColor(item.fechaVencimiento); return p.label ? <span className={p.cls}>{p.label}</span> : <span className="text-gray-300 text-xs">&#8212;</span>; })()}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {item.fechaPago ? (
+                          <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded flex items-center gap-1 w-fit">
+                            <CheckCircle2 size={11} /> {fmtDate(item.fechaPago)}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={e => { e.stopPropagation(); setPagosFor(item); }}
+                            className="text-xs text-brand-600 hover:bg-brand-50 border border-brand-200 px-2 py-0.5 rounded flex items-center gap-1">
+                            <CreditCard size={11} /> Registrar
+                          </button>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <EstadoBadge estado={item.estado} />
@@ -954,10 +1030,35 @@ export default function Comprobantes() {
                             onChange={e => setEditFields(f => f && ({ ...f, fechaRecibido: e.target.value }))} />
                         </div>
                         <div>
-                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">F. Pago</label>
-                          <input type="date" className={`input text-xs w-full mt-0.5 ${editFields.fechaPago ? fmtPagoColor(editFields.fechaPago).cls : ''}`} value={editFields.fechaPago}
-                            onChange={e => setEditFields(f => f && ({ ...f, fechaPago: e.target.value }))} />
+                          <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Vencimiento</label>
+                          <input type="date" className={`input text-xs w-full mt-0.5 ${editFields.fechaVencimiento && !detail.fechaPago ? fmtPagoColor(editFields.fechaVencimiento).cls : ''}`} value={editFields.fechaVencimiento}
+                            onChange={e => setEditFields(f => f && ({ ...f, fechaVencimiento: e.target.value }))} />
                         </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Glosa (tipo de gasto)</label>
+                        <input className="input text-xs w-full mt-0.5" list="glosas-en-uso" placeholder="Insumos, Servicios, Mantenimiento…"
+                          value={editFields.glosa}
+                          onChange={e => setEditFields(f => f && ({ ...f, glosa: e.target.value }))} />
+                        <datalist id="glosas-en-uso">
+                          {glosas.map(g => <option key={g.glosa} value={g.glosa} />)}
+                        </datalist>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 p-2 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1"><Wallet size={11} /> Pagos</span>
+                          <button className="text-[11px] text-brand-600 hover:underline" onClick={() => setPagosFor(detail)}>
+                            {detail.fechaPago ? 'Ver pagos' : 'Registrar pago'}
+                          </button>
+                        </div>
+                        {(() => {
+                          const total  = Number(editFields.montoTotal) || 0;
+                          const pagado = (detail.pagos ?? []).reduce((a, p) => a + Number(p.monto), 0);
+                          const saldo  = Math.max(total - pagado, 0);
+                          if (detail.fechaPago) return <p className="text-[11px] text-green-600">Cancelada el {fmtDate(detail.fechaPago)}</p>;
+                          if (!pagado) return <p className="text-[11px] text-gray-400">Sin pagos registrados</p>;
+                          return <p className="text-[11px] text-amber-600">Pagado {fmtMoney(pagado, editFields.moneda)} · saldo {fmtMoney(saldo, editFields.moneda)}</p>;
+                        })()}
                       </div>
                       <div className="relative">
                         <label className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Emisor / Proveedor</label>
@@ -1105,6 +1206,16 @@ export default function Comprobantes() {
           </div>
         )}
       </div>
+
+      {/* ─── CONTROL DE PAGOS ──────────────────────────────────────────────── */}
+      {pagosFor && (
+        <PagosModal
+          comprobante={pagosFor}
+          onClose={() => setPagosFor(null)}
+          onChanged={async () => { await loadItems(); await loadStats(); if (selectedId) await loadDetail(selectedId); }}
+        />
+      )}
+      {showReporte && <ReportePagosModal glosas={glosas} onClose={() => setShowReporte(false)} />}
 
       {/* ─── NEW COMPROBANTE MODAL ─────────────────────────────────────────── */}
       {newModal && (
@@ -1392,6 +1503,16 @@ export default function Comprobantes() {
 
               
 
+              {/* Glosa — agrupador de gasto para el reporte de Control de pagos */}
+              <div>
+                <label className="text-xs font-medium text-gray-700 block mb-1">Glosa (tipo de gasto)</label>
+                <input className="input w-full" list="glosas-en-uso-nuevo" placeholder="Insumos, Servicios, Mantenimiento…"
+                  value={newGlosa} onChange={e => setNewGlosa(e.target.value)} />
+                <datalist id="glosas-en-uso-nuevo">
+                  {glosas.map(g => <option key={g.glosa} value={g.glosa} />)}
+                </datalist>
+              </div>
+
               {/* Notes */}
               <div>
                 <label className="text-xs font-medium text-gray-700 block mb-1">Notas</label>
@@ -1546,6 +1667,394 @@ export default function Comprobantes() {
 }
 
 // Browser-safe base64 decode (for XML display)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PagosModal — registrar pagos con voucher para cancelar una factura
+// ─────────────────────────────────────────────────────────────────────────────
+// A received invoice can be settled in one transfer or several. Each payment
+// carries its voucher; once the payments cover the document's total the backend
+// stamps fechaPago and the invoice reads as cancelada.
+function PagosModal({ comprobante, onClose, onChanged }: {
+  comprobante: Comprobante;
+  onClose: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [pagos,   setPagos]   = useState<Pago[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+  const [fecha,   setFecha]   = useState(new Date().toISOString().slice(0, 10));
+  const [monto,   setMonto]   = useState('');
+  const [medio,   setMedio]   = useState('TRANSFERENCIA');
+  const [ref,     setRef]     = useState('');
+  const [notas,   setNotas]   = useState('');
+  const [voucher, setVoucher] = useState<{ file: File; b64: string } | null>(null);
+
+  const moneda = comprobante.moneda ?? 'PEN';
+  const total  = comprobante.montoTotal != null ? Number(comprobante.montoTotal)
+               : comprobante.archivos?.[0]?.total != null ? Number(comprobante.archivos[0].total) : 0;
+  const pagado = pagos.reduce((a, p) => a + Number(p.monto), 0);
+  const saldo  = Math.max(total - pagado, 0);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/v1/comprobantes/${comprobante.id}/pagos`);
+      setPagos(res.data.data ?? []);
+    } catch { toast.error('Error al cargar pagos'); }
+    finally { setLoading(false); }
+  }, [comprobante.id]);
+  useEffect(() => { load(); }, [load]);
+
+  // Default the amount to whatever is still outstanding — the common case is
+  // paying the invoice in full.
+  useEffect(() => { if (!loading && !monto && saldo > 0) setMonto(String(saldo.toFixed(2))); }, [loading, saldo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickVoucher = (file: File) => {
+    const r = new FileReader();
+    r.onload = () => setVoucher({ file, b64: String(r.result).split(',')[1] ?? '' });
+    r.onerror = () => toast.error('No se pudo leer el archivo');
+    r.readAsDataURL(file);
+  };
+
+  const submit = async () => {
+    const m = parseFloat(monto);
+    if (!Number.isFinite(m) || m <= 0) { toast.error('Ingresa un monto válido'); return; }
+    setSaving(true);
+    try {
+      await api.post(`/v1/comprobantes/${comprobante.id}/pagos`, {
+        fechaPago: fecha, monto: m, moneda, medio,
+        referencia: ref.trim() || undefined,
+        notas: notas.trim() || undefined,
+        voucher: voucher ? {
+          nombreArchivo: voucher.file.name,
+          mimeType: voucher.file.type || 'application/pdf',
+          tamanoBytes: voucher.file.size,
+          dataBase64: voucher.b64,
+        } : undefined,
+      });
+      toast.success('Pago registrado');
+      setMonto(''); setRef(''); setNotas(''); setVoucher(null);
+      await load();
+      await onChanged();
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'Error al registrar el pago'); }
+    finally { setSaving(false); }
+  };
+
+  const openVoucher = async (pago: Pago) => {
+    try {
+      const r = await api.get(`/v1/comprobantes/pagos/${pago.id}/voucher`);
+      const { dataBase64, mimeType, nombreArchivo } = r.data.data;
+      const bin = atob(dataBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.download = nombreArchivo;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch { toast.error('No se pudo abrir el voucher'); }
+  };
+
+  const anular = async (pago: Pago) => {
+    try {
+      await api.delete(`/v1/comprobantes/pagos/${pago.id}`);
+      toast.success('Pago anulado');
+      await load();
+      await onChanged();
+    } catch { toast.error('No se pudo anular el pago'); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Wallet size={18} className="text-brand-600" />
+            <div>
+              <h2 className="font-bold text-gray-900">Pagos</h2>
+              <p className="text-xs text-gray-400 truncate max-w-md">{comprobante.descripcion}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {[
+              { label: 'Total',  value: fmtMoney(total, moneda),  cls: 'text-gray-900' },
+              { label: 'Pagado', value: fmtMoney(pagado, moneda), cls: 'text-green-600' },
+              { label: 'Saldo',  value: fmtMoney(saldo, moneda),  cls: saldo > 0 ? 'text-amber-600' : 'text-green-600' },
+            ].map(c => (
+              <div key={c.label} className="rounded-xl border border-gray-200 p-3">
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">{c.label}</p>
+                <p className={`font-bold mt-0.5 ${c.cls}`}>{c.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {comprobante.fechaVencimiento && !comprobante.fechaPago && (
+            <p className="text-xs">
+              Vence el <span className={fmtPagoColor(comprobante.fechaVencimiento).cls}>{fmtDate(comprobante.fechaVencimiento)}</span>
+            </p>
+          )}
+
+          <div className="rounded-xl border border-gray-200 p-4 space-y-3 bg-gray-50">
+            <p className="text-xs font-semibold text-gray-600">Registrar pago</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-gray-400">Fecha</label>
+                <input type="date" className="input text-sm w-full mt-0.5" value={fecha} onChange={e => setFecha(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-gray-400">Monto ({moneda})</label>
+                <input type="number" step="0.01" min="0" className="input text-sm w-full mt-0.5 text-right font-mono" value={monto} onChange={e => setMonto(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-gray-400">Medio</label>
+                <select className="input text-sm w-full mt-0.5" value={medio} onChange={e => setMedio(e.target.value)}>
+                  {['TRANSFERENCIA', 'YAPE', 'PLIN', 'EFECTIVO', 'CHEQUE', 'TARJETA', 'DETRACCION'].map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-gray-400">Nro. de operación</label>
+                <input className="input text-sm w-full mt-0.5" placeholder="Opcional" value={ref} onChange={e => setRef(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wide text-gray-400">Notas</label>
+              <input className="input text-sm w-full mt-0.5" placeholder="Opcional" value={notas} onChange={e => setNotas(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-xs cursor-pointer hover:bg-gray-50">
+                <Upload size={13} /> {voucher ? 'Cambiar voucher' : 'Adjuntar voucher'}
+                <input type="file" className="hidden" accept="application/pdf,image/*"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) pickVoucher(f); e.target.value = ''; }} />
+              </label>
+              {voucher && <span className="text-xs text-gray-500 truncate max-w-[14rem]">{voucher.file.name}</span>}
+              <button className="btn-primary text-sm ml-auto flex items-center gap-1.5" disabled={saving} onClick={submit}>
+                {saving && <Loader2 size={14} className="animate-spin" />} Registrar pago
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-gray-600 mb-2">Pagos registrados</p>
+            {loading ? <p className="text-center text-gray-400 py-4 text-sm">Cargando…</p>
+              : !pagos.length ? <p className="text-center text-gray-400 py-4 text-sm">Sin pagos registrados</p> : (
+              <div className="rounded-lg border border-gray-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                    <tr>
+                      <th className="text-left px-3 py-2">Fecha</th>
+                      <th className="text-right px-3 py-2">Monto</th>
+                      <th className="text-left px-3 py-2">Medio</th>
+                      <th className="text-left px-3 py-2">Referencia</th>
+                      <th className="px-3 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {pagos.map(pg => (
+                      <tr key={pg.id}>
+                        <td className="px-3 py-2 whitespace-nowrap">{fmtDate(pg.fechaPago)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{fmtMoney(Number(pg.monto), pg.moneda ?? moneda)}</td>
+                        <td className="px-3 py-2 text-gray-500">{pg.medio ?? '—'}</td>
+                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">{pg.referencia ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-end gap-1">
+                            {pg.nombreArchivo && (
+                              <button onClick={() => openVoucher(pg)} title="Ver voucher" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600"><Download size={14} /></button>
+                            )}
+                            <button onClick={() => anular(pg)} title="Anular pago" className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-red-600"><Trash2 size={14} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-gray-100 flex justify-end bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-200 rounded-xl">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ReportePagosModal — reporte detallado por glosa (tipo de gasto)
+// ─────────────────────────────────────────────────────────────────────────────
+function ReportePagosModal({ glosas, onClose }: { glosas: { glosa: string; usos: number }[]; onClose: () => void }) {
+  const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+  const [desde, setDesde] = useState(firstOfMonth);
+  const [hasta, setHasta] = useState(new Date().toISOString().slice(0, 10));
+  const [glosa, setGlosa] = useState('');
+  const [estadoPago, setEstadoPago] = useState('');
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params: Record<string, string> = { fechaDesde: desde, fechaHasta: hasta };
+      if (glosa) params.glosa = glosa;
+      if (estadoPago) params.estadoPago = estadoPago;
+      const res = await api.get('/v1/comprobantes/reporte', { params });
+      setData(res.data.data);
+    } catch { toast.error('Error al generar el reporte'); }
+    finally { setLoading(false); }
+  }, [desde, hasta, glosa, estadoPago]);
+  useEffect(() => { load(); }, [load]);
+
+  const exportCsv = () => {
+    if (!data?.rows?.length) return;
+    const head = ['Fecha','Vencimiento','Dias vencido','Numero','Tipo','Descripcion','Glosa','Proveedor','RUC','OC','Moneda','Subtotal','IGV','Total','Pagado','Saldo','Estado'];
+    const lines = data.rows.map((r: any) => [
+      r.fecha ? String(r.fecha).slice(0, 10) : '', r.fechaVencimiento ? String(r.fechaVencimiento).slice(0, 10) : '',
+      r.diasVencido ?? '', r.numero ?? '', r.tipoDoc ?? '', (r.descripcion ?? '').replace(/[";\n]/g, ' '),
+      r.glosa ?? '', (r.proveedor ?? '').replace(/[";\n]/g, ' '), r.proveedorRuc ?? '', r.poNumber ?? '',
+      r.moneda ?? '', r.subtotal ?? '', r.igv ?? '', r.total ?? '', r.pagado ?? '', r.saldo ?? '', r.estadoPago,
+    ].join(';'));
+    const blob = new Blob(['﻿' + [head.join(';'), ...lines].join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `control-de-pagos_${desde}_${hasta}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
+  const t = data?.totales;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-6xl mx-4 max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <BarChart3 size={18} className="text-brand-600" />
+            <h2 className="font-bold text-gray-900">Reporte de control de pagos</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
+        </div>
+
+        <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-gray-50">
+          <input type="date" className="input text-sm" value={desde} onChange={e => setDesde(e.target.value)} />
+          <span className="text-gray-400 text-xs">—</span>
+          <input type="date" className="input text-sm" value={hasta} onChange={e => setHasta(e.target.value)} />
+          <select className="input text-sm w-44" value={glosa} onChange={e => setGlosa(e.target.value)}>
+            <option value="">Todas las glosas</option>
+            {glosas.map(g => <option key={g.glosa} value={g.glosa}>{g.glosa}</option>)}
+          </select>
+          <select className="input text-sm w-40" value={estadoPago} onChange={e => setEstadoPago(e.target.value)}>
+            <option value="">Todo</option>
+            <option value="pendiente">Por pagar</option>
+            <option value="vencida">Vencidas</option>
+            <option value="pagada">Pagadas</option>
+          </select>
+          <button className="btn-secondary text-xs px-2 py-1.5 ml-auto flex items-center gap-1" onClick={exportCsv} disabled={!data?.rows?.length}>
+            <Download size={13} /> Excel (CSV)
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {loading ? <p className="text-center text-gray-400 py-10">Generando…</p> : !data ? null : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: 'Documentos', value: String(t.documentos) },
+                  { label: 'Total',      value: fmtMoney(t.total) },
+                  { label: 'Pagado',     value: fmtMoney(t.pagado), cls: 'text-green-600' },
+                  { label: 'Saldo',      value: fmtMoney(t.saldo),  cls: t.vencido > 0 ? 'text-amber-600' : '' },
+                ].map(c => (
+                  <div key={c.label} className="rounded-xl border border-gray-200 p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400">{c.label}</p>
+                    <p className={`text-lg font-bold mt-0.5 ${c.cls ?? 'text-gray-900'}`}>{c.value}</p>
+                  </div>
+                ))}
+              </div>
+              {t.vencido > 0 && (
+                <p className="text-sm text-red-600 flex items-center gap-1.5">
+                  <AlertCircle size={15} /> {fmtMoney(t.vencido)} vencido y sin pagar.
+                </p>
+              )}
+
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-2">Por glosa (tipo de gasto)</p>
+                <div className="rounded-lg border border-gray-200 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide"><tr>
+                      <th className="text-left px-3 py-2">Glosa</th>
+                      <th className="text-right px-3 py-2">Docs</th>
+                      <th className="text-right px-3 py-2">Total</th>
+                      <th className="text-right px-3 py-2">Pagado</th>
+                      <th className="text-right px-3 py-2">Saldo</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {data.porGlosa.map((g: any) => (
+                        <tr key={g.key}>
+                          <td className="px-3 py-2 font-medium">{g.key}</td>
+                          <td className="px-3 py-2 text-right text-gray-500">{g.documentos}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmtMoney(g.total)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-green-600">{fmtMoney(g.pagado)}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmtMoney(g.saldo)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-2">Detalle ({data.rows.length})</p>
+                <div className="rounded-lg border border-gray-200 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-gray-500 uppercase tracking-wide"><tr>
+                      <th className="text-left px-3 py-2">Fecha</th>
+                      <th className="text-left px-3 py-2">Vence</th>
+                      <th className="text-left px-3 py-2">Número</th>
+                      <th className="text-left px-3 py-2">Proveedor</th>
+                      <th className="text-left px-3 py-2">Glosa</th>
+                      <th className="text-right px-3 py-2">Total</th>
+                      <th className="text-right px-3 py-2">Pagado</th>
+                      <th className="text-right px-3 py-2">Saldo</th>
+                      <th className="text-left px-3 py-2">Estado</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {data.rows.map((r: any) => (
+                        <tr key={r.id}>
+                          <td className="px-3 py-2 whitespace-nowrap">{fmtDate(r.fecha)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {r.fechaVencimiento ? <span className={r.estadoPago === 'VENCIDA' ? 'text-red-600 font-semibold' : ''}>{fmtDate(r.fechaVencimiento)}</span> : '—'}
+                            {r.diasVencido ? <span className="block text-[10px] text-red-500">{r.diasVencido}d</span> : null}
+                          </td>
+                          <td className="px-3 py-2 font-mono">{r.numero ?? '—'}</td>
+                          <td className="px-3 py-2 max-w-[14rem] truncate">{r.proveedor ?? '—'}</td>
+                          <td className="px-3 py-2">{r.glosa ?? <span className="text-gray-300">—</span>}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmtMoney(r.total, r.moneda)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-green-600">{r.pagado ? fmtMoney(r.pagado, r.moneda) : '—'}</td>
+                          <td className="px-3 py-2 text-right font-mono">{r.saldo ? fmtMoney(r.saldo, r.moneda) : '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                              r.estadoPago === 'PAGADA' ? 'bg-green-50 text-green-700'
+                              : r.estadoPago === 'VENCIDA' ? 'bg-red-50 text-red-700'
+                              : 'bg-gray-100 text-gray-600'}`}>{r.estadoPago}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Buffer_atob(b64: string): string {
   try { return atob(b64); } catch { return b64; }
 }
