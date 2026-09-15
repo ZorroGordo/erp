@@ -516,23 +516,48 @@ function BulkImportModal({
   onImported: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<any[] | null>(null);
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [validating, setValidating] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [result, setResult] = useState<any>(null);
+
+  // Sheet column → API field. Accents and casing are normalised, so
+  // "Fecha Entrega", "fecha_entrega" and "fechaEntrega" all land in the same
+  // place — commercial's sheet shouldn't have to match a schema exactly.
+  const FIELD_ALIASES: Record<string, string> = {
+    pedido: 'pedidoRef', pedido_ref: 'pedidoRef', ref: 'pedidoRef', nro_pedido: 'pedidoRef',
+    cliente_id: 'clienteId', clienteid: 'clienteId',
+    cliente_ruc: 'clienteRuc', ruc: 'clienteRuc', documento: 'clienteRuc', doc: 'clienteRuc',
+    cliente: 'clienteNombre', cliente_nombre: 'clienteNombre', clientenombre: 'clienteNombre',
+    producto_id: 'productoId', productoid: 'productoId',
+    producto_sku: 'productoSku', sku: 'productoSku', codigo: 'productoSku',
+    producto: 'productoNombre', producto_nombre: 'productoNombre', productonombre: 'productoNombre',
+    cantidad: 'cantidad', cant: 'cantidad', qty: 'cantidad',
+    precio_unitario: 'precioUnitario', precio: 'precioUnitario',
+    descuento_pct: 'descuentoPct', descuento: 'descuentoPct',
+    fecha_entrega: 'fechaEntrega', fechaentrega: 'fechaEntrega', entrega: 'fechaEntrega',
+    canal: 'canal', tipo_comprobante: 'tipoComprobante', comprobante: 'tipoComprobante',
+    notas: 'notas', observaciones: 'notas',
+  };
+  const normKey = (k: string) => k.toString().trim().toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, '_');
 
   const downloadTemplate = () => {
-    // Dynamic import for XLSX
     import('xlsx').then(XLSX => {
-      const headers = ['cliente_id', 'cliente_nombre', 'canal', 'producto_id', 'producto_nombre', 'cantidad', 'precio_unitario', 'descuento_pct', 'tipo_comprobante', 'notas'];
+      const headers = ['pedido_ref', 'cliente_ruc', 'cliente_nombre', 'fecha_entrega', 'producto_sku', 'producto_nombre', 'cantidad', 'precio_unitario', 'descuento_pct', 'canal', 'tipo_comprobante', 'notas'];
+      const manana = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
       const exampleRow = [
-        customers[0]?.id ?? '',
+        'P-001',
+        (customers[0] as any)?.docNumber ?? '20123456789',
         customers[0]?.displayName ?? 'Ejemplo S.A.C.',
-        'SALES_AGENT',
-        products[0]?.id ?? '',
+        manana,
+        products[0]?.sku ?? 'PAN-001',
         products[0]?.name ?? 'Pan de masa madre',
         '10',
         products[0]?.basePricePen ?? '15.00',
         '0',
+        'SALES_AGENT',
         'BOLETA',
         '',
       ];
@@ -540,78 +565,76 @@ function BulkImportModal({
       ws['!cols'] = headers.map(() => ({ wch: 20 }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Pedidos');
-      XLSX.writeFile(wb, 'plantilla-pedidos-masivos.xlsx');
+      XLSX.writeFile(wb, 'plantilla-pedidos-diarios.xlsx');
     });
   };
 
+  // Parse the sheet, map the columns and immediately validate against the
+  // backend (dryRun) so the user sees which rows are wrong before anything is
+  // written.
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setFile(f);
-    setErrors([]);
+    setFile(f); setResult(null); setRows(null);
 
     const XLSX = await import('xlsx');
     const data = await f.arrayBuffer();
     const wb = XLSX.read(data);
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws) as any[];
-    setPreview(rows);
+    const raw = XLSX.utils.sheet_to_json(ws) as any[];
+
+    const mapped = raw.map(r => {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(r)) {
+        const field = FIELD_ALIASES[normKey(k)];
+        if (field && v !== '' && v != null) out[field] = v;
+      }
+      return out;
+    }).filter(r => Object.keys(r).length > 0);
+
+    setRows(mapped);
+    if (!mapped.length) { toast.error('La planilla no tiene filas'); return; }
+
+    setValidating(true);
+    try {
+      const res = await api.post('/v1/sales-orders/bulk-import', { rows: mapped, dryRun: true });
+      setResult(res.data.data);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error ?? 'No se pudo validar la planilla');
+    } finally { setValidating(false); }
   };
 
   const handleImport = async () => {
-    if (!preview?.length) return;
+    if (!rows?.length) return;
     setImporting(true);
-    const errs: string[] = [];
-    let successCount = 0;
-
-    // Group rows by cliente_id to create one order per customer
-    const grouped = new Map<string, any[]>();
-    for (const row of preview) {
-      const key = row.cliente_id || row.cliente_nombre || 'unknown';
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(row);
-    }
-
-    for (const [clientKey, rows] of grouped) {
-      try {
-        const customerId = rows[0].cliente_id;
-        if (!customerId) { errs.push(`Fila con cliente "${clientKey}": falta cliente_id`); continue; }
-
-        const lines = rows.map(r => ({
-          productId: r.producto_id,
-          qty: Number(r.cantidad) || 1,
-          unitPriceOverride: r.precio_unitario ? Number(r.precio_unitario) : undefined,
-          discountPct: r.descuento_pct ? Number(r.descuento_pct) : undefined,
-        })).filter(l => l.productId);
-
-        if (lines.length === 0) { errs.push(`Pedido "${clientKey}": sin productos validos`); continue; }
-
-        await api.post('/v1/sales-orders/', {
-          customerId,
-          channel: rows[0].canal || 'SALES_AGENT',
-          lines,
-          invoiceType: rows[0].tipo_comprobante || null,
-          notes: rows[0].notas || undefined,
-        });
-        successCount++;
-      } catch (e: any) {
-        errs.push(`Pedido "${clientKey}": ${e.response?.data?.message ?? e.message}`);
+    try {
+      const res = await api.post('/v1/sales-orders/bulk-import', { rows });
+      const data = res.data.data;
+      setResult(data);
+      if (data.resumen.creados > 0) {
+        toast.success(`${data.resumen.creados} pedido(s) creados`);
+        onImported();
+      } else {
+        toast.error('No se creó ningún pedido');
       }
-    }
-
-    setErrors(errs);
-    if (successCount > 0) {
-      toast.success(`${successCount} pedido(s) importados`);
-      onImported();
-    }
-    setImporting(false);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error ?? 'Error al importar');
+    } finally { setImporting(false); }
   };
+
+  const errores: any[] = result?.errores ?? [];
+  const yaImportado = (result?.resumen?.creados ?? 0) > 0;
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl p-6 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold flex items-center gap-2"><FileSpreadsheet size={20} /> Importar pedidos masivos</h3>
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2"><FileSpreadsheet size={20} /> Órdenes de pedido — carga diaria</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Una fila por producto. Se agrupan en pedidos por <code>pedido_ref</code>, o por cliente + fecha de entrega.
+            </p>
+          </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
         </div>
 
@@ -623,41 +646,69 @@ function BulkImportModal({
             <Upload size={14} /> {file ? file.name : 'Subir archivo Excel'}
             <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
           </label>
+          {validating && <span className="text-sm text-gray-500 self-center">Validando…</span>}
         </div>
 
-        {preview && (
+        {result && (
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { label: 'Filas',     value: result.resumen.filas },
+              { label: 'Pedidos',   value: result.resumen.pedidos },
+              { label: 'Creados',   value: result.resumen.creados, cls: 'text-green-600' },
+              { label: 'Con error', value: result.resumen.conError, cls: result.resumen.conError ? 'text-red-600' : '' },
+            ].map(c => (
+              <div key={c.label} className="rounded-lg border border-gray-200 p-2">
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">{c.label}</p>
+                <p className={`font-bold ${c.cls ?? 'text-gray-900'}`}>{c.value}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {rows && !!rows.length && (
           <div className="text-sm">
-            <p className="text-gray-600 mb-2">{preview.length} fila(s) encontradas · {new Set(preview.map(r => r.cliente_id)).size} pedido(s)</p>
             <div className="max-h-48 overflow-auto border rounded">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
+                    <th className="px-2 py-1.5 text-left">Fila</th>
                     <th className="px-2 py-1.5 text-left">Cliente</th>
                     <th className="px-2 py-1.5 text-left">Producto</th>
                     <th className="px-2 py-1.5 text-right">Cant.</th>
-                    <th className="px-2 py-1.5 text-right">Precio</th>
-                    <th className="px-2 py-1.5 text-right">Desc %</th>
+                    <th className="px-2 py-1.5 text-left">Entrega</th>
+                    <th className="px-2 py-1.5 text-left">Estado</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {preview.slice(0, 20).map((r, i) => (
-                    <tr key={i}>
-                      <td className="px-2 py-1">{r.cliente_nombre || r.cliente_id?.slice(-6)}</td>
-                      <td className="px-2 py-1">{r.producto_nombre || r.producto_id?.slice(-6)}</td>
-                      <td className="px-2 py-1 text-right">{r.cantidad}</td>
-                      <td className="px-2 py-1 text-right">{r.precio_unitario ?? '—'}</td>
-                      <td className="px-2 py-1 text-right">{r.descuento_pct ?? 0}%</td>
-                    </tr>
-                  ))}
+                  {rows.slice(0, 50).map((r, i) => {
+                    const err = errores.find((e: any) => e.fila === i + 2);
+                    return (
+                      <tr key={i} className={err ? 'bg-red-50' : ''}>
+                        <td className="px-2 py-1 text-gray-400">{i + 2}</td>
+                        <td className="px-2 py-1">{r.clienteNombre ?? r.clienteRuc ?? r.clienteId ?? '—'}</td>
+                        <td className="px-2 py-1">{r.productoNombre ?? r.productoSku ?? r.productoId ?? '—'}</td>
+                        <td className="px-2 py-1 text-right">{r.cantidad ?? '—'}</td>
+                        <td className="px-2 py-1">{r.fechaEntrega ?? '—'}</td>
+                        <td className="px-2 py-1">
+                          {err
+                            ? <span className="text-red-600">{err.error}{err.detalle ? ` · ${err.detalle}` : ''}</span>
+                            : <span className="text-green-600">OK</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+            {rows.length > 50 && <p className="text-xs text-gray-400 mt-1">Mostrando las primeras 50 de {rows.length} filas.</p>}
           </div>
         )}
 
-        {errors.length > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 max-h-32 overflow-auto">
-            {errors.map((e, i) => <div key={i}>{e}</div>)}
+        {yaImportado && !!result.creados?.length && (
+          <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800 max-h-32 overflow-auto">
+            {result.creados.map((c: any) => (
+              <div key={c.id}>{c.orderNumber} · {c.cliente} · {c.lineas} línea(s){c.fechaEntrega ? ` · entrega ${c.fechaEntrega}` : ''}</div>
+            ))}
           </div>
         )}
 
@@ -665,11 +716,13 @@ function BulkImportModal({
           <button
             className="btn-primary flex-1"
             onClick={handleImport}
-            disabled={!preview?.length || importing}
+            disabled={!rows?.length || importing || validating || yaImportado}
           >
-            {importing ? 'Importando...' : `Importar ${preview?.length ?? 0} fila(s)`}
+            {importing ? 'Importando…'
+              : yaImportado ? 'Importado'
+              : `Importar ${result?.resumen?.pedidos ?? 0} pedido(s)`}
           </button>
-          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+          <button className="btn-secondary" onClick={onClose}>{yaImportado ? 'Cerrar' : 'Cancelar'}</button>
         </div>
       </div>
     </div>

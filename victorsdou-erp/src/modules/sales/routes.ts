@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma';
 import * as SalesService from './service';
 import { notifySalesOrderConfirmed } from '../../services/notifications';
 import { sendEmail } from '../../lib/email';
+import { importSalesOrders, type ImportRow } from './bulkImport';
 
 // ── Customer-facing email templates for order status changes ─────────────────
 const wrap = (content: string) => `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"></head>
@@ -303,6 +304,24 @@ export async function salesRoutes(app: FastifyInstance) {
   });
 
   // ── Create order (internal / ERP staff) ──────────────────────────────────
+  // ── POST /bulk-import — carga masiva de órdenes de pedido (planilla Excel) ──
+  // The browser parses the sheet and posts its rows here. Rows are grouped into
+  // orders (by pedidoRef, or by customer + delivery date) and created through
+  // the normal pricing path. dryRun validates without writing, which is the
+  // preview the UI shows before the user confirms.
+  app.post('/bulk-import', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR')] }, async (req, reply) => {
+    const body = (req.body ?? {}) as { rows?: ImportRow[]; dryRun?: boolean };
+    const rows = body.rows ?? [];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return reply.code(400).send({ error: 'La planilla no tiene filas' });
+    }
+    if (rows.length > 2000) {
+      return reply.code(413).send({ error: 'Máximo 2000 filas por carga' });
+    }
+    const result = await importSalesOrders(rows, { createdBy: req.actor!.sub, dryRun: !!body.dryRun });
+    return reply.code(body.dryRun ? 200 : 201).send({ data: result });
+  });
+
   app.post('/', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR')] }, async (req, reply) => {
     const body = req.body as Parameters<typeof SalesService.createOrder>[0];
     const order = await SalesService.createOrder({ ...body, createdBy: req.actor!.sub });
