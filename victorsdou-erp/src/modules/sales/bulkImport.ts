@@ -18,6 +18,8 @@ export interface ImportRow {
   clienteId?:      string;
   clienteRuc?:     string;   // RUC / DNI
   clienteNombre?:  string;
+  sucursalId?:     string;
+  sucursal?:       string;   // branch name, resolved within the row's customer
   productoId?:     string;
   productoSku?:    string;
   productoNombre?: string;
@@ -80,6 +82,10 @@ export async function buildResolvers(rows: ImportRow[]) {
     where: { isActive: true },
     select: { id: true, sku: true, name: true, unitOfSale: true },
   });
+  const sucursales = await prisma.sucursal.findMany({
+    where: { isActive: true },
+    select: { id: true, customerId: true, name: true, isDefaultDelivery: true },
+  });
 
   const resolveCustomer = (r: ImportRow): Resolved<{ id: string }> => {
     if (norm(r.clienteId)) {
@@ -121,11 +127,54 @@ export async function buildResolvers(rows: ImportRow[]) {
     return picked ?? { error: 'Producto no encontrado', detalle: norm(r.productoNombre) };
   };
 
-  return { resolveCustomer, resolveProduct };
+  /**
+   * Which branch of the customer this row is for. Chains like Produsana take a
+   * separate delivery per store, so the branch decides both the delivery
+   * address and which rows belong to the same order.
+   *
+   * Resolution is scoped to the row's customer, which is what makes short names
+   * like "Miraflores" safe. Mirrors what the manual order form does: an explicit
+   * branch wins, then the customer's default, then its only branch — and when a
+   * customer has several branches and the row names none, that's an error
+   * rather than a guess, because the wrong guess sends bread to the wrong store.
+   */
+  const resolveSucursal = (r: ImportRow, customerId: string): Resolved<{ id: string }> => {
+    const ofCustomer = sucursales.filter(s => s.customerId === customerId);
+
+    if (norm(r.sucursalId)) {
+      const byId = ofCustomer.find(s => s.id === norm(r.sucursalId));
+      return byId
+        ? { id: byId.id, label: byId.name }
+        : { error: 'Sucursal no encontrada para este cliente', detalle: norm(r.sucursalId) };
+    }
+
+    const name = lower(r.sucursal);
+    if (name) {
+      if (!ofCustomer.length) {
+        return { error: 'El cliente no tiene sucursales registradas', detalle: norm(r.sucursal) };
+      }
+      const exact = ofCustomer.filter(s => lower(s.name) === name);
+      const picked = pickUnique(exact, s => (s as any).name, 'Sucursal', name)
+                  ?? pickUnique(ofCustomer.filter(s => lower(s.name).includes(name)), s => (s as any).name, 'Sucursal', name);
+      return picked ?? { error: 'Sucursal no encontrada', detalle: norm(r.sucursal) };
+    }
+
+    // Blank: fall back the same way the manual form does.
+    if (!ofCustomer.length) return null;                       // customer doesn't use branches
+    const def = ofCustomer.find(s => s.isDefaultDelivery);
+    if (def) return { id: def.id, label: def.name };
+    if (ofCustomer.length === 1) return { id: ofCustomer[0].id, label: ofCustomer[0].name };
+    return {
+      error: 'Falta la sucursal',
+      detalle: `el cliente tiene ${ofCustomer.length} sucursales: ${ofCustomer.slice(0, 4).map(s => s.name).join(', ')}`,
+    };
+  };
+
+  return { resolveCustomer, resolveProduct, resolveSucursal };
 }
 
 export interface ImportResult {
-  creados: { orderNumber: string; id: string; cliente: string; fechaEntrega: string | null; lineas: number; totalPen: number }[];
+  creados: { orderNumber: string; id: string; cliente: string; sucursal: string | null; fechaEntrega: string | null; lineas: number; totalPen: number }[];
   errores: RowError[];
   resumen: { filas: number; pedidos: number; creados: number; conError: number };
 }
@@ -138,10 +187,11 @@ export interface ImportResult {
 export async function importSalesOrders(
   rows: ImportRow[], opts: { createdBy: string; dryRun?: boolean },
 ): Promise<ImportResult> {
-  const { resolveCustomer, resolveProduct } = await buildResolvers(rows);
+  const { resolveCustomer, resolveProduct, resolveSucursal } = await buildResolvers(rows);
 
   type Group = {
     customerId: string; cliente: string; fechaEntrega: string | null;
+    sucursalId: string | null; sucursal: string | null;
     canal: string; tipoComprobante?: string; notas: string[];
     lines: { productId: string; qty: number; unitPriceOverride?: number; discountPct?: number }[];
     filas: number[];
@@ -161,14 +211,24 @@ export async function importSalesOrders(
     const prod = resolveProduct(r);
     if (!prod || 'error' in prod) { errores.push({ fila, error: prod?.error ?? 'Producto no encontrado', detalle: prod && 'detalle' in prod ? prod.detalle : undefined }); return; }
 
+    const suc = resolveSucursal(r, cust.id);
+    if (suc && 'error' in suc) {
+      errores.push({ fila, error: suc.error, detalle: 'detalle' in suc ? suc.detalle : undefined });
+      return;
+    }
+
     const fechaEntrega = parseSheetDate(r.fechaEntrega);
-    // One order per pedidoRef when given; otherwise per customer + delivery date,
-    // which is how the daily sheet is actually laid out.
-    const key = norm(r.pedidoRef) || `${cust.id}|${fechaEntrega ?? ''}`;
+    // One order per pedidoRef when given; otherwise per customer + BRANCH +
+    // delivery date. The branch has to be in the key: a chain's stores each get
+    // their own delivery, so without it two stores' lines would collapse into a
+    // single order shipped to one address.
+    const key = norm(r.pedidoRef) || `${cust.id}|${suc?.id ?? ''}|${fechaEntrega ?? ''}`;
     const g: Group = groups.get(key) ?? {
       customerId: cust.id,
       cliente: (cust as any).label ?? '',
       fechaEntrega,
+      sucursalId: suc?.id ?? null,
+      sucursal: suc ? ((suc as any).label ?? null) : null,
       canal: norm(r.canal) || 'SALES_AGENT',
       tipoComprobante: norm(r.tipoComprobante) || undefined,
       notas: [] as string[],
@@ -195,6 +255,7 @@ export async function importSalesOrders(
         const order = await SalesService.createOrder({
           customerId: g.customerId,
           channel: g.canal,
+          ...(g.sucursalId ? { sucursalId: g.sucursalId } : {}),
           ...(g.fechaEntrega ? { deliveryDate: g.fechaEntrega } : {}),
           lines: g.lines,
           notes: g.notas.length ? g.notas.join(' · ') : undefined,
@@ -203,6 +264,7 @@ export async function importSalesOrders(
         });
         creados.push({
           orderNumber: order.orderNumber, id: order.id, cliente: g.cliente,
+          sucursal: g.sucursal,
           fechaEntrega: g.fechaEntrega, lineas: g.lines.length, totalPen: Number(order.totalPen),
         });
       } catch (err) {
