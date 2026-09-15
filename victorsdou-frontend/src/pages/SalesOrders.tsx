@@ -529,6 +529,8 @@ function BulkImportModal({
     cliente_id: 'clienteId', clienteid: 'clienteId',
     cliente_ruc: 'clienteRuc', ruc: 'clienteRuc', documento: 'clienteRuc', doc: 'clienteRuc',
     cliente: 'clienteNombre', cliente_nombre: 'clienteNombre', clientenombre: 'clienteNombre',
+    sucursal: 'sucursal', sucursal_id: 'sucursalId', sucursalid: 'sucursalId',
+    tienda: 'sucursal', local: 'sucursal', sede: 'sucursal',
     producto_id: 'productoId', productoid: 'productoId',
     producto_sku: 'productoSku', sku: 'productoSku', codigo: 'productoSku',
     producto: 'productoNombre', producto_nombre: 'productoNombre', productonombre: 'productoNombre',
@@ -545,12 +547,13 @@ function BulkImportModal({
 
   const downloadTemplate = () => {
     import('xlsx').then(XLSX => {
-      const headers = ['pedido_ref', 'cliente_ruc', 'cliente_nombre', 'fecha_entrega', 'producto_sku', 'producto_nombre', 'cantidad', 'precio_unitario', 'descuento_pct', 'canal', 'tipo_comprobante', 'notas'];
+      const headers = ['pedido_ref', 'cliente_ruc', 'cliente_nombre', 'sucursal', 'fecha_entrega', 'producto_sku', 'producto_nombre', 'cantidad', 'precio_unitario', 'descuento_pct', 'canal', 'tipo_comprobante', 'notas'];
       const manana = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
       const exampleRow = [
         'P-001',
         (customers[0] as any)?.docNumber ?? '20123456789',
         customers[0]?.displayName ?? 'Ejemplo S.A.C.',
+        (customers[0] as any)?.sucursales?.[0]?.name ?? '',
         manana,
         products[0]?.sku ?? 'PAN-001',
         products[0]?.name ?? 'Pan de masa madre',
@@ -632,7 +635,8 @@ function BulkImportModal({
           <div>
             <h3 className="text-lg font-semibold flex items-center gap-2"><FileSpreadsheet size={20} /> Órdenes de pedido — carga diaria</h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Una fila por producto. Se agrupan en pedidos por <code>pedido_ref</code>, o por cliente + fecha de entrega.
+              Una fila por producto. Se agrupan en pedidos por <code>pedido_ref</code>, o por cliente + sucursal + fecha de entrega.
+              Para clientes con varias tiendas (Produsana, Wong…) la columna <code>sucursal</code> define a qué local va cada pedido.
             </p>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X size={18} /></button>
@@ -673,6 +677,7 @@ function BulkImportModal({
                   <tr>
                     <th className="px-2 py-1.5 text-left">Fila</th>
                     <th className="px-2 py-1.5 text-left">Cliente</th>
+                    <th className="px-2 py-1.5 text-left">Sucursal</th>
                     <th className="px-2 py-1.5 text-left">Producto</th>
                     <th className="px-2 py-1.5 text-right">Cant.</th>
                     <th className="px-2 py-1.5 text-left">Entrega</th>
@@ -686,6 +691,7 @@ function BulkImportModal({
                       <tr key={i} className={err ? 'bg-red-50' : ''}>
                         <td className="px-2 py-1 text-gray-400">{i + 2}</td>
                         <td className="px-2 py-1">{r.clienteNombre ?? r.clienteRuc ?? r.clienteId ?? '—'}</td>
+                        <td className="px-2 py-1">{r.sucursal ?? r.sucursalId ?? <span className="text-gray-400">—</span>}</td>
                         <td className="px-2 py-1">{r.productoNombre ?? r.productoSku ?? r.productoId ?? '—'}</td>
                         <td className="px-2 py-1 text-right">{r.cantidad ?? '—'}</td>
                         <td className="px-2 py-1">{r.fechaEntrega ?? '—'}</td>
@@ -707,7 +713,7 @@ function BulkImportModal({
         {yaImportado && !!result.creados?.length && (
           <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800 max-h-32 overflow-auto">
             {result.creados.map((c: any) => (
-              <div key={c.id}>{c.orderNumber} · {c.cliente} · {c.lineas} línea(s){c.fechaEntrega ? ` · entrega ${c.fechaEntrega}` : ''}</div>
+              <div key={c.id}>{c.orderNumber} · {c.cliente}{c.sucursal ? ` · ${c.sucursal}` : ''} · {c.lineas} línea(s){c.fechaEntrega ? ` · entrega ${c.fechaEntrega}` : ''}</div>
             ))}
           </div>
         )}
