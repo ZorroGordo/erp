@@ -895,6 +895,7 @@ model PurchaseOrder {
   receipts     GoodsReceiptNote[]
   invoices     SupplierInvoice[]
   comprobantes Comprobante[]
+  attachments  PurchaseOrderAttachment[]
 
   @@index([status, expectedDeliveryDate])
   @@map("purchase_orders")
@@ -913,7 +914,60 @@ model PurchaseOrderLine {
   lineTotalPen    Decimal       @db.Decimal(14, 4)
   notes           String?
 
+  /// Purchase presentation converted to the ingredient's master unit.
+  /// e.g. 2 "saco" with a 1 saco = 50 kg conversion → qtyBase 100, baseUom "kg".
+  /// Informational on the OC document; the authoritative conversion still
+  /// happens at receipt time, but storing it here lets the UI and reports show
+  /// what will actually land in stock.
+  qtyBase          Decimal? @db.Decimal(14, 4)
+  baseUom          String?
+  conversionFactor Decimal? @db.Decimal(14, 8)
+
   @@map("purchase_order_lines")
+}
+
+/// Documents attached to a purchase order: the supplier's factura, the
+/// certificado de calidad (from which lot numbers and expiry dates are
+/// auto-extracted so the stock-entry form comes pre-filled), the original
+/// cotización, etc. Stored as base64 in Postgres, same pattern as
+/// ComprobanteArchivo — the codebase has no S3 upload path.
+model PurchaseOrderAttachment {
+  id              String           @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  kind            POAttachmentKind @default(OTRO)
+
+  nombreArchivo   String
+  mimeType        String
+  tamanoBytes     Int
+  dataBase64      String           @db.Text
+
+  // Auto-extracted header data (facturas)
+  numero          String?
+  fechaEmision    DateTime?
+  emisorRuc       String?
+  total           Decimal?         @db.Decimal(14, 4)
+
+  /// Lot/expiry rows detected in a certificado de calidad:
+  /// [{ lotNumber, expiryDate, productionDate, rawLine }]
+  lotesDetected   Json?
+
+  /// Comprobante created from this factura, so it shows up in Control de pagos.
+  comprobanteId   String?
+
+  createdAt       DateTime         @default(now())
+  createdBy       String?
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_attachments")
+}
+
+enum POAttachmentKind {
+  FACTURA
+  CERTIFICADO_CALIDAD
+  COTIZACION
+  GUIA_REMISION
+  OTRO
 }
 
 model GoodsReceiptNote {

@@ -179,8 +179,18 @@ function extractTextHeuristics(text: string): ExtractedDoc {
 
 
 export async function extractFromPdf(b64: string, password?: string): Promise<ExtractedDoc> {
+  const text = await pdfToText(b64, password);
+  if (text.length > 20) return extractTextHeuristics(text);
+  return {};
+}
+
+/**
+ * Raw text of a PDF. Tries the embedded text layer first and falls back to
+ * rendering page 1 and OCR-ing it (scanned documents). Returns '' on failure —
+ * never throws, like the rest of this module.
+ */
+export async function pdfToText(b64: string, password?: string): Promise<string> {
   const buf = Buffer.from(b64, 'base64');
-  let cleanText = '';
 
   // ?? Attempt 1: pdf-parse v2 API ???????????????????????????????????????????
   // In pdf-parse v2, PDFParse lives in the *default* export (not '/node').
@@ -199,18 +209,16 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
     if (PDFParse && typeof PDFParse === 'function') {
       const parser = new PDFParse({ data: new Uint8Array(buf), ...(password ? { password } : {}) });
       const { text } = await parser.getText();
-      cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
-      if (cleanText.length > 20) {
-        return extractTextHeuristics(cleanText);
-      }
+      const cleanText = text.replace(/--\s*\d+\s*of\s*\d+\s*--/g, '').trim();
+      if (cleanText.length > 20) return cleanText;
+
       // Image-based / scanned PDF: render page 1 to PNG then OCR it.
       try {
         const ss = await parser.getScreenshot({ pages: [1], width: 2000 });
         const pageData = ss.pages[0]?.data;
         if (pageData) {
           const imgBuf = Buffer.from(Object.values(pageData) as number[]);
-          const ocrResult = await extractFromImage(imgBuf.toString('base64'));
-          if (Object.keys(ocrResult).length > 1) return ocrResult;
+          return await imageToText(imgBuf.toString('base64'));
         }
       } catch (err) { console.error('[ext] screenshot:', err instanceof Error ? err.message : String(err)); }
     } else {
@@ -218,14 +226,23 @@ export async function extractFromPdf(b64: string, password?: string): Promise<Ex
     }
   } catch (err) { console.error('[ext] pdf-parse v2 attempt:', err instanceof Error ? err.message : String(err)); }
 
-  return {};
+  return '';
 }
 
 export async function extractFromImage(b64: string): Promise<ExtractedDoc> {
+  const text = await imageToText(b64);
+  if (text.trim().length > 10) return extractTextHeuristics(text);
+  return {};
+}
+
+/**
+ * OCR an image to raw text. Tries spa+eng first (best for Peruvian documents)
+ * and falls back to eng when the Spanish pack can't be downloaded. Returns ''
+ * when tesseract is unavailable.
+ */
+export async function imageToText(b64: string): Promise<string> {
   const imageBuffer = Buffer.from(b64, 'base64');
 
-  // Try spa+eng first (best quality for Peruvian invoices), fall back to eng
-  // if the Spanish language pack fails to download (common in Docker/Railway).
   for (const langs of ['spa+eng', 'eng']) {
     try {
       const { createWorker } = _require('tesseract.js') as {
@@ -242,14 +259,28 @@ export async function extractFromImage(b64: string): Promise<ExtractedDoc> {
       });
       const { data: { text } } = await worker.recognize(imageBuffer);
       await worker.terminate();
-      if (text?.trim().length > 10) return extractTextHeuristics(text);
+      if (text?.trim().length > 10) return text;
     } catch {
       // Language data unavailable or WASM failed — try next lang set
     }
   }
 
-  // Tesseract not installed or all lang attempts failed
-  return {};
+  return '';
+}
+
+/**
+ * Raw text of any supported document (PDF / image / XML). Used by the
+ * certificado-de-calidad reader, which needs the full text rather than the
+ * invoice-header fields that autoExtract() returns.
+ */
+export async function documentToText(mimeType: string, dataBase64: string): Promise<string> {
+  try {
+    if (mimeType.includes('xml'))        return Buffer.from(dataBase64, 'base64').toString('utf-8');
+    if (mimeType === 'application/pdf')  return await pdfToText(dataBase64);
+    if (mimeType.startsWith('image/'))   return await imageToText(dataBase64);
+    if (mimeType.startsWith('text/'))    return Buffer.from(dataBase64, 'base64').toString('utf-8');
+  } catch (err) { console.error('[ext] documentToText:', err instanceof Error ? err.message : String(err)); }
+  return '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
