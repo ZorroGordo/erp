@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import {
-  ingestQuote, sendApprovalEmail, generatePurchaseOrder, escapeHtml,
+  ingestQuote, reextractQuote, sendApprovalEmail, generatePurchaseOrder, escapeHtml,
 } from './quoteService';
 import { llmStatus } from '../../lib/llm';
 
@@ -126,6 +126,19 @@ export async function supplierQuoteRoutes(app: FastifyInstance) {
       include: { lines: { orderBy: { orden: 'asc' } } },
     });
     return reply.send({ data: updated });
+  });
+
+  // ── RE-READ THE DOCUMENT ──────────────────────────────────────────────────
+  // Re-runs the extraction on the stored file and replaces the lines.
+  app.post('/quotes/:id/reextract', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const updated = await reextractQuote(id);
+      return reply.send({ data: updated });
+    } catch (err) {
+      const code = (err as { statusCode?: number }).statusCode ?? 500;
+      return reply.code(code).send({ error: err instanceof Error ? err.message : 'No se pudo volver a leer' });
+    }
   });
 
   // ── SEND / RESEND APPROVAL LINK ───────────────────────────────────────────

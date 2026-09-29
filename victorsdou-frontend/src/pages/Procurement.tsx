@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useState } from 'react';
-import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2, Paperclip, Trash2, Upload, Ruler, ShieldCheck, Mail, Send, Check, AlertTriangle } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Eye, FileDown, X, PackageCheck, Loader2, Paperclip, Trash2, Upload, Ruler, ShieldCheck, Mail, Send, Check, AlertTriangle, RefreshCw } from 'lucide-react';
 import { StatusBadge } from './Dashboard';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
@@ -539,6 +539,21 @@ function QuoteDetailModal({ quoteId, onClose, onChanged }: { quoteId: string; on
     finally { setBusy(false); }
   };
 
+  // Re-run the automatic reading on the stored document (replaces the lines).
+  const releer = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post(`/v1/procurement/quotes/${quoteId}/reextract`);
+      const n = res.data?.data?.lines?.length ?? 0;
+      if (n) toast.success(`${n} línea(s) leídas del documento`);
+      else toast.error(res.data?.data?.extractionNotes ?? 'No se pudieron leer líneas');
+      await refetch();
+      setSeeded(false); // re-seed the editable lines from the fresh data
+      onChanged();
+    } catch (e: any) { toast.error(e.response?.data?.error ?? 'No se pudo volver a leer'); }
+    finally { setBusy(false); }
+  };
+
   const enviarAprobacion = async () => {
     setBusy(true);
     try {
@@ -672,6 +687,13 @@ function QuoteDetailModal({ quoteId, onClose, onChanged }: { quoteId: string; on
           <button onClick={rechazar} disabled={busy || quote?.status === 'APROBADA'}
             className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-xl disabled:opacity-40">Rechazar</button>
           <div className="flex gap-2">
+            {!quote?.purchaseOrderId && quote?.status !== 'APROBADA' && (
+              <button onClick={releer} disabled={busy}
+                title="Vuelve a leer el documento adjunto y reemplaza las líneas"
+                className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-xl disabled:opacity-40">
+                <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Volver a leer
+              </button>
+            )}
             <button onClick={enviarAprobacion} disabled={busy}
               className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-xl disabled:opacity-40">
               <Send size={14} /> Enviar link de aprobación
