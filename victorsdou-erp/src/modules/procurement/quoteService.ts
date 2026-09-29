@@ -179,6 +179,22 @@ export async function matchSupplier(opts: { ruc?: string | null; nombre?: string
       take: 2,
     });
     if (matches.length === 1) return matches[0];
+
+    // Legal names rarely match the short name we saved: "AGRO CONTACTO PERU
+    // E.I.R.L." vs "Agrocontacto". Compare with spaces, punctuation and the
+    // usual legal suffixes stripped, accepting only a single unambiguous hit.
+    const compact = (v: string) => normalize(v)
+      .replace(/\b(s ?a ?c|s ?r ?l|e ?i ?r ?l|s ?a ?a|s ?a|sociedad anonima cerrada|peru|del peru)\b/g, ' ')
+      .replace(/[^a-z0-9]/g, '');
+    const target = compact(nombre);
+    if (target.length >= 5) {
+      const all = await prisma.supplier.findMany({ select: { id: true, businessName: true } });
+      const hits = all.filter(s0 => {
+        const c = compact(s0.businessName ?? '');
+        return c.length >= 5 && (c === target || target.startsWith(c) || c.startsWith(target));
+      });
+      if (hits.length === 1) return prisma.supplier.findUnique({ where: { id: hits[0].id } });
+    }
   }
   return null;
 }

@@ -750,7 +750,7 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                             {(() => {
                               const stockUom = l.ingredient.baseUom;
                               const f = uomFactor(l.uom, stockUom);
-                              if (!stockUom || (l.uom ?? '').toLowerCase() === stockUom.toLowerCase()) return null;
+                              if (!stockUom || (l.uom ?? '').toLowerCase() === stockUom.toLowerCase() || f === 1) return null;
                               return f == null
                                 ? <div className="text-[10px] text-red-500 mt-0.5">No convertible a {stockUom}</div>
                                 : <div className="text-[10px] text-gray-400 mt-0.5">= {((Number(c.actualQty) || 0) * f).toFixed(3)} {stockUom} de stock</div>;
