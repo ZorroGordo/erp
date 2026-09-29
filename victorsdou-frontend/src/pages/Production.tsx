@@ -72,7 +72,9 @@ async function openBatchCard(order: Order) {
       try {
         const cr = await api.get(`/v1/production/orders/${order.id}/consumptions`);
         for (const c of (cr.data?.data ?? [])) {
-          consMap[c.ingredientId] = { actualQty: Number(c.actualQty) || 0, lotNumber: c.lotNumber ?? null };
+          // actualQtyBomUom = same qty in the formula's unit (g), since the
+          // stored consumption is in the stock unit (kg).
+          consMap[c.ingredientId] = { actualQty: Number(c.actualQtyBomUom ?? c.actualQty) || 0, lotNumber: c.lotNumber ?? null };
         }
       } catch { /* fall back to a blank card if consumptions can't be loaded */ }
     }
@@ -574,9 +576,23 @@ function EditOrderModal({ order, onClose, onSuccess }: { order: Order; onClose: 
   );
 }
 
+// ── Display-only unit conversion (formula unit → stock unit) ─────────────────
+// Mirrors the backend's dimensional table so the close modal can show
+// "5000 g = 5.000 kg" next to what will actually be discounted from stock.
+const MASS_G: Record<string, number> = { mg: 0.001, g: 1, gr: 1, grs: 1, gramo: 1, gramos: 1, kg: 1000, kgs: 1000, kilo: 1000, kilos: 1000, kilogramo: 1000, kilogramos: 1000, t: 1e6, ton: 1e6 };
+const VOL_ML: Record<string, number> = { ml: 1, cc: 1, cl: 10, dl: 100, l: 1000, lt: 1000, lts: 1000, litro: 1000, litros: 1000, litre: 1000, litres: 1000 };
+function uomFactor(from?: string, to?: string): number | null {
+  const f = (from ?? '').toLowerCase().trim().replace(/\.$/, '');
+  const t = (to ?? '').toLowerCase().trim().replace(/\.$/, '');
+  if (!f || !t || f === t) return 1;
+  if (MASS_G[f] && MASS_G[t]) return MASS_G[f] / MASS_G[t];
+  if (VOL_ML[f] && VOL_ML[t]) return VOL_ML[f] / VOL_ML[t];
+  return null;
+}
+
 // ── Lote (batch) picker for a single materia prima / intermedio ──────────────
 interface Batch { id: string; supplierLotNo: string | null; qtyRemaining: string; expiryDate: string | null; receivedDate: string; }
-function BatchSelect({ ingredientId, value, onSelect }: { ingredientId: string; value?: string; onSelect: (batchId: string, label: string) => void }) {
+function BatchSelect({ ingredientId, value, uom, onSelect }: { ingredientId: string; value?: string; uom?: string; onSelect: (batchId: string, label: string) => void }) {
   const { data } = useQuery({
     queryKey: ['ingredient-batches', ingredientId],
     queryFn: () => api.get(`/v1/inventory/ingredients/${ingredientId}/batches`).then(r => r.data),
@@ -595,7 +611,7 @@ function BatchSelect({ ingredientId, value, onSelect }: { ingredientId: string; 
       <option value="">— Elegir lote —</option>
       {batches.map(b => (
         <option key={b.id} value={b.id}>
-          {(b.supplierLotNo || 'sin lote')} · {Number(b.qtyRemaining).toFixed(1)} disp.{b.expiryDate ? ` · vence ${new Date(b.expiryDate).toLocaleDateString('es-PE')}` : ''}
+          {(b.supplierLotNo || 'sin lote')} · {Number(b.qtyRemaining).toFixed(1)}{uom ? ` ${uom}` : ''} disp.{b.expiryDate ? ` · vence ${new Date(b.expiryDate).toLocaleDateString('es-PE')}` : ''}
         </option>
       ))}
       {batches.length === 0 && <option value="" disabled>(sin lotes en inventario)</option>}
@@ -724,14 +740,26 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                             {planned.toFixed(3)} {l.uom}
                           </td>
                           <td className="px-3 py-2 text-right">
-                            <input type="number" min="0" step="0.001"
-                              className="input font-mono text-right w-28"
-                              value={c.actualQty}
-                              onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value, manual: true } }))} />
+                            <div className="flex items-center justify-end gap-1">
+                              <input type="number" min="0" step="0.001"
+                                className="input font-mono text-right w-28"
+                                value={c.actualQty}
+                                onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value, manual: true } }))} />
+                              <span className="text-xs text-gray-400 w-6 text-left">{l.uom}</span>
+                            </div>
+                            {(() => {
+                              const stockUom = l.ingredient.baseUom;
+                              const f = uomFactor(l.uom, stockUom);
+                              if (!stockUom || (l.uom ?? '').toLowerCase() === stockUom.toLowerCase()) return null;
+                              return f == null
+                                ? <div className="text-[10px] text-red-500 mt-0.5">No convertible a {stockUom}</div>
+                                : <div className="text-[10px] text-gray-400 mt-0.5">= {((Number(c.actualQty) || 0) * f).toFixed(3)} {stockUom} de stock</div>;
+                            })()}
                           </td>
                           <td className="px-3 py-2 w-56">
                             <BatchSelect
                               ingredientId={l.ingredientId}
+                              uom={l.ingredient.baseUom}
                               value={c.batchId}
                               onSelect={(batchId, label) => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, batchId, lotNumber: label } }))}
                             />
@@ -766,6 +794,8 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                 .map(([ingredientId, v]) => ({
                   ingredientId,
                   actualQty: Number(v.actualQty) || 0,
+                  // Qty is typed in the formula's unit; the backend converts to stock unit.
+                  uom: recipe?.bomLines.find(b => b.ingredientId === ingredientId)?.uom,
                   lotNumber: v.lotNumber || undefined,
                   batchId: v.batchId || undefined,
                 }))
@@ -795,7 +825,6 @@ function DemandaModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const today = new Date().toISOString().slice(0, 10);
   const [desde, setDesde] = useState(today);
   const [hasta, setHasta] = useState(new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10));
-  const [incluirSinFecha, setIncluirSinFecha] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(today);
   const [line, setLine] = useState('A');
   const [marcarEnProduccion, setMarcarEnProduccion] = useState(true);
@@ -804,9 +833,9 @@ function DemandaModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const [resultado, setResultado] = useState<any>(null);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['production-demand', desde, hasta, incluirSinFecha],
+    queryKey: ['production-demand', desde, hasta],
     queryFn: () => api.get('/v1/production/demand', {
-      params: { desde, hasta, incluirSinFecha: incluirSinFecha ? 'true' : undefined },
+      params: { desde, hasta },
     }).then(r => r.data),
   });
   const items: any[] = data?.data?.items ?? [];
@@ -885,10 +914,11 @@ function DemandaModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
             <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Hasta</label>
             <input type="date" className="input text-sm" value={hasta} onChange={e => setHasta(e.target.value)} />
           </div>
-          <label className="flex items-center gap-1.5 text-xs text-gray-600 pb-2">
-            <input type="checkbox" checked={incluirSinFecha} onChange={e => setIncluirSinFecha(e.target.checked)} />
-            Incluir pedidos sin fecha
-          </label>
+          {Number(data?.data?.pedidosSinFecha) > 0 && (
+            <p className="text-xs text-amber-700 pb-2 max-w-xs">
+              {data.data.pedidosSinFecha} pedido(s) sin fecha de entrega no se incluyen. Asígnales fecha en Ventas para producirlos.
+            </p>
+          )}
           <div className="ml-auto flex items-end gap-3">
             <div>
               <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Producir el</label>

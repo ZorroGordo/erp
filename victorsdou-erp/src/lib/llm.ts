@@ -74,19 +74,50 @@ export function llmEnabled(): boolean {
   return llmStatus().configured;
 }
 
+export interface LlmAttachment {
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface LlmOptions {
   system?: string;
   maxTokens?: number;
+  /**
+   * Only sent when set. Newer models reject the parameter outright ("`temperature`
+   * is deprecated for this model" → HTTP 400), which is what broke every quote
+   * extraction on Sep 23 2026, so the default is to leave it out.
+   */
   temperature?: number;
   timeoutMs?: number;
+  /**
+   * The original document (PDF or image). Sent natively to providers that read
+   * it (Anthropic: PDF + images; OpenAI-compatible: images), alongside the
+   * extracted text — a photo or a scanned factura reads far better this way
+   * than through OCR text alone.
+   */
+  attachment?: LlmAttachment | null;
 }
+
+export interface LlmResult {
+  text: string | null;
+  error: string | null;
+}
+
+// Anthropic's request limit is 32 MB; stay well under it and skip attaching
+// anything big (the extracted text still goes).
+const MAX_ATTACHMENT_B64 = 8_000_000;
 
 /** Single-turn completion. Returns null on any failure — never throws. */
 export async function llmComplete(prompt: string, opts: LlmOptions = {}): Promise<string | null> {
+  return (await llmCompleteResult(prompt, opts)).text;
+}
+
+/** Like llmComplete, but says why it failed so the UI can show it. */
+export async function llmCompleteResult(prompt: string, opts: LlmOptions = {}): Promise<LlmResult> {
   const status = llmStatus();
   if (!status.configured) {
     console.warn(`[llm] sin proveedor configurado (LLM_PROVIDER=${status.provider}) — se omite la extracción con IA`);
-    return null;
+    return { text: null, error: 'IA no configurada' };
   }
 
   // Cap the prompt so an unusually long document can't run up a bill, whatever
@@ -95,23 +126,55 @@ export async function llmComplete(prompt: string, opts: LlmOptions = {}): Promis
     ? prompt.slice(0, config.LLM_MAX_INPUT_CHARS)
     : prompt;
 
+  const attachment = opts.attachment && opts.attachment.dataBase64.length <= MAX_ATTACHMENT_B64
+    ? opts.attachment : null;
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 90_000);
+  const call = (o: LlmOptions, att: LlmAttachment | null) => status.provider === 'anthropic'
+    ? completeAnthropic(capped, o, status, ctrl.signal, att)
+    : completeOpenAI(capped, o, status, ctrl.signal, att);
   try {
-    return status.provider === 'anthropic'
-      ? await completeAnthropic(capped, opts, status, ctrl.signal)
-      : await completeOpenAI(capped, opts, status, ctrl.signal);
+    let r = await call(opts, attachment);
+    // A model that rejects a sampling parameter: retry once without it.
+    if (!r.text && r.error && /temperature/i.test(r.error) && opts.temperature !== undefined) {
+      r = await call({ ...opts, temperature: undefined }, attachment);
+    }
+    // A provider/model that can't take the file: retry text-only.
+    if (!r.text && r.error && attachment && /^HTTP 4\d\d/.test(r.error) && !/temperature/i.test(r.error)) {
+      r = await call(opts, null);
+    }
+    return r;
   } catch (err) {
-    console.error('[llm]', err instanceof Error ? err.message : String(err));
-    return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[llm]', msg);
+    return { text: null, error: msg };
   } finally {
     clearTimeout(timer);
   }
 }
 
+/** Short, human-readable reason from a provider error body. */
+function errorDetail(status: number, body: string): string {
+  let msg = body.slice(0, 300);
+  try {
+    const j = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
+    msg = (typeof j.error === 'string' ? j.error : j.error?.message) ?? j.message ?? msg;
+  } catch { /* not JSON */ }
+  return `HTTP ${status}: ${msg}`;
+}
+
 async function completeAnthropic(
-  prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal,
-): Promise<string | null> {
+  prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal, att: LlmAttachment | null,
+): Promise<LlmResult> {
+  const mime = (att?.mimeType ?? '').toLowerCase();
+  const fileBlock = !att ? null
+    : mime === 'application/pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: att.dataBase64 } }
+      : /^image\/(jpeg|png|gif|webp)$/.test(mime)
+        ? { type: 'image', source: { type: 'base64', media_type: mime, data: att.dataBase64 } }
+        : null;
+  const content = fileBlock ? [fileBlock, { type: 'text', text: prompt }] : prompt;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -122,23 +185,30 @@ async function completeAnthropic(
     body: JSON.stringify({
       model: status.model,
       max_tokens: opts.maxTokens ?? 4096,
-      temperature: opts.temperature ?? 0,
+      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       ...(opts.system ? { system: opts.system } : {}),
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content }],
     }),
     signal,
   });
   if (!res.ok) {
-    console.error('[llm][anthropic] HTTP', res.status, (await res.text()).slice(0, 500));
-    return null;
+    const body = await res.text();
+    console.error('[llm][anthropic] HTTP', res.status, body.slice(0, 500));
+    return { text: null, error: errorDetail(res.status, body) };
   }
   const json = await res.json() as { content?: { type: string; text?: string }[] };
-  return (json.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('').trim() || null;
+  const text = (json.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('').trim() || null;
+  return { text, error: text ? null : 'respuesta vacía del modelo' };
 }
 
 async function completeOpenAI(
-  prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal,
-): Promise<string | null> {
+  prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal, att: LlmAttachment | null,
+): Promise<LlmResult> {
+  // The chat/completions shape only takes images portably; PDFs go as text.
+  const mime = (att?.mimeType ?? '').toLowerCase();
+  const userContent = att && /^image\//.test(mime)
+    ? [{ type: 'image_url', image_url: { url: `data:${mime};base64,${att.dataBase64}` } }, { type: 'text', text: prompt }]
+    : prompt;
   const res = await fetch(`${status.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -148,21 +218,23 @@ async function completeOpenAI(
     },
     body: JSON.stringify({
       model: status.model,
-      temperature: opts.temperature ?? 0,
+      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       max_tokens: opts.maxTokens ?? 4096,
       messages: [
         ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
-        { role: 'user', content: prompt },
+        { role: 'user', content: userContent },
       ],
     }),
     signal,
   });
   if (!res.ok) {
-    console.error('[llm][openai] HTTP', res.status, (await res.text()).slice(0, 500));
-    return null;
+    const body = await res.text();
+    console.error('[llm][openai] HTTP', res.status, body.slice(0, 500));
+    return { text: null, error: errorDetail(res.status, body) };
   }
   const json = await res.json() as { choices?: { message?: { content?: string } }[] };
-  return json.choices?.[0]?.message?.content?.trim() || null;
+  const text = json.choices?.[0]?.message?.content?.trim() || null;
+  return { text, error: text ? null : 'respuesta vacía del modelo' };
 }
 
 /**
@@ -173,8 +245,18 @@ async function completeOpenAI(
  * parseable comes back.
  */
 export async function llmJson<T>(prompt: string, opts: LlmOptions = {}): Promise<T | null> {
-  const raw = await llmComplete(prompt, opts);
-  if (!raw) return null;
+  return (await llmJsonResult<T>(prompt, opts)).data;
+}
+
+/** llmJson plus the reason when nothing usable came back. */
+export async function llmJsonResult<T>(prompt: string, opts: LlmOptions = {}): Promise<{ data: T | null; error: string | null }> {
+  const r = await llmCompleteResult(prompt, opts);
+  if (!r.text) return { data: null, error: r.error };
+  const data = parseJsonLoose<T>(r.text);
+  return { data, error: data ? null : 'la respuesta del modelo no era JSON válido' };
+}
+
+function parseJsonLoose<T>(raw: string): T | null {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = (fenced ? fenced[1] : raw).trim();
   const start = body.search(/[[{]/);

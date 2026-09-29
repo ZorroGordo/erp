@@ -3,6 +3,7 @@ import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { getOverheadRate } from '../../lib/settings';
 import * as InventoryService from '../inventory/service';
+import { resolveConversionFactor } from '../../lib/uomResolver';
 
 // ── Lot / order-number helpers ──────────────────────────────────────────────
 // Structured lot number = order number: YY + DDD + Line + BB
@@ -25,6 +26,19 @@ async function generateLotNumber(scheduled: Date, line: string): Promise<string>
   return `${prefix}${String(count + 1).padStart(2, '0')}`;
 }
 
+// ── Unidades: fórmula ↔ stock ───────────────────────────────────────────────
+// La fórmula (BOMLine.uom) puede estar en g mientras el stock del ingrediente
+// (Ingredient.baseUom) está en kg. Todo lo que toca inventario — reservas,
+// consumos, costo — debe ir en la unidad del stock. Devuelve el factor
+// qtyStock = qtyFormula * factor, o null si las unidades no son convertibles
+// (p. ej. "unidad" vs "kg" sin una presentación registrada).
+async function bomToStockFactor(bomUom: string | null | undefined, ingredient: { id: string; baseUom: string }): Promise<number | null> {
+  const from = (bomUom ?? '').trim();
+  const to   = (ingredient.baseUom ?? '').trim();
+  if (!from || !to) return 1; // sin unidad declarada: se asume la del stock
+  return resolveConversionFactor(from, to, ingredient.id);
+}
+
 // ── Inventory reservation helpers ───────────────────────────────────────────
 // On order creation we reserve each BOM ingredient (scaled to the planned qty)
 // by incrementing StockLevel.qtyReserved, so it can't be consumed or assigned
@@ -33,8 +47,14 @@ async function reserveForOrder(tx: any, orderId: string, recipe: any, plannedQty
   const yieldQty = Number(recipe.yieldQty) || 1;
   const scale    = plannedQty / yieldQty;
   for (const l of recipe.bomLines ?? []) {
-    const qty = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
-    if (!(qty > 0)) continue;
+    const qtyBom = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+    if (!(qtyBom > 0)) continue;
+    // Reserve in the ingredient's stock unit (e.g. 5000 g in the formula → 5 kg).
+    const ingForUom = l.ingredient ?? await tx.ingredient.findUnique({ where: { id: l.ingredientId }, select: { id: true, baseUom: true } });
+    // Non-convertible units (e.g. "unidad" vs "kg" with no presentation) keep
+    // the old 1:1 behaviour here; the close step reports them explicitly.
+    const factor = ingForUom ? await bomToStockFactor(l.uom, ingForUom) : 1;
+    const qty = qtyBom * (factor ?? 1);
     const whType = l.ingredient?.productType === 'INTERMEDIATE' ? 'INTERMEDIATE' : 'RAW_MATERIAL';
     let wh = await tx.warehouse.findFirst({ where: { type: whType as never, isActive: true }, orderBy: { createdAt: 'asc' } });
     if (!wh) {
@@ -103,14 +123,18 @@ export async function productionRoutes(app: FastifyInstance) {
   // units. The UI shows that as an editable default — the operator can round it
   // down to 100 or up to 200 before the orders are generated.
   app.get('/demand', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR', 'SALES_MGR')] }, async (req, reply) => {
-    const q = req.query as { desde?: string; hasta?: string; incluirSinFecha?: string };
+    const q = req.query as { desde?: string; hasta?: string };
 
     const desde = q.desde ? new Date(q.desde) : new Date();
     const hasta = q.hasta ? new Date(q.hasta + 'T23:59:59') : new Date(desde.getTime() + 7 * 86400_000);
 
-    const deliveryFilter = q.incluirSinFecha === 'true'
-      ? { OR: [{ deliveryDate: { gte: desde, lte: hasta } }, { deliveryDate: null }] }
-      : { deliveryDate: { gte: desde, lte: hasta } };
+    // Pedidos sin fecha de entrega NO viajan a producción (Modificaciones 22/09/26):
+    // sin fecha no se puede planificar cuándo producir. Solo se informa cuántos
+    // quedaron fuera para que Ventas les ponga fecha.
+    const deliveryFilter = { deliveryDate: { gte: desde, lte: hasta } };
+    const pedidosSinFecha = await prisma.salesOrder.count({
+      where: { status: { in: DEMAND_STATUSES as never }, deliveryDate: null },
+    });
 
     const orders = await prisma.salesOrder.findMany({
       where: { status: { in: DEMAND_STATUSES as never }, ...deliveryFilter },
@@ -212,6 +236,7 @@ export async function productionRoutes(app: FastifyInstance) {
       data: {
         rango: { desde: desde.toISOString().slice(0, 10), hasta: hasta.toISOString().slice(0, 10) },
         pedidos: orders.length,
+        pedidosSinFecha,
         items,
       },
     });
@@ -239,6 +264,21 @@ export async function productionRoutes(app: FastifyInstance) {
     const creados: { orderNumber: string; id: string; recipeId: string; plannedQty: number }[] = [];
     const errores: { recipeId: string; error: string }[] = [];
     const linkedAll = new Set<string>();
+
+    // Defensa en el backend: un pedido sin fecha de entrega no se puede vincular
+    // a una OP, aunque el cliente lo envíe.
+    const requestedIds = [...new Set(items.flatMap(it => it.linkedSalesOrderIds ?? []))];
+    const datedIds = new Set(
+      requestedIds.length
+        ? (await prisma.salesOrder.findMany({
+            where: { id: { in: requestedIds }, deliveryDate: { not: null } },
+            select: { id: true },
+          })).map(o => o.id)
+        : [],
+    );
+    for (const it of items) {
+      if (it.linkedSalesOrderIds) it.linkedSalesOrderIds = it.linkedSalesOrderIds.filter(id => datedIds.has(id));
+    }
 
     for (const it of items) {
       const line = (it.line ?? body.line ?? '').toUpperCase();
@@ -602,7 +642,9 @@ export async function productionRoutes(app: FastifyInstance) {
     const body = req.body as {
       completedAt:    string;
       actualYieldQty: number;
-      consumptions:   { ingredientId: string; actualQty: number; lotNumber?: string; batchId?: string }[];
+      // actualQty viene en la unidad de la fórmula (uom, o la del BOMLine si no
+      // se envía); el backend la convierte a la unidad del stock.
+      consumptions:   { ingredientId: string; actualQty: number; uom?: string; lotNumber?: string; batchId?: string }[];
       finishedLotNumber?: string;
       finishedExpiryDate?: string;
       notes?: string;
@@ -618,11 +660,29 @@ export async function productionRoutes(app: FastifyInstance) {
     // Pre-flight: look up the order, recipe, and product.
     const order = await prisma.productionOrder.findUnique({
       where:   { id },
-      include: { recipe: { include: { product: true } } },
+      include: { recipe: { include: { product: true, bomLines: true } } },
     });
     if (!order) return reply.code(404).send({ error: 'Production order not found' });
     if (order.status === 'COMPLETED' || order.status === 'CANCELLED') {
       return reply.code(422).send({ error: `Order is already ${order.status}` });
+    }
+    const bomUomByIngredient = new Map(order.recipe.bomLines.map(l => [l.ingredientId, l.uom]));
+
+    // Pre-flight de unidades y stock ANTES de tocar inventario, para no dejar
+    // una OP a medio cerrar: convierte cada consumo a la unidad del stock.
+    const plan: { c: typeof body.consumptions[number]; ing: any; qtyStock: number }[] = [];
+    for (const c of body.consumptions) {
+      if (!c.ingredientId || !(Number(c.actualQty) > 0)) continue;
+      const ing = await prisma.ingredient.findUnique({ where: { id: c.ingredientId } });
+      if (!ing) return reply.code(422).send({ error: `Ingredient ${c.ingredientId} not found` });
+      const fromUom = c.uom ?? bomUomByIngredient.get(c.ingredientId) ?? ing.baseUom;
+      const factor  = await bomToStockFactor(fromUom, ing);
+      if (factor == null) {
+        return reply.code(422).send({
+          error: `No se puede convertir ${fromUom} a ${ing.baseUom} para ${ing.name}. Registra la presentación en Inventario o corrige la unidad en la receta.`,
+        });
+      }
+      plan.push({ c, ing, qtyStock: Number(c.actualQty) * factor });
     }
 
     const product = order.recipe.product;
@@ -645,12 +705,10 @@ export async function productionRoutes(app: FastifyInstance) {
 
     // 1) Apply consumptions (one at a time so WAC + reservation logic kicks in).
     let rawCost = 0;
-    for (const c of body.consumptions) {
-      if (!c.ingredientId || c.actualQty <= 0) continue;
-      const ing = await prisma.ingredient.findUnique({ where: { id: c.ingredientId } });
-      if (!ing) return reply.code(422).send({ error: `Ingredient ${c.ingredientId} not found` });
+    for (const { c, ing, qtyStock } of plan) {
+      // avgCostPen is per stock unit (e.g. S/ per kg), so cost uses qtyStock.
       const avgCost = Number(ing.avgCostPen);
-      rawCost += c.actualQty * avgCost;
+      rawCost += qtyStock * avgCost;
 
       // Pick the warehouse to draw from. Intermediates (e.g. MASA MADRE) are
       // stocked in the INTERMEDIATE warehouse, raw materials in RAW_MATERIAL —
@@ -676,7 +734,7 @@ export async function productionRoutes(app: FastifyInstance) {
         type:         'PRODUCTION_CONSUMPTION' as never,
         ingredientId: c.ingredientId,
         warehouseId:  consumeWh,
-        qty:          c.actualQty,
+        qty:          qtyStock,
         unitCost:     avgCost,
         notes:        [c.lotNumber ? `Lote: ${c.lotNumber}` : null, `OP: ${order.orderNumber}`].filter(Boolean).join(' | '),
         createdBy:    req.actor!.sub,
@@ -693,7 +751,7 @@ export async function productionRoutes(app: FastifyInstance) {
           ingredientId:      c.ingredientId,
           batchId:           c.batchId,
           plannedQty:        0,
-          actualQty:         c.actualQty,
+          actualQty:         qtyStock, // en unidad de stock (Ingredient.baseUom)
           postedAt:          new Date(),
         },
       });
@@ -855,6 +913,10 @@ export async function productionRoutes(app: FastifyInstance) {
       where:   { productionOrderId: id },
       orderBy: { postedAt: 'asc' },
     });
+    const po = await prisma.productionOrder.findUnique({
+      where: { id }, select: { recipe: { select: { bomLines: { select: { ingredientId: true, uom: true } } } } },
+    });
+    const bomUomBy = new Map((po?.recipe.bomLines ?? []).map(l => [l.ingredientId, l.uom]));
     const out = [];
     for (const c of consumptions) {
       const ing = await prisma.ingredient.findUnique({
@@ -868,7 +930,15 @@ export async function productionRoutes(app: FastifyInstance) {
         ingredientName: ing?.name ?? '',
         baseUom:        ing?.baseUom ?? '',
         productType:    ing?.productType ?? null,
-        actualQty:      Number(c.actualQty ?? 0),
+        actualQty:      Number(c.actualQty ?? 0), // unidad de stock (baseUom)
+        // Same quantity expressed in the formula's unit, for the batch card.
+        bomUom:         bomUomBy.get(c.ingredientId) ?? ing?.baseUom ?? '',
+        actualQtyBomUom: await (async () => {
+          const bomUom = bomUomBy.get(c.ingredientId);
+          if (!ing || !bomUom) return Number(c.actualQty ?? 0);
+          const f = await resolveConversionFactor(ing.baseUom, bomUom, c.ingredientId);
+          return Number(c.actualQty ?? 0) * (f ?? 1);
+        })(),
         lotNumber:      batch?.supplierLotNo ?? null,
         expiryDate:     batch?.expiryDate ?? null,
       });

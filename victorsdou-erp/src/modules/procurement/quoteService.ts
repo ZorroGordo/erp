@@ -17,7 +17,7 @@ import { randomBytes } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
 import { sendEmail } from '../../lib/email';
-import { llmJson, llmEnabled } from '../../lib/llm';
+import { llmJsonResult, llmEnabled, llmStatus } from '../../lib/llm';
 import { documentToText } from '../comprobantes/extractor';
 import { resolveConvertQty } from '../../lib/uomResolver';
 
@@ -44,7 +44,7 @@ export interface ExtractedQuote {
 }
 
 const EXTRACTION_SYSTEM = `Eres un asistente de compras de una panadería en Perú.
-Recibes el texto de una COTIZACIÓN de un proveedor y devuelves sus datos estructurados.
+Recibes una COTIZACIÓN, PROFORMA o FACTURA de un proveedor (el documento adjunto y/o su texto) y devuelves sus datos estructurados para generar una orden de compra.
 Reglas:
 - Responde SOLO con un objeto JSON válido, sin texto adicional ni bloques de código.
 - Los precios son en la moneda de la cotización (PEN por defecto, USD si el documento lo indica).
@@ -52,10 +52,11 @@ Reglas:
 - "unidad" es la presentación tal como aparece (saco, caja, bolsa, kg, litro, unidad…). No la conviertas.
 - "cantidad" es la cantidad de esa presentación.
 - No inventes líneas ni montos. Si un dato no está, usa null.
-- Si el texto no parece una cotización, devuelve {"lineas": [], "notas": "no parece una cotización"}.`;
+- Una factura electrónica (SUNAT) sirve igual: sus líneas de detalle son las líneas a comprar; el RUC es el del EMISOR, no el del cliente (Victorsdou).
+- Si el documento no es un documento de compra, devuelve {"lineas": [], "notas": "no parece una cotización ni factura"}.`;
 
 function extractionPrompt(text: string): string {
-  return `Extrae los datos de esta cotización y devuélvelos en este formato JSON exacto:
+  return `Extrae los datos de este documento de compra y devuélvelos en este formato JSON exacto:
 
 {
   "proveedor": string|null,
@@ -79,22 +80,35 @@ function extractionPrompt(text: string): string {
   ]
 }
 
---- TEXTO DE LA COTIZACIÓN ---
-${text}
+--- TEXTO EXTRAÍDO DEL DOCUMENTO (puede venir vacío o con errores de OCR; si hay documento adjunto, prevalece el adjunto) ---
+${text || '(sin texto)'}
 --- FIN ---`;
 }
 
 /** Read a quote document into structured lines. Returns null when unreadable. */
 export async function extractQuote(mimeType: string, dataBase64: string): Promise<{ parsed: ExtractedQuote | null; text: string; nota: string | null }> {
-  const text = await documentToText(mimeType, dataBase64);
-  if (!text || text.trim().length < 30) {
-    return { parsed: null, text: text ?? '', nota: 'No se pudo leer texto del documento (¿escaneo de baja calidad?)' };
+  const text = (await documentToText(mimeType, dataBase64).catch(() => '')) ?? '';
+  const mime = (mimeType ?? '').toLowerCase();
+  // Anthropic reads PDFs and images natively; OpenAI-compatible only images.
+  const provider = llmStatus().provider;
+  const canAttach = provider === 'anthropic'
+    ? (mime === 'application/pdf' || /^image\/(jpeg|png|gif|webp)$/.test(mime))
+    : provider === 'openai' && /^image\//.test(mime);
+  if (text.trim().length < 30 && !canAttach) {
+    return { parsed: null, text, nota: 'No se pudo leer texto del documento (¿escaneo de baja calidad?)' };
   }
   if (!llmEnabled()) {
     return { parsed: null, text, nota: 'Extracción con IA no configurada (ver LLM_PROVIDER): completar las líneas a mano' };
   }
-  const parsed = await llmJson<ExtractedQuote>(extractionPrompt(text), { system: EXTRACTION_SYSTEM, maxTokens: 4096 });
-  if (!parsed) return { parsed: null, text, nota: 'La extracción automática no devolvió un resultado utilizable' };
+  const { data: parsed, error } = await llmJsonResult<ExtractedQuote>(extractionPrompt(text), {
+    system: EXTRACTION_SYSTEM,
+    maxTokens: 4096,
+    attachment: canAttach ? { mimeType: mime, dataBase64 } : null,
+  });
+  if (!parsed) {
+    return { parsed: null, text, nota: `La extracción automática no devolvió un resultado utilizable${error ? ` (${error.slice(0, 200)})` : ''}` };
+  }
+  if (!Array.isArray(parsed.lineas)) parsed.lineas = [];
   return { parsed, text, nota: null };
 }
 
@@ -197,12 +211,98 @@ export async function ingestQuote(input: IngestInput) {
   }
 
   const { parsed, nota } = await extractQuote(principal.mimeType, principal.dataBase64);
+  const built = await buildFromExtraction(parsed, nota, input.senderEmail ?? null);
+  const { supplier, moneda, lineData, notas } = built;
 
+  const quote = await prisma.supplierQuote.create({
+    data: {
+      quoteNumber: `COT-${Date.now()}`,
+      supplierId: supplier?.id ?? null,
+      supplierNameRaw: parsed?.proveedor ?? null,
+      supplierRuc: parsed?.ruc ?? null,
+      currency: moneda === 'USD' ? 'USD' : 'PEN',
+      subtotal: parsed?.subtotal ?? null,
+      igv: parsed?.igv ?? null,
+      total: parsed?.total ?? null,
+      validUntil: parsed?.validoHasta ? new Date(parsed.validoHasta) : null,
+      status: lineData.length ? 'RECIBIDA' : 'ERROR',
+      source: (input.source ?? 'EMAIL') as never,
+      senderEmail: input.senderEmail ?? null,
+      emailSubject: input.emailSubject ?? null,
+      messageId: input.messageId ?? null,
+      extractedJson: (parsed ?? null) as never,
+      extractionNotes: notas,
+      createdBy: input.createdBy ?? null,
+      lines: lineData.length ? { create: lineData } : undefined,
+      archivos: {
+        create: input.archivos.map(a => ({
+          nombreArchivo: a.nombreArchivo,
+          mimeType: a.mimeType,
+          tamanoBytes: a.tamanoBytes ?? Math.round((a.dataBase64.length * 3) / 4),
+          dataBase64: a.dataBase64,
+        })),
+      },
+    },
+    include: { lines: true, supplier: true },
+  });
+
+  if (input.notifyApprover !== false && lineData.length) {
+    await sendApprovalEmail(quote.id).catch(err => console.error('[quote] approval email:', err));
+  }
+
+  return quote;
+}
+
+/**
+ * Re-run the extraction on a quote's stored document and replace its lines —
+ * for quotes that came in while the reader was failing, or after a supplier's
+ * presentations were registered. Refused once the quote produced an OC.
+ */
+export async function reextractQuote(quoteId: string) {
+  const quote = await prisma.supplierQuote.findUnique({
+    where: { id: quoteId },
+    include: { archivos: { orderBy: { createdAt: 'asc' } } },
+  });
+  if (!quote) throw Object.assign(new Error('Cotización no encontrada'), { statusCode: 404 });
+  if (quote.status === 'APROBADA' || quote.purchaseOrderId) {
+    throw Object.assign(new Error('La cotización ya generó una OC'), { statusCode: 422 });
+  }
+  const principal = quote.archivos[0];
+  if (!principal) throw Object.assign(new Error('La cotización no tiene archivos'), { statusCode: 422 });
+
+  const { parsed, nota } = await extractQuote(principal.mimeType, principal.dataBase64);
+  const { supplier, moneda, lineData, notas } = await buildFromExtraction(parsed, nota, quote.senderEmail);
+
+  return prisma.$transaction(async (tx) => {
+    await tx.supplierQuoteLine.deleteMany({ where: { quoteId } });
+    return tx.supplierQuote.update({
+      where: { id: quoteId },
+      data: {
+        // Keep a supplier someone already picked by hand.
+        supplierId: quote.supplierId ?? supplier?.id ?? null,
+        supplierNameRaw: parsed?.proveedor ?? quote.supplierNameRaw,
+        supplierRuc: parsed?.ruc ?? quote.supplierRuc,
+        currency: moneda === 'USD' ? 'USD' : 'PEN',
+        subtotal: parsed?.subtotal ?? null,
+        igv: parsed?.igv ?? null,
+        total: parsed?.total ?? null,
+        validUntil: parsed?.validoHasta ? new Date(parsed.validoHasta) : null,
+        status: lineData.length ? 'RECIBIDA' : 'ERROR',
+        extractedJson: (parsed ?? null) as never,
+        extractionNotes: notas,
+        lines: lineData.length ? { create: lineData } : undefined,
+      },
+      include: { lines: true, supplier: true },
+    });
+  });
+}
+
+async function buildFromExtraction(parsed: ExtractedQuote | null, nota: string | null, senderEmail: string | null) {
   const supplier = await matchSupplier({
     ruc: parsed?.ruc,
     nombre: parsed?.proveedor,
     // The From: header is "Nombre <correo@dominio>"; keep just the address.
-    email: (input.senderEmail ?? '').match(/[^<\s]+@[^>\s]+/)?.[0] ?? null,
+    email: (senderEmail ?? '').match(/[^<\s]+@[^>\s]+/)?.[0] ?? null,
   });
   const ingredients = await prisma.ingredient.findMany({
     where: { isActive: true },
@@ -250,43 +350,7 @@ export async function ingestQuote(input: IngestInput) {
     parsed?.notas ?? null,
   ].filter(Boolean).join(' · ') || null;
 
-  const quote = await prisma.supplierQuote.create({
-    data: {
-      quoteNumber: `COT-${Date.now()}`,
-      supplierId: supplier?.id ?? null,
-      supplierNameRaw: parsed?.proveedor ?? null,
-      supplierRuc: parsed?.ruc ?? null,
-      currency: moneda === 'USD' ? 'USD' : 'PEN',
-      subtotal: parsed?.subtotal ?? null,
-      igv: parsed?.igv ?? null,
-      total: parsed?.total ?? null,
-      validUntil: parsed?.validoHasta ? new Date(parsed.validoHasta) : null,
-      status: lineData.length ? 'RECIBIDA' : 'ERROR',
-      source: (input.source ?? 'EMAIL') as never,
-      senderEmail: input.senderEmail ?? null,
-      emailSubject: input.emailSubject ?? null,
-      messageId: input.messageId ?? null,
-      extractedJson: (parsed ?? null) as never,
-      extractionNotes: notas,
-      createdBy: input.createdBy ?? null,
-      lines: lineData.length ? { create: lineData } : undefined,
-      archivos: {
-        create: input.archivos.map(a => ({
-          nombreArchivo: a.nombreArchivo,
-          mimeType: a.mimeType,
-          tamanoBytes: a.tamanoBytes ?? Math.round((a.dataBase64.length * 3) / 4),
-          dataBase64: a.dataBase64,
-        })),
-      },
-    },
-    include: { lines: true, supplier: true },
-  });
-
-  if (input.notifyApprover !== false && lineData.length) {
-    await sendApprovalEmail(quote.id).catch(err => console.error('[quote] approval email:', err));
-  }
-
-  return quote;
+  return { supplier, moneda, lineData, notas };
 }
 
 // ── Approval link ───────────────────────────────────────────────────────────

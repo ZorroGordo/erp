@@ -762,10 +762,10 @@ const CATEGORY_LABEL: Record<string, string> = {
 function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
   return [
     // ── Pedido
+    { id: 'createdAt', label: 'Fecha', group: 'Pedido', defaultVisible: true,
+      render: (o) => <span className="text-gray-600 text-xs whitespace-nowrap">{o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}</span> },
     { id: 'orderNumber', label: 'Nro. Pedido', group: 'Pedido', defaultVisible: true,
       render: (o) => <div className="flex items-center gap-1.5 font-mono text-gray-700">{o.channel === 'ECOMMERCE' && <Globe size={12} className="text-indigo-500 flex-shrink-0" />}{o.orderNumber}</div> },
-    { id: 'createdAt', label: 'Fecha', group: 'Pedido', defaultVisible: false,
-      render: (o) => <span className="text-gray-500 text-xs">{o.createdAt ? new Date(o.createdAt).toLocaleDateString('es-PE') : '—'}</span> },
     { id: 'channel', label: 'Canal', group: 'Pedido', defaultVisible: true,
       render: (o) => <span className="text-gray-500 text-xs">{CHANNEL_LABEL[o.channel] ?? o.channel}</span> },
     { id: 'status', label: 'Estado', group: 'Pedido', defaultVisible: true,
@@ -1199,7 +1199,16 @@ export default function SalesOrders() {
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) return new Set(JSON.parse(stored));
+      if (stored) {
+        const ids = new Set<string>(JSON.parse(stored));
+        // One-time: la columna Fecha pasó a ser visible por defecto (Modificaciones 22/09/26).
+        if (!localStorage.getItem(STORAGE_KEY + ':fecha-v1')) {
+          ids.add('createdAt');
+          localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+          localStorage.setItem(STORAGE_KEY + ':fecha-v1', '1');
+        }
+        return ids;
+      }
     } catch {}
     return new Set(allColumns.filter(c => c.defaultVisible).map(c => c.id));
   });
