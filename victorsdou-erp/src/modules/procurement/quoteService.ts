@@ -13,6 +13,7 @@
 // Every step degrades rather than fails: no API key, unreadable PDF or an
 // unmatched line all end with a quote a human can finish by hand.
 
+import { normalizeImageForLlm } from '../../lib/imageNormalize';
 import { randomBytes } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
@@ -87,8 +88,18 @@ ${text || '(sin texto)'}
 
 /** Read a quote document into structured lines. Returns null when unreadable. */
 export async function extractQuote(mimeType: string, dataBase64: string): Promise<{ parsed: ExtractedQuote | null; text: string; nota: string | null }> {
-  const text = (await documentToText(mimeType, dataBase64).catch(() => '')) ?? '';
-  const mime = (mimeType ?? '').toLowerCase();
+  // Fotos: image/jpg → jpeg, HEIC/HEIF (iPhone) y imágenes enormes → JPEG ≤ 2000 px.
+  // Si no se puede convertir, avisamos claramente en vez de leer "a ciegas" solo con texto.
+  let mime = (mimeType ?? '').toLowerCase();
+  let docData = dataBase64;
+  try {
+    const norm = await normalizeImageForLlm(mimeType, dataBase64);
+    mime = norm.mimeType;
+    docData = norm.dataBase64;
+  } catch (e: any) {
+    return { parsed: null, text: '', nota: `No se pudo procesar la imagen: ${e?.message ?? 'formato no soportado'}. Sube una foto JPG/PNG o el PDF.` };
+  }
+  const text = (await documentToText(mime, docData).catch(() => '')) ?? '';
   // Anthropic reads PDFs and images natively; OpenAI-compatible only images.
   const provider = llmStatus().provider;
   const canAttach = provider === 'anthropic'
@@ -103,7 +114,7 @@ export async function extractQuote(mimeType: string, dataBase64: string): Promis
   const { data: parsed, error } = await llmJsonResult<ExtractedQuote>(extractionPrompt(text), {
     system: EXTRACTION_SYSTEM,
     maxTokens: 4096,
-    attachment: canAttach ? { mimeType: mime, dataBase64 } : null,
+    attachment: canAttach ? { mimeType: mime, dataBase64: docData } : null,
   });
   if (!parsed) {
     return { parsed: null, text, nota: `La extracción automática no devolvió un resultado utilizable${error ? ` (${error.slice(0, 200)})` : ''}` };
@@ -160,14 +171,14 @@ export function matchIngredient(
 export async function matchSupplier(opts: { ruc?: string | null; nombre?: string | null; email?: string | null }) {
   const ruc = (opts.ruc ?? '').replace(/\D/g, '');
   if (ruc.length >= 8) {
-    const byRuc = await prisma.supplier.findFirst({ where: { ruc } });
+    const byRuc = await prisma.supplier.findFirst({ where: { ruc, isActive: true } });
     if (byRuc) return byRuc;
   }
 
   const email = (opts.email ?? '').trim().toLowerCase();
   if (email) {
     const byEmail = await prisma.supplier.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' } },
+      where: { isActive: true, email: { equals: email, mode: 'insensitive' } },
     });
     if (byEmail) return byEmail;
   }
@@ -175,7 +186,7 @@ export async function matchSupplier(opts: { ruc?: string | null; nombre?: string
   const nombre = (opts.nombre ?? '').trim();
   if (nombre.length >= 4) {
     const matches = await prisma.supplier.findMany({
-      where: { businessName: { contains: nombre, mode: 'insensitive' } },
+      where: { isActive: true, businessName: { contains: nombre, mode: 'insensitive' } },
       take: 2,
     });
     if (matches.length === 1) return matches[0];
@@ -188,7 +199,7 @@ export async function matchSupplier(opts: { ruc?: string | null; nombre?: string
       .replace(/[^a-z0-9]/g, '');
     const target = compact(nombre);
     if (target.length >= 5) {
-      const all = await prisma.supplier.findMany({ select: { id: true, businessName: true } });
+      const all = await prisma.supplier.findMany({ where: { isActive: true }, select: { id: true, businessName: true } });
       const hits = all.filter(s0 => {
         const c = compact(s0.businessName ?? '');
         return c.length >= 5 && (c === target || target.startsWith(c) || c.startsWith(target));

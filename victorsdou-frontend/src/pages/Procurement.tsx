@@ -79,7 +79,7 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
       toast.success(isEdit ? 'Proveedor actualizado' : 'Proveedor creado');
       onSaved();
     },
-    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error'),
+    onError: (e: any) => toast.error(e.response?.data?.message ?? e.response?.data?.error ?? 'Error'),
   });
   const set = (k: keyof SupForm) => (v: any) => setForm(f => ({ ...f, [k]: v }));
   return (
@@ -91,31 +91,33 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
         onChange={set('ruc')}
         onFound={(data) => {
           const r = data as RucResult;
-          setForm(f => ({ ...f, businessName: r.razonSocial ?? f.businessName,
-            address: [r.direccion, r.distrito, r.provincia, r.departamento].filter(Boolean).join(', ') }));
+          const addr = [r.direccion, r.distrito, r.provincia, r.departamento].filter(Boolean).join(', ');
+          // En edición solo se completan campos vacíos: no se pisa la razón social guardada.
+          setForm(f => isEdit
+            ? { ...f, businessName: f.businessName || (r.razonSocial ?? ''), address: f.address || addr }
+            : { ...f, businessName: r.razonSocial ?? f.businessName, address: addr });
         }}
-        disabled={isEdit}
         label="RUC"
       />
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2"><label className="block text-xs font-medium text-gray-600 mb-1">Razón Social *</label>
-          <input className="input" value={form.businessName} onChange={e => set('businessName')(e.target.value)} /></div>
+          <input autoComplete="off" className="input" value={form.businessName} onChange={e => set('businessName')(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
-          <input className="input" type="email" value={form.email} onChange={e => set('email')(e.target.value)} /></div>
+          <input autoComplete="off" className="input" type="email" value={form.email} onChange={e => set('email')(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-gray-600 mb-1">Teléfono</label>
-          <input className="input" value={form.phone} onChange={e => set('phone')(e.target.value)} /></div>
+          <input autoComplete="off" className="input" value={form.phone} onChange={e => set('phone')(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-gray-600 mb-1">Contacto</label>
-          <input className="input" value={form.contactName} onChange={e => set('contactName')(e.target.value)} /></div>
+          <input autoComplete="off" className="input" value={form.contactName} onChange={e => set('contactName')(e.target.value)} /></div>
         <div><label className="block text-xs font-medium text-gray-600 mb-1">Dirección</label>
-          <input className="input" value={form.address} onChange={e => set('address')(e.target.value)} /></div>
+          <input autoComplete="off" className="input" value={form.address} onChange={e => set('address')(e.target.value)} /></div>
       </div>
       <div className="border-t border-gray-100 pt-4">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Condiciones de pago</p>
         <div className="grid grid-cols-2 gap-4">
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Días de crédito</label>
-            <input className="input" type="number" min={0} value={form.paymentTermsDays} onChange={e => set('paymentTermsDays')(parseInt(e.target.value)||0)} /></div>
+            <input autoComplete="off" className="input" type="number" min={0} value={form.paymentTermsDays} onChange={e => set('paymentTermsDays')(parseInt(e.target.value)||0)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Día fijo de pago</label>
-            <input className="input" placeholder="ej. 15, fin de mes" value={form.paymentDayOfMonth} onChange={e => set('paymentDayOfMonth')(e.target.value)} /></div>
+            <input autoComplete="off" className="input" placeholder="ej. 15, fin de mes" value={form.paymentDayOfMonth} onChange={e => set('paymentDayOfMonth')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Método de pago</label>
             <select className="input" value={form.paymentMethod} onChange={e => set('paymentMethod')(e.target.value)}>
               <option value="TRANSFERENCIA">Transferencia bancaria</option>
@@ -124,18 +126,18 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
               <option value="OTRO">Otro</option>
             </select></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Límite de crédito (S/)</label>
-            <input className="input" type="number" min={0} step={0.01} placeholder="Sin límite" value={form.creditLimit} onChange={e => set('creditLimit')(e.target.value)} /></div>
+            <input autoComplete="off" className="input" type="number" min={0} step={0.01} placeholder="Sin límite" value={form.creditLimit} onChange={e => set('creditLimit')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
             <select className="input" value={form.currency} onChange={e => set('currency')(e.target.value)}>
               <option value="PEN">Soles (PEN)</option>
               <option value="USD">Dólares (USD)</option>
             </select></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">Banco</label>
-            <input className="input" placeholder="BCP, Interbank, BBVA…" value={form.bankName} onChange={e => set('bankName')(e.target.value)} /></div>
+            <input autoComplete="off" className="input" placeholder="BCP, Interbank, BBVA…" value={form.bankName} onChange={e => set('bankName')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">N° de cuenta</label>
-            <input className="input font-mono" placeholder="Número de cuenta" value={form.bankAccount} onChange={e => set('bankAccount')(e.target.value)} /></div>
+            <input autoComplete="off" className="input font-mono" placeholder="Número de cuenta" value={form.bankAccount} onChange={e => set('bankAccount')(e.target.value)} /></div>
           <div><label className="block text-xs font-medium text-gray-600 mb-1">CCI (20 dígitos)</label>
-            <input className="input font-mono" placeholder="00200000000000000000" maxLength={20} value={form.cci} onChange={e => set('cci')(e.target.value.replace(/\D/g, ''))} /></div>
+            <input autoComplete="off" className="input font-mono" placeholder="00200000000000000000" maxLength={20} value={form.cci} onChange={e => set('cci')(e.target.value.replace(/\D/g, ''))} /></div>
         </div>
       </div>
       <div className="border-t border-gray-100 pt-4">
@@ -155,13 +157,13 @@ function SupplierFormModal({ initial, onClose, onSaved }: { initial?: any; onClo
           </div>
           {form.requiresDetraccion && (
             <div><label className="block text-xs font-medium text-gray-600 mb-1">Tasa de detracción (%)</label>
-              <input className="input" type="number" min={0} max={100} step={0.1} placeholder="ej. 12" value={form.detraccionRate} onChange={e => set('detraccionRate')(e.target.value)} /></div>
+              <input autoComplete="off" className="input" type="number" min={0} max={100} step={0.1} placeholder="ej. 12" value={form.detraccionRate} onChange={e => set('detraccionRate')(e.target.value)} /></div>
           )}
         </div>
       </div>
       <div className="border-t border-gray-100 pt-4">
         <div><label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
-          <textarea className="input" rows={2} value={form.notes} onChange={e => set('notes')(e.target.value)} /></div>
+          <textarea autoComplete="off" className="input" rows={2} value={form.notes} onChange={e => set('notes')(e.target.value)} /></div>
       </div>
       <div className="flex gap-2">
         <button className="btn-primary" disabled={!form.businessName || !form.ruc} onClick={() => saveMut.mutate(form)}>
@@ -185,6 +187,14 @@ interface POForm {
 // ── Document helpers ─────────────────────────────────────────────────────────
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+
+/** Browsers often leave file.type empty for .heic; infer it so the server converts it. */
+function guessMime(file: File): string {
+  if (file.type) return file.type;
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = { heic: 'image/heic', heif: 'image/heif', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf' };
+  return (ext && map[ext]) || 'application/pdf';
+}
 
 /** Read a File into base64 (without the data: prefix), as the API expects. */
 function fileToBase64(file: File): Promise<string> {
@@ -612,6 +622,9 @@ function QuoteDetailModal({ quoteId, onClose, onChanged }: { quoteId: string; on
                   <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Proveedor</label>
                   <select className="input w-72" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
                     <option value="">— Vincular proveedor —</option>
+                    {quote?.supplierId && !suppliers?.data?.some((s: any) => s.id === quote.supplierId) && (
+                      <option value={quote.supplierId}>{quote.supplier?.businessName ?? 'Proveedor'} (inactivo)</option>
+                    )}
                     {suppliers?.data?.map((s: any) => <option key={s.id} value={s.id}>{s.businessName}</option>)}
                   </select>
                   {!supplierId && <p className="text-[10px] text-amber-600 mt-0.5">Requerido para generar la OC</p>}
@@ -735,7 +748,7 @@ function CotizacionesPanel() {
     try {
       const dataBase64 = await fileToBase64(file);
       const res = await api.post('/v1/procurement/quotes', {
-        archivos: [{ nombreArchivo: file.name, mimeType: file.type || 'application/pdf', tamanoBytes: file.size, dataBase64 }],
+        archivos: [{ nombreArchivo: file.name, mimeType: guessMime(file), tamanoBytes: file.size, dataBase64 }],
       });
       toast.success('Cotización registrada');
       refresh();
@@ -762,7 +775,7 @@ function CotizacionesPanel() {
         </div>
         <label className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer ${uploading ? 'bg-gray-200 text-gray-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Subir cotización
-          <input type="file" className="hidden" accept="application/pdf,image/*" disabled={uploading}
+          <input type="file" className="hidden" accept="application/pdf,image/*,.heic,.heif" disabled={uploading}
             onChange={e => { const f = e.target.files?.[0]; if (f) subir(f); e.target.value = ''; }} />
         </label>
       </div>
@@ -1032,6 +1045,15 @@ export default function Procurement() {
   };
   const { data: pos, isLoading: loadPO } = useQuery({ queryKey: ['pos'], queryFn: () => api.get('/v1/procurement/purchase-orders').then(r => r.data) });
   const { data: suppliers, isLoading: loadSup } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.get('/v1/procurement/suppliers').then(r => r.data) });
+  // Tabla de proveedores: incluye inactivos (los desplegables de OC/cotización usan solo activos).
+  const [showInactiveSup, setShowInactiveSup] = useState(false);
+  const { data: suppliersAll } = useQuery({ queryKey: ['suppliers', 'all'], enabled: tab === 'suppliers', queryFn: () => api.get('/v1/procurement/suppliers?includeInactive=1').then(r => r.data) });
+  const supRows = (suppliersAll?.data ?? []).filter((s: any) => showInactiveSup || s.isActive !== false);
+  const toggleSupActive = useMutation({
+    mutationFn: (s: any) => api.patch(`/v1/procurement/suppliers/${s.id}`, { isActive: s.isActive === false }),
+    onSuccess: (_r, s: any) => { qc.invalidateQueries({ queryKey: ['suppliers'] }); toast.success(s.isActive === false ? 'Proveedor reactivado' : 'Proveedor desactivado'); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? e.response?.data?.error ?? 'Error'),
+  });
   const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
   const approvePO = useMutation({
     mutationFn: (id: string) => api.patch(`/v1/procurement/purchase-orders/${id}/approve`, { approved: true }),
@@ -1362,6 +1384,9 @@ export default function Procurement() {
       {tab === 'suppliers' && (
         <>
           {showSupForm && <SupplierFormModal initial={editingSup} onClose={() => { setShowSupForm(false); setEditingSup(null); }} onSaved={() => { setShowSupForm(false); setEditingSup(null); }} />}
+          <label className="flex items-center gap-2 text-xs text-gray-500 mb-2 cursor-pointer">
+            <input type="checkbox" checked={showInactiveSup} onChange={e => setShowInactiveSup(e.target.checked)} /> Mostrar inactivos
+          </label>
           <div className="card overflow-hidden">
             <div className="table-container">
               <table className="w-full text-sm"><thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide"><tr>
@@ -1374,9 +1399,9 @@ export default function Procurement() {
                 <th className="px-5 py-3 text-left">Banco</th>
                 <th className="px-5 py-3 text-center">Acciones</th>
               </tr></thead><tbody className="divide-y divide-gray-100">
-                {suppliers?.data?.map((s: any) => (
-                  <tr key={s.id} className="table-row-hover">
-                    <td className="px-5 py-3 font-medium">{s.businessName}</td>
+                {supRows.map((s: any) => (
+                  <tr key={s.id} className={`table-row-hover ${s.isActive === false ? 'opacity-60' : ''}`}>
+                    <td className="px-5 py-3 font-medium">{s.businessName}{s.isActive === false && <span className="ml-2 px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 text-[10px] font-semibold uppercase">Inactivo</span>}</td>
                     <td className="px-5 py-3 font-mono text-gray-500">{s.ruc}</td>
                     <td className="px-5 py-3 text-gray-500">{s.contactName ?? 'Ñ'}</td>
                     <td className="px-5 py-3 text-gray-500">{s.email ?? 'Ñ'}</td>
@@ -1385,12 +1410,17 @@ export default function Procurement() {
                     <td className="px-5 py-3 text-gray-500">{s.bankName ?? 'Ñ'}</td>
                     <td className="px-5 py-3 text-center">
                       <button onClick={() => { setEditingSup(s); setShowSupForm(true); }} className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors"><Pencil size={14} /></button>
+                      <button
+                        onClick={() => { if (window.confirm(s.isActive === false ? `¿Reactivar a ${s.businessName}?` : `¿Desactivar a ${s.businessName}? Dejará de aparecer al crear OC y cotizaciones; las OC existentes no cambian.`)) toggleSupActive.mutate(s); }}
+                        disabled={toggleSupActive.isPending}
+                        className="ml-1 px-2 py-1 rounded hover:bg-gray-100 text-xs font-medium text-gray-500 hover:text-brand-600 transition-colors"
+                      >{s.isActive === false ? 'Reactivar' : 'Desactivar'}</button>
                     </td>
                   </tr>
                 ))}
               </tbody></table>
             </div>
-            {!suppliers?.data?.length && !loadSup && <p className="text-center text-gray-400 py-8">Sin proveedores aún</p>}
+            {!supRows.length && !loadSup && <p className="text-center text-gray-400 py-8">Sin proveedores aún</p>}
           </div>
         </>
       )}

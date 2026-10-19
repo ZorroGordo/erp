@@ -582,11 +582,13 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />}
               Guardar borrador
             </button>
-            <button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
+            {docType !== 'GUIA_REMISION' && (
+<button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-all shadow-sm">
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               Guardar y Emitir a SUNAT
             </button>
+)}
           </div>
         </div>
       </div>
@@ -768,11 +770,13 @@ function EditInvoiceModal({ invoice, onClose }: { invoice: Invoice; onClose: () 
               {editMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />}
               Guardar
             </button>
-            <button onClick={() => editMutation.mutate(true)} disabled={!canSave || editMutation.isPending}
+            {invoice.docType !== 'GUIA_REMISION' && (
+<button onClick={() => editMutation.mutate(true)} disabled={!canSave || editMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-all shadow-sm">
               {editMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               Guardar y Emitir
             </button>
+)}
           </div>
         </div>
       </div>
@@ -1206,12 +1210,14 @@ export default function Invoices() {
                               {inv.status === 'DRAFT' && (
                                 <>
                                   <button onClick={() => setEditingInvoice(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all">Edit</button>
-                                  <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
+                                  {inv.docType !== 'GUIA_REMISION' && (
+<button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                                     {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Emitir
                                   </button>
+)}
                                 </>
                               )}
-                              {inv.status === 'REJECTED' && (
+                              {inv.status === 'REJECTED' && inv.docType !== 'GUIA_REMISION' && (
                                 <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                                   {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Reintentar
                                 </button>

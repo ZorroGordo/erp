@@ -387,6 +387,14 @@ export async function invoicingRoutes(app: FastifyInstance) {
     if (!invoice) return reply.code(404).send({ error: 'NOT_FOUND' });
     if (invoice.status === 'ACCEPTED') return reply.code(422).send({ error: 'ALREADY_EMITTED' });
     if (invoice.status === 'VOIDED')   return reply.code(422).send({ error: 'INVOICE_VOIDED' });
+    // Una guía de remisión no es una factura: sin este guard se enviaría a SUNAT como tipo 01.
+    if (invoice.docType === 'GUIA_REMISION') {
+      return reply.code(422).send({
+        error: 'DOC_TYPE_NOT_EMITTABLE',
+        message: 'Este tipo de documento aún no se emite electrónicamente',
+        detail:  'Este tipo de documento aún no se emite electrónicamente',
+      });
+    }
 
     const tipoDocumento = invoice.docType === "BOLETA" ? "03" : "01";
     const serie = tipoDocumento === "01" ? config.FACTPRO_SERIE_FACTURA : config.FACTPRO_SERIE_BOLETA;
