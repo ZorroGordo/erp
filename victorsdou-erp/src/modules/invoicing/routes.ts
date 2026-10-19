@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
 import { emitirDocumento, buildFacturaPayload } from './factpro';
 import { notifyInvoiceEmitted } from '../../services/notifications';
+import { buildGuiaPrefill, getGuiaConfig, saveGuiaConfig, sunatUnitCode, type GuiaConfigData } from './guia';
 
 export async function invoicingRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
@@ -118,6 +119,9 @@ export async function invoicingRoutes(app: FastifyInstance) {
       }[];
     };
 
+    if (body.docType === 'GUIA_REMISION') {
+      return reply.code(400).send({ error: 'USE_GUIA_ENDPOINT', message: 'La guía de remisión se genera desde el pedido (Ventas → Generar guía)' });
+    }
     if (!body.items?.length) return reply.code(400).send({ error: 'items required' });
     // For BOLETA, entity details are optional (anonymous emission allowed)
     if (body.docType !== 'BOLETA') {
@@ -459,99 +463,188 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: factproRes, accepted });
   });
 
-  // ── Create Guía de Remisión from a sales order ──────────────────────────
-  app.post('/guia-remision', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+  // ── Guía de Remisión (remitente) ─────────────────────────────────────────
+  // Fase A (Sprint C 10/2026): se genera desde Ventas como representación
+  // INTERNA, en estado DRAFT. No se envía a SUNAT (la GRE electrónica vía
+  // Factpro es la fase B). /emit rechaza las guías para que nunca salgan como
+  // factura 01.
+  const GUIA_ROLES = ['ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SALES_AGENT', 'OPS_MGR', 'SUPER_ADMIN'] as const;
+  const GUIA_BLOCKED_ORDER_STATUSES = ['DRAFT', 'CART', 'PENDING_PAYMENT', 'CANCELLED', 'REFUNDED'];
+
+  // GET /guia-config — valores por defecto (partida, vehículo, conductor)
+  app.get('/guia-config', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (_req, reply) => {
+    return reply.send({ data: { ...(await getGuiaConfig()), companyRuc: config.COMPANY_RUC, companyName: config.COMPANY_NAME } });
+  });
+
+  // PUT /guia-config
+  app.put('/guia-config', { preHandler: [requireAnyOf('FINANCE_MGR', 'SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const saved = await saveGuiaConfig(req.body as GuiaConfigData, req.actor?.sub);
+    return reply.send({ data: saved });
+  });
+
+  // GET /guia-remision/prefill/:orderId — datos del pedido listos para el formulario
+  app.get('/guia-remision/prefill/:orderId', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (req, reply) => {
+    const { orderId } = req.params as { orderId: string };
+    const prefill = await buildGuiaPrefill(orderId);
+    if (!prefill) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Pedido no encontrado' });
+    return reply.send({ data: prefill });
+  });
+
+  // POST /guia-remision — crear la guía de un pedido
+  app.post('/guia-remision', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (req, reply) => {
     const body = req.body as {
       salesOrderId: string;
-      movementType: string;  // VENTA|COMPRA|TRASLADO|DEVOLUCION|OTROS
-      senderName: string;
-      senderAddress: string;
+      movementType?: string;  // VENTA|COMPRA|TRASLADO|DEVOLUCION|OTROS
+      senderName?: string;
+      senderAddress: string;      // punto de partida
+      originUbigeo?: string;
       recipientName: string;
-      recipientAddress: string;
-      transportistName?: string;
+      recipientDocNo?: string;
+      recipientAddress: string;   // punto de llegada
+      destUbigeo?: string;
+      startDate?: string;         // fecha de inicio del traslado (YYYY-MM-DD)
+      issueDate?: string;
+      transportMode?: '01' | '02';
+      transportistName?: string;  // transporte público: razón social del transportista
       transportistRuc?: string;
       transportistPlate?: string;
       transportistLicense?: string;
+      driverDocNo?: string;
+      driverName?: string;
+      grossWeight?: number;
+      weightUnit?: string;
+      packages?: number;
       goodsDescription?: string;
-      issueDate?: string;
+      items?: { productId?: string; description: string; qty: number; unitCode?: string }[];
+      saveAsDefault?: boolean;
     };
 
-    if (!body.salesOrderId) return reply.code(400).send({ error: 'salesOrderId required' });
-    if (!body.movementType) return reply.code(400).send({ error: 'movementType required' });
+    if (!body.salesOrderId) return reply.code(400).send({ error: 'salesOrderId required', message: 'Falta el pedido' });
+    if (!body.senderAddress?.trim())    return reply.code(400).send({ error: 'senderAddress required', message: 'Falta el punto de partida' });
+    if (!body.recipientAddress?.trim()) return reply.code(400).send({ error: 'recipientAddress required', message: 'Falta el punto de llegada' });
+    const mode = body.transportMode === '01' ? '01' : '02';
 
-    const order = await prisma.salesOrder.findUniqueOrThrow({
+    const order = await prisma.salesOrder.findUnique({
       where: { id: body.salesOrderId },
       include: { customer: true, lines: { include: { product: true } } },
     });
+    if (!order) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Pedido no encontrado' });
+    if (GUIA_BLOCKED_ORDER_STATUSES.includes(order.status as string)) {
+      return reply.code(422).send({ error: 'ORDER_NOT_READY', message: 'El pedido debe estar aceptado para generar la guía' });
+    }
 
-    // Auto-generate series/correlative for GUIA_REMISION
+    const existing = await prisma.invoice.findFirst({
+      where: { salesOrderId: order.id, docType: 'GUIA_REMISION', status: { not: 'VOIDED' } },
+      select: { id: true, series: true, correlative: true },
+    });
+    if (existing) {
+      return reply.code(409).send({ error: 'GUIA_EXISTS', message: `El pedido ya tiene la guía ${existing.series}-${existing.correlative}`, data: existing });
+    }
+
+    // Series/correlativo propios de la guía
     const series = process.env.GUIA_REMISION_SERIE ?? 'T001';
     const lastGuia = await prisma.invoice.findFirst({
       where: { docType: 'GUIA_REMISION', series },
       orderBy: { correlative: 'desc' },
+      select: { correlative: true },
     });
-    const nextCorr = lastGuia ? parseInt(lastGuia.correlative, 10) + 1 : 1;
-    const correlative = String(nextCorr).padStart(8, '0');
+    const correlative = String((parseInt(lastGuia?.correlative ?? '0', 10) || 0) + 1).padStart(8, '0');
 
-    // Build goods description from order lines if not provided
-    const autoGoods = order.lines.map(l =>
-      `${Number(l.qty)} x ${l.product?.name ?? 'Producto'}`
-    ).join('; ');
+    // Ítems: los del formulario (cantidades editables) o los del pedido
+    const priceByProduct = new Map(order.lines.map(l => [l.productId, Number(l.unitPrice)]));
+    const items = (body.items?.length ? body.items : order.lines.map(l => ({
+      productId: l.productId, description: l.product?.name ?? 'Producto', qty: Number(l.qty),
+      unitCode: sunatUnitCode(l.product?.unitOfSale),
+    }))).filter(i => Number(i.qty) > 0);
+    if (!items.length) return reply.code(400).send({ error: 'items required', message: 'La guía no tiene ítems' });
 
-    // Build line items from the order
-    const lineItems = order.lines.map(l => ({
-      productId: l.productId,
-      description: l.product?.name ?? 'Producto',
-      qty: l.qty,
-      unitPrice: l.unitPrice,
-      igvRate: 0,
-      subtotal: l.lineTotalPen,
-      igv: 0,
-      total: l.lineTotalPen,
-    }));
-
-    const issueDate = body.issueDate ? new Date(body.issueDate) : new Date();
+    const lineItems = items.map(i => {
+      const unitPrice = i.productId ? (priceByProduct.get(i.productId) ?? 0) : 0;
+      const subtotal = Math.round(unitPrice * Number(i.qty) * 100) / 100;
+      return {
+        productId: i.productId ?? null, description: i.description, qty: Number(i.qty),
+        unitCode: i.unitCode ?? 'NIU', unitPrice, igvRate: 0, subtotal, igv: 0, total: subtotal,
+      };
+    });
+    const autoGoods = items.map(i => `${Number(i.qty)} x ${i.description}`).join('; ');
 
     const guia = await prisma.invoice.create({
       data: {
         docType: 'GUIA_REMISION',
         series,
         correlative,
-        issueDate,
+        issueDate: body.issueDate ? new Date(body.issueDate) : new Date(),
         entityType: 'CUSTOMER',
         entityId: order.customerId,
-        entityDocNo: (order.customer as any)?.docNumber ?? '',
-        entityName: (order.customer as any)?.displayName ?? body.recipientName,
-        entityEmail: (order.customer as any)?.email ?? null,
-        subtotalPen: order.subtotalPen,
+        entityDocNo: body.recipientDocNo?.trim() || order.customer?.docNumber || '',
+        entityName: body.recipientName?.trim() || order.customer?.displayName || '',
+        entityEmail: order.customer?.email ?? null,
+        // La guía no es un comprobante de pago: montos en 0 para que no sume a ingresos.
+        subtotalPen: 0,
         igvPen: 0,
-        totalPen: order.totalPen,
-        status: 'ACCEPTED',
-        paymentStatus: 'UNPAID',
+        totalPen: 0,
+        status: 'DRAFT',
         salesOrderId: order.id,
-        guiaMovementType: body.movementType as any,
-        guiaSenderName: body.senderName,
-        guiaSenderAddress: body.senderAddress,
-        guiaRecipientName: body.recipientName,
-        guiaRecipientAddress: body.recipientAddress,
-        guiaTransportistName: body.transportistName ?? null,
-        guiaTransportistRuc: body.transportistRuc ?? null,
-        guiaTransportistPlate: body.transportistPlate ?? null,
-        guiaTransportistLicense: body.transportistLicense ?? null,
-        guiaGoodsDescription: body.goodsDescription ?? autoGoods,
+        guiaMovementType: (body.movementType ?? 'VENTA') as any,
+        guiaSenderName: body.senderName?.trim() || config.COMPANY_NAME,
+        guiaSenderAddress: body.senderAddress.trim(),
+        guiaRecipientName: body.recipientName?.trim() || order.customer?.displayName || '',
+        guiaRecipientAddress: body.recipientAddress.trim(),
+        guiaOriginUbigeo: body.originUbigeo?.trim() || null,
+        guiaDestUbigeo: body.destUbigeo?.trim() || null,
+        guiaStartDate: body.startDate ? new Date(`${body.startDate}T12:00:00-05:00`) : (order.deliveryDate ?? new Date()),
+        guiaTransportMode: mode,
+        guiaTransportistName: mode === '01' ? (body.transportistName?.trim() || null) : null,
+        guiaTransportistRuc:  mode === '01' ? (body.transportistRuc?.trim() || null) : null,
+        guiaTransportistPlate: body.transportistPlate?.trim() || null,
+        guiaTransportistLicense: body.transportistLicense?.trim() || null,
+        guiaDriverDocNo: body.driverDocNo?.trim() || null,
+        guiaDriverName: body.driverName?.trim() || null,
+        guiaGrossWeight: body.grossWeight != null && !Number.isNaN(Number(body.grossWeight)) ? Number(body.grossWeight) : null,
+        guiaWeightUnit: body.weightUnit === 'TNE' ? 'TNE' : 'KGM',
+        guiaPackages: body.packages != null && Number(body.packages) > 0 ? Math.round(Number(body.packages)) : null,
+        guiaGoodsDescription: body.goodsDescription?.trim() || autoGoods,
         createdBy: req.actor!.sub,
         lines: { create: lineItems },
       },
-      include: { lines: true },
+      include: { lines: true, salesOrder: { select: { orderNumber: true, id: true } } },
     });
 
-    // Update order status to READY
-    await prisma.salesOrder.update({
-      where: { id: order.id },
-      data: { status: 'READY' as any },
-    });
+    // Un pedido aceptado/confirmado pasa a "Listo"; nunca retrocede uno que
+    // ya está en camino o entregado.
+    if (['ACCEPTED', 'CONFIRMED', 'PAID', 'IN_PRODUCTION'].includes(order.status as string)) {
+      await prisma.salesOrder.update({ where: { id: order.id }, data: { status: 'READY' as any } });
+    }
+
+    if (body.saveAsDefault) {
+      await saveGuiaConfig({
+        ...(await getGuiaConfig()),
+        partidaAddress: body.senderAddress,
+        partidaUbigeo:  body.originUbigeo,
+        transportMode:  mode,
+        vehiclePlate:   body.transportistPlate,
+        driverDocNo:    body.driverDocNo,
+        driverName:     body.driverName,
+        driverLicense:  body.transportistLicense,
+        carrierRuc:     body.transportistRuc,
+        carrierName:    body.transportistName,
+      }, req.actor?.sub).catch(err => req.log.warn({ err }, 'guia-config save failed'));
+    }
 
     return reply.code(201).send({ data: guia });
+  });
+
+  // POST /guia-remision/:id/anular — anular una guía interna (borrador)
+  app.post('/guia-remision/:id/anular', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const guia = await prisma.invoice.findUnique({ where: { id }, select: { id: true, docType: true, status: true } });
+    if (!guia || guia.docType !== 'GUIA_REMISION') return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (guia.status === 'VOIDED') return reply.send({ data: guia });
+    if (guia.status !== 'DRAFT') {
+      return reply.code(422).send({ error: 'ONLY_DRAFT', message: 'Solo se puede anular una guía interna (no electrónica)' });
+    }
+    const updated = await prisma.invoice.update({ where: { id }, data: { status: 'VOIDED', voidedAt: new Date() } });
+    return reply.send({ data: updated });
   });
 
 }

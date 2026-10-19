@@ -227,7 +227,8 @@ export async function salesRoutes(app: FastifyInstance) {
         ...(q.customerId ? { customerId: q.customerId } : {}),
         ...(q.channel   ? { channel:    q.channel   as never } : {}),
       },
-      include: { customer: { include: { sucursales: { where: { isActive: true }, orderBy: { name: 'asc' } } } }, lines: { include: { product: true } }, payments: true, sucursal: true },
+      include: { customer: { include: { sucursales: { where: { isActive: true }, orderBy: { name: 'asc' } } } }, lines: { include: { product: true } }, payments: true, sucursal: true,
+        invoices: { where: { docType: 'GUIA_REMISION', status: { not: 'VOIDED' } }, select: { id: true, series: true, correlative: true, status: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return reply.send({ data: orders });

@@ -800,6 +800,17 @@ model OverheadConfig {
   @@map("overhead_config")
 }
 
+// Valores por defecto de la guía de remisión (punto de partida, vehículo,
+// conductor / transportista). Fila única id = "singleton".
+model GuiaConfig {
+  id        String   @id @default("singleton")
+  data      Json
+  updatedAt DateTime @default(now()) @updatedAt
+  updatedBy String?
+
+  @@map("guia_config")
+}
+
 // ══════════════════════════════════════════════════════════════
 //  SUPPLIERS & PROCUREMENT
 // ══════════════════════════════════════════════════════════════
@@ -1438,6 +1449,16 @@ model Invoice {
   guiaTransportistPlate  String?
   guiaTransportistLicense String?
   guiaGoodsDescription   String?    @db.Text
+  // Campos GRE remitente (SUNAT) — Sprint C
+  guiaTransportMode      String?    // 01 = público (transportista) | 02 = privado (vehículo propio)
+  guiaStartDate          DateTime?  // fecha de inicio del traslado
+  guiaOriginUbigeo       String?    // ubigeo punto de partida
+  guiaDestUbigeo         String?    // ubigeo punto de llegada
+  guiaGrossWeight        Decimal?   @db.Decimal(12, 3)
+  guiaWeightUnit         String?    // KGM | TNE
+  guiaPackages           Int?       // número de bultos
+  guiaDriverDocNo        String?    // DNI del conductor (transporte privado)
+  guiaDriverName         String?
 
   createdAt            DateTime          @default(now())
   createdBy            String
@@ -1467,6 +1488,7 @@ model InvoiceLineItem {
   subtotal    Decimal @db.Decimal(14, 4)
   igv         Decimal @db.Decimal(14, 4)
   total       Decimal @db.Decimal(14, 4)
+  unitCode    String? // unidad SUNAT (NIU, KGM…) — usada por la guía de remisión
 
   @@map("invoice_line_items")
 }
