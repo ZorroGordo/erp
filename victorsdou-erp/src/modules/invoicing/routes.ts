@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
-import { emitirDocumento, buildFacturaPayload } from './factpro';
+import { emitirDocumento, buildFacturaPayload, buildGuiaPayload, validateGuiaForGre, emitirGuia } from './factpro';
 import { notifyInvoiceEmitted } from '../../services/notifications';
 import { buildGuiaPrefill, getGuiaConfig, saveGuiaConfig, sunatUnitCode, type GuiaConfigData } from './guia';
 
@@ -476,7 +476,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
 
   // GET /guia-config — valores por defecto (partida, vehículo, conductor)
   app.get('/guia-config', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (_req, reply) => {
-    return reply.send({ data: { ...(await getGuiaConfig()), companyRuc: config.COMPANY_RUC, companyName: config.COMPANY_NAME } });
+    return reply.send({ data: { ...(await getGuiaConfig()), companyRuc: config.COMPANY_RUC, companyName: config.COMPANY_NAME, greEnabled: process.env.FACTPRO_GRE_ENABLED === 'true' } });
   });
 
   // PUT /guia-config
@@ -635,6 +635,50 @@ export async function invoicingRoutes(app: FastifyInstance) {
     }
 
     return reply.code(201).send({ data: guia });
+  });
+
+  // POST /guia-remision/:id/emitir — GRE remitente electrónica vía Factpro (fase B)
+  // Apagada hasta que FACTPRO_GRE_ENABLED=true (GRE activada en Factpro).
+  app.post('/guia-remision/:id/emitir', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    if (process.env.FACTPRO_GRE_ENABLED !== 'true') {
+      return reply.code(503).send({ error: 'GRE_DISABLED', message: 'La guía electrónica aún no está activada (FACTPRO_GRE_ENABLED)' });
+    }
+    const { id } = req.params as { id: string };
+    const guia = await prisma.invoice.findUnique({ where: { id }, include: { lines: true } });
+    if (!guia || guia.docType !== 'GUIA_REMISION') return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (guia.status === 'ACCEPTED') return reply.code(422).send({ error: 'ALREADY_EMITTED', message: 'La guía ya fue aceptada por SUNAT' });
+    if (guia.status === 'VOIDED')   return reply.code(422).send({ error: 'GUIA_VOIDED', message: 'La guía está anulada' });
+    if (guia.status === 'SENT')     return reply.code(422).send({ error: 'IN_PROGRESS', message: 'La guía ya se envió; espera la respuesta de SUNAT' });
+
+    const payload = buildGuiaPayload(guia as any);
+    const problems = validateGuiaForGre(payload);
+    if (problems.length) return reply.code(422).send({ error: 'GUIA_INCOMPLETE', message: problems.join(' · '), problems });
+
+    await prisma.invoice.update({ where: { id }, data: { status: 'SENT' as never, rejectionReason: null } });
+    let res;
+    try {
+      res = await emitirGuia(payload);
+    } catch (err: any) {
+      await prisma.invoice.update({ where: { id }, data: { status: 'REJECTED', rejectionReason: err.message, cdrResponse: (err.detail ?? null) as never } });
+      return reply.code(err.statusCode ?? 502).send({ error: 'FACTPRO_ERROR', message: err.message, detail: err.detail });
+    }
+    const estado = (res.data?.descripcion_estado ?? '').toUpperCase();
+    const status = res.exito === false || estado.includes('RECHAZ') ? 'REJECTED'
+                 : estado.includes('ACEPT') ? 'ACCEPTED'
+                 : 'SENT';   // REGISTRADO / PENDIENTE: SUNAT responde de forma asíncrona
+    const updated = await prisma.invoice.update({
+      where: { id },
+      data: {
+        status: status as never,
+        hashCpe: res.data?.hash ?? null,
+        qrCodeUrl: res.data?.qr ?? null,
+        pdfUrl: res.archivos?.pdf || null,
+        xmlUrl: res.archivos?.xml || null,
+        cdrResponse: res as never,
+        rejectionReason: status === 'REJECTED' ? (res.mensaje ?? (estado || 'Rechazado por SUNAT')) : null,
+      },
+    });
+    return reply.send({ data: updated, factpro: res, status });
   });
 
   // POST /guia-remision/:id/anular — anular una guía interna (borrador)

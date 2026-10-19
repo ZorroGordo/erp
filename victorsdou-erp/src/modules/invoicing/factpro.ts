@@ -240,3 +240,166 @@ export function buildNotaCreditoPayload(args: {
     },
   };
 }
+
+// ─── Guía de Remisión Electrónica Remitente (GRE) — API v3 ────────────────────
+// Docs: https://docs.factpro.la/api-facturacion-v3/estructura-para-generar-guias-remitente
+// POST {v3}/guias · tipo_documento "11". Requiere activar GRE en Factpro
+// (Integración → Guías: usuario/clave SOL + ID/clave de la API de SUNAT).
+
+export interface FactproGuiaBody {
+  tipo_documento:          '11';
+  serie:                   string;
+  numero:                  string;
+  fecha_de_traslado:       string;          // YYYY-MM-DD
+  codigo_modo_transporte:  '01' | '02';     // 01 público · 02 privado
+  motivo_traslado:         string;          // catálogo 20
+  descripcion_motivo_traslado: string;
+  peso_bruto_unidad:       'KGM' | 'TNE';
+  peso_bruto_total:        string;
+  numero_de_bultos:        string;
+  observaciones:           string;
+  formato_pdf:             'a4';
+  cliente: {
+    cliente_tipo_documento:   string;       // 4 RUC · 2 DNI · 3 CE · 5 pasaporte · 1 no domiciliado
+    cliente_numero_documento: string;
+    cliente_denominacion:     string;
+    cliente_direccion:        string;
+    codigo_pais:              string;
+    ubigeo:                   string;
+    cliente_email:            string;
+    cliente_telefono:         string;
+  };
+  transportista: {
+    transportista_numero_documento: string;
+    transportista_denominacion:     string;
+    numero_registro_mtc:            string;
+  };
+  conductor: {
+    conductor_tipo_documento:      string;
+    conductor_numero_documento:    string;
+    conductor_nombres_y_apellidos: string;
+    conductor_numero_licencia:     string;
+    conductor_numero_de_placa:     string;
+  };
+  direccion_partida: { ubigeo: string; direccion: string };
+  direccion_llegada: { ubigeo: string; direccion: string };
+  items: { codigo: string; cantidad: string; descripcion: string; unidad: string }[];
+}
+
+export interface FactproV3Response {
+  exito?:   boolean;
+  mensaje?: string | null;
+  data?: {
+    numero?: string; archivo?: string; hash?: string; qr?: string;
+    tipo_estado?: string; descripcion_estado?: string;
+  };
+  archivos?: { pdf?: string; xml?: string; cdr?: string };
+  eventos?:  { date?: string; description?: string }[];
+  errors?:   unknown;
+}
+
+const MOTIVO_CODE: Record<string, string> = { VENTA: '01', COMPRA: '02', TRASLADO: '04', DEVOLUCION: '06', OTROS: '13' };
+
+/** Base v3: FACTPRO_GRE_BASE_URL o, si no está, FACTPRO_BASE_URL con /v2 → /v3. */
+export function factproV3Base(): string {
+  return (process.env.FACTPRO_GRE_BASE_URL ?? config.FACTPRO_BASE_URL.replace(/\/api\/v2\/?$/, '/api/v3')).replace(/\/$/, '');
+}
+
+export function buildGuiaPayload(g: {
+  series: string; correlative: string; entityDocNo: string; entityName: string; entityEmail?: string | null;
+  guiaMovementType?: string | null; guiaStartDate?: Date | null; issueDate: Date;
+  guiaTransportMode?: string | null; guiaGrossWeight?: unknown; guiaWeightUnit?: string | null; guiaPackages?: number | null;
+  guiaSenderAddress?: string | null; guiaOriginUbigeo?: string | null;
+  guiaRecipientAddress?: string | null; guiaDestUbigeo?: string | null;
+  guiaTransportistRuc?: string | null; guiaTransportistName?: string | null; guiaTransportistPlate?: string | null;
+  guiaTransportistLicense?: string | null; guiaDriverDocNo?: string | null; guiaDriverName?: string | null;
+  guiaGoodsDescription?: string | null;
+  lines: { description: string; qty: unknown; unitCode?: string | null; productId?: string | null }[];
+}): FactproGuiaBody {
+  const lima = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+  const doc = (g.entityDocNo ?? '').trim();
+  const clienteTipo = /^\d{11}$/.test(doc) ? '4' : /^\d{8}$/.test(doc) ? '2' : '3';
+  const mode = g.guiaTransportMode === '02' ? '02' : '01';
+  const motivo = MOTIVO_CODE[g.guiaMovementType ?? 'VENTA'] ?? '01';
+  const plate = (g.guiaTransportistPlate ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return {
+    tipo_documento: '11',
+    serie: g.series,
+    numero: String(parseInt(g.correlative, 10)),
+    fecha_de_traslado: lima(g.guiaStartDate ?? g.issueDate),
+    codigo_modo_transporte: mode,
+    motivo_traslado: motivo,
+    descripcion_motivo_traslado: motivo === '13' ? (g.guiaGoodsDescription ?? 'Otros').slice(0, 60) : '',
+    peso_bruto_unidad: g.guiaWeightUnit === 'TNE' ? 'TNE' : 'KGM',
+    peso_bruto_total: String(Number(g.guiaGrossWeight ?? 0)),
+    numero_de_bultos: String(g.guiaPackages ?? 1),
+    observaciones: '',
+    formato_pdf: 'a4',
+    cliente: {
+      cliente_tipo_documento: clienteTipo,
+      cliente_numero_documento: doc,
+      cliente_denominacion: g.entityName,
+      cliente_direccion: g.guiaRecipientAddress ?? '',
+      codigo_pais: '',
+      ubigeo: g.guiaDestUbigeo ?? '',
+      cliente_email: g.entityEmail ?? '',
+      cliente_telefono: '',
+    },
+    transportista: mode === '01'
+      ? { transportista_numero_documento: g.guiaTransportistRuc ?? '', transportista_denominacion: g.guiaTransportistName ?? '', numero_registro_mtc: '' }
+      : { transportista_numero_documento: '', transportista_denominacion: '', numero_registro_mtc: '' },
+    conductor: mode === '02'
+      ? {
+          conductor_tipo_documento: '2',
+          conductor_numero_documento: g.guiaDriverDocNo ?? '',
+          conductor_nombres_y_apellidos: g.guiaDriverName ?? '',
+          conductor_numero_licencia: (g.guiaTransportistLicense ?? '').toUpperCase(),
+          conductor_numero_de_placa: plate,
+        }
+      : { conductor_tipo_documento: '', conductor_numero_documento: '', conductor_nombres_y_apellidos: '', conductor_numero_licencia: '', conductor_numero_de_placa: '' },
+    direccion_partida: { ubigeo: g.guiaOriginUbigeo ?? '', direccion: g.guiaSenderAddress ?? '' },
+    direccion_llegada: { ubigeo: g.guiaDestUbigeo ?? '', direccion: g.guiaRecipientAddress ?? '' },
+    items: g.lines.map((l, i) => ({
+      codigo: String(i + 1),
+      cantidad: String(Number(l.qty)),
+      descripcion: l.description,
+      unidad: l.unitCode || 'NIU',
+    })),
+  };
+}
+
+/** Problemas que SUNAT rechazaría — se validan antes de llamar a Factpro. */
+export function validateGuiaForGre(p: FactproGuiaBody): string[] {
+  const errs: string[] = [];
+  if (!/^\d{6}$/.test(p.direccion_partida.ubigeo)) errs.push('Falta el ubigeo del punto de partida');
+  if (!/^\d{6}$/.test(p.direccion_llegada.ubigeo)) errs.push('Falta el ubigeo del punto de llegada');
+  if (!p.direccion_partida.direccion.trim()) errs.push('Falta la dirección de partida');
+  if (!p.direccion_llegada.direccion.trim()) errs.push('Falta la dirección de llegada');
+  if (!(Number(p.peso_bruto_total) > 0)) errs.push('El peso bruto debe ser mayor a 0');
+  if (!/^\d{8}(\d{3})?$/.test(p.cliente.cliente_numero_documento)) errs.push('El destinatario necesita RUC o DNI válido');
+  if (p.codigo_modo_transporte === '01') {
+    if (!/^\d{11}$/.test(p.transportista.transportista_numero_documento)) errs.push('RUC del transportista inválido');
+    if (!p.transportista.transportista_denominacion.trim()) errs.push('Falta la razón social del transportista');
+  } else {
+    const c = p.conductor;
+    if (!/^\d{8}$/.test(c.conductor_numero_documento)) errs.push('DNI del conductor inválido');
+    if (!c.conductor_nombres_y_apellidos.trim()) errs.push('Falta el nombre del conductor');
+    if (!/^[A-Z0-9]{9,10}$/.test(c.conductor_numero_licencia)) errs.push('La licencia del conductor debe tener 9–10 caracteres');
+    if (!/^[A-Z0-9]{6,8}$/.test(c.conductor_numero_de_placa)) errs.push('Placa inválida (6–8 caracteres)');
+  }
+  if (!p.items.length) errs.push('La guía no tiene ítems');
+  return errs;
+}
+
+export async function emitirGuia(body: FactproGuiaBody): Promise<FactproV3Response> {
+  const res = await fetch(`${factproV3Base()}/guias`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) });
+  const text = await res.text();
+  let json: any;
+  try { json = JSON.parse(text); } catch { json = { exito: false, mensaje: text.slice(0, 300) }; }
+  if (!res.ok && json.exito !== false) {
+    throw Object.assign(new Error(`Factpro error: ${json?.mensaje ?? json?.message ?? `HTTP ${res.status}`}`), {
+      statusCode: res.status >= 500 ? 502 : 422, code: 'FACTPRO_ERROR', detail: json,
+    });
+  }
+  return json as FactproV3Response;
+}

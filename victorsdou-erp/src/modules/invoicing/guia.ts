@@ -188,7 +188,7 @@ export async function buildGuiaPrefill(orderId: string) {
     grossWeightKg,
     allWeightsKnown: knownWeights.length === items.length,
     transport: {
-      mode:          cfg.transportMode ?? '02',
+      mode:          cfg.transportMode ?? '01',   // Victorsdou despacha con empresa de reparto
       vehiclePlate:  cfg.vehiclePlate ?? '',
       driverDocNo:   cfg.driverDocNo ?? '',
       driverName:    cfg.driverName ?? '',

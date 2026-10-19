@@ -13,7 +13,7 @@ import { GuiaRemisionModal, guiaNumber, printGuiaById } from '../components/Guia
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocType = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
-type InvoiceStatus = 'DRAFT' | 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'VOIDED';
+type InvoiceStatus = 'DRAFT' | 'PENDING' | 'SENT' | 'ACCEPTED' | 'REJECTED' | 'VOIDED';
 type TabType = 'invoices' | 'pending-orders';
 
 interface Invoice {
@@ -118,6 +118,7 @@ function StatusBadge({ status, reason }: { status: InvoiceStatus; reason?: strin
   const map: Record<InvoiceStatus, { label: string; icon: React.ReactNode; cls: string }> = {
     DRAFT: { label: 'Borrador', icon: <Clock size={12} />, cls: 'bg-gray-100 text-gray-600' },
     PENDING: { label: 'Enviando…', icon: <Loader2 size={12} className="animate-spin" />, cls: 'bg-yellow-100 text-yellow-700' },
+    SENT: { label: 'Enviada', icon: <Clock size={12} />, cls: 'bg-yellow-100 text-yellow-700' },
     ACCEPTED: { label: 'Aceptado', icon: <CheckCircle2 size={12} />, cls: 'bg-green-100 text-green-700' },
     REJECTED: { label: 'Rechazado', icon: <XCircle size={12} />, cls: 'bg-red-100 text-red-700' },
     VOIDED: { label: 'Anulado', icon: <AlertCircle size={12} />, cls: 'bg-orange-100 text-orange-700' },
@@ -970,6 +971,28 @@ export default function Invoices() {
     onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Error'),
   });
 
+  const { data: guiaCfg } = useQuery<any>({
+    queryKey: ['guia-config'],
+    queryFn: () => api.get('/v1/invoices/guia-config').then(r => r.data.data),
+    staleTime: 300_000,
+  });
+  const greEnabled = !!guiaCfg?.greEnabled;
+
+  const emitGuiaMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/v1/invoices/guia-remision/${id}/emitir`).then(r => r.data),
+    onMutate: () => toast.loading('Enviando guía a SUNAT…', { id: 'gre' }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      if (res.status === 'ACCEPTED') toast.success('✅ Guía aceptada por SUNAT', { id: 'gre' });
+      else if (res.status === 'SENT') toast.success('Guía enviada — SUNAT aún no responde', { id: 'gre' });
+      else toast.error(`⚠️ Rechazada: ${res.data?.rejectionReason ?? ''}`, { id: 'gre' });
+    },
+    onError: (e: any) => {
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      toast.error(e?.response?.data?.message ?? 'Error al emitir la guía', { id: 'gre' });
+    },
+  });
+
   const anularGuiaMutation = useMutation({
     mutationFn: (id: string) => api.post(`/v1/invoices/guia-remision/${id}/anular`),
     onSuccess: () => {
@@ -1094,7 +1117,13 @@ export default function Invoices() {
                                 <Eye size={12} />
                                 {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                               </button>
-                              {inv.docType === 'GUIA_REMISION' && inv.status !== 'VOIDED' && (
+                              {inv.docType === 'GUIA_REMISION' && greEnabled && (inv.status === 'DRAFT' || inv.status === 'REJECTED') && (
+                                <button onClick={() => emitGuiaMutation.mutate(inv.id)} disabled={emitGuiaMutation.isPending}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
+                                  {emitGuiaMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} {inv.status === 'REJECTED' ? 'Reintentar' : 'Emitir a SUNAT'}
+                                </button>
+                              )}
+                              {inv.docType === 'GUIA_REMISION' && inv.status !== 'VOIDED' && !(inv.status === 'ACCEPTED' && inv.pdfUrl) && (
                                 <>
                                   <button onClick={() => printGuiaById(inv.id)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-xs font-medium hover:bg-purple-100 transition-all">
                                     <FileDown size={12} /> PDF
