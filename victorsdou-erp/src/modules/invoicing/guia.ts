@@ -182,7 +182,8 @@ export async function buildGuiaPrefill(orderId: string) {
     },
     partida: { address: cfg.partidaAddress ?? '', ubigeo: cfg.partidaUbigeo ?? '' },
     llegada: { address: llegadaAddress, ubigeo: ubigeoForDistrict(llegadaDistrict) },
-    startDate: (order.deliveryDate ?? new Date()).toISOString().slice(0, 10),
+    // Fecha en hora de Lima: toISOString() (UTC) corría la entrega un día.
+    startDate: (order.deliveryDate ?? new Date()).toLocaleDateString('en-CA', { timeZone: 'America/Lima' }),
     items,
     grossWeightKg,
     allWeightsKnown: knownWeights.length === items.length,
