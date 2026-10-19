@@ -307,6 +307,45 @@ function CreateCustomerModal({
   );
 }
 
+// ── Condición de pago (detalle del pedido, editable mientras no esté pagado) ──
+function PaymentConditionEditor({ order }: { order: any }) {
+  const qc = useQueryClient();
+  const days0 = Number(order.creditPaymentTermsDays ?? 0);
+  const [editing, setEditing] = useState(false);
+  const [cond, setCond] = useState<'CONTADO' | 'CREDITO'>(days0 > 0 ? 'CREDITO' : 'CONTADO');
+  const [days, setDays] = useState(String(days0 > 0 ? days0 : Number(order.customer?.paymentTermsDays ?? 0) || 30));
+  const locked = order.paymentStatus === 'PAID' || order.status === 'CANCELLED';
+  const save = useMutation({
+    mutationFn: () => api.patch(`/v1/sales-orders/${order.id}/payment-condition`, {
+      paymentCondition: cond, creditPaymentTermsDays: cond === 'CREDITO' ? parseInt(days, 10) : undefined,
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sales-orders'] }); toast.success('Condición de pago actualizada'); setEditing(false); },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error al actualizar'),
+  });
+  return (
+    <div className="mt-3 text-xs">
+      <p className="font-semibold text-gray-500 uppercase tracking-wider mb-1">Condición de pago</p>
+      {!editing ? (
+        <div className="flex items-center gap-2 text-gray-700">
+          <span className={days0 > 0 ? 'text-amber-700 font-medium' : ''}>{paymentConditionLabel(order)}</span>
+          {order.paymentDueDate && days0 > 0 && <span className="text-gray-400">· vence {new Date(order.paymentDueDate).toLocaleDateString('es-PE')}</span>}
+          {!locked && <button className="text-brand-600 hover:underline" onClick={() => setEditing(true)}>Cambiar</button>}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="input py-1 text-xs w-28" value={cond} onChange={e => setCond(e.target.value as any)}>
+            <option value="CONTADO">Contado</option>
+            <option value="CREDITO">Crédito</option>
+          </select>
+          {cond === 'CREDITO' && (<><input type="number" min={1} max={365} className="input py-1 text-xs w-20" value={days} onChange={e => setDays(e.target.value)} /><span>días</span></>)}
+          <button className="btn-primary py-1 px-2 text-xs" disabled={save.isPending} onClick={() => save.mutate()}>Guardar</button>
+          <button className="btn-secondary py-1 px-2 text-xs" onClick={() => setEditing(false)}>Cancelar</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Payment Confirmation Modal ────────────────────────────────────────────────
 
 function PaymentModal({
@@ -318,7 +357,8 @@ function PaymentModal({
   onClose: () => void;
   onConfirmed: () => void;
 }) {
-  const [method, setMethod] = useState('YAPE');
+  const orderCreditDays = Number(order.creditPaymentTermsDays ?? 0);
+  const [method, setMethod] = useState(orderCreditDays > 0 ? 'CREDIT' : 'YAPE');
   const [amount, setAmount] = useState(Number(order.totalPen ?? 0).toFixed(2));
   const [referenceNo, setReferenceNo] = useState('');
   const [notes, setNotes] = useState('');
@@ -329,8 +369,9 @@ function PaymentModal({
   // Credit-specific state
   const customerTermsDays = Number(order.customer?.paymentTermsDays ?? 0);
   const customerCreditLimit = Number(order.customer?.creditLimitPen ?? 0);
-  const [overrideTerms, setOverrideTerms] = useState(false);
-  const [customTermsDays, setCustomTermsDays] = useState(String(customerTermsDays));
+  // Pedido creado "a crédito N días": usar esos días (override del cliente).
+  const [overrideTerms, setOverrideTerms] = useState(orderCreditDays > 0 && orderCreditDays !== customerTermsDays);
+  const [customTermsDays, setCustomTermsDays] = useState(String(orderCreditDays > 0 ? orderCreditDays : customerTermsDays));
   const isCredit = method === 'CREDIT';
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -416,9 +457,14 @@ function PaymentModal({
                   <div className="font-medium text-gray-800">{customerCreditLimit > 0 ? `S/ ${fmtNum(customerCreditLimit)}` : 'Sin límite'}</div>
                 </div>
               </div>
-              {customerTermsDays > 0 && (
+              {orderCreditDays > 0 && (
+                <div className="text-xs text-amber-800">Pedido registrado a <b>crédito {orderCreditDays} días</b>{order.paymentDueDate ? ` · vence ${new Date(order.paymentDueDate).toLocaleDateString('es-PE')}` : ''}</div>
+              )}
+              {(overrideTerms ? (parseInt(customTermsDays, 10) || 0) : customerTermsDays) > 0 && (
                 <div className="text-xs text-gray-500">
-                  Vencimiento: {new Date(Date.now() + (overrideTerms ? (parseInt(customTermsDays, 10) || 0) : customerTermsDays) * 86400000).toLocaleDateString('es-PE')}
+                  Vencimiento: {(orderCreditDays > 0 && order.paymentDueDate && (overrideTerms ? parseInt(customTermsDays, 10) === orderCreditDays : customerTermsDays === orderCreditDays))
+                    ? new Date(order.paymentDueDate).toLocaleDateString('es-PE')
+                    : new Date(Date.now() + (overrideTerms ? (parseInt(customTermsDays, 10) || 0) : customerTermsDays) * 86400000).toLocaleDateString('es-PE')}
                 </div>
               )}
               <label className="flex items-center gap-2 pt-1 cursor-pointer">
@@ -762,6 +808,13 @@ const CATEGORY_LABEL: Record<string, string> = {
   OTROS:            'Otros',
 };
 
+// Condición de pago: creditPaymentTermsDays null/0 = contado, > 0 = crédito N días.
+function paymentConditionLabel(o: any): string {
+  const d = Number(o?.creditPaymentTermsDays ?? 0);
+  return d > 0 ? `Crédito ${d} días` : 'Contado';
+}
+const CREDIT_DAY_PRESETS = [7, 15, 30, 45, 60];
+
 function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
   return [
     // ── Pedido
@@ -834,6 +887,12 @@ function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
     // ── Pago
     { id: 'paymentStatus', label: 'Estado pago', group: 'Pago', defaultVisible: true,
       render: (o) => <PaymentBadge status={o.paymentStatus ?? 'UNPAID'} /> },
+    { id: 'paymentCondition', label: 'Condición', group: 'Pago', defaultVisible: true,
+      render: (o) => Number(o.creditPaymentTermsDays ?? 0) > 0
+        ? <span className="text-xs text-amber-700" title={o.paymentDueDate ? `Vence ${new Date(o.paymentDueDate).toLocaleDateString('es-PE')}` : undefined}>
+            {paymentConditionLabel(o)}{o.paymentDueDate ? <span className="block text-[10px] text-gray-400">vence {new Date(o.paymentDueDate).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' })}</span> : null}
+          </span>
+        : <span className="text-xs text-gray-500">Contado</span> },
     { id: 'paymentMethod', label: 'Forma pago', group: 'Pago', defaultVisible: true,
       render: (o) => {
         const methods = (o.payments ?? []).map((p: any) => paymentMethods.find(m => m.value === p.method)?.label ?? p.method);
@@ -982,6 +1041,8 @@ function SalesReportExportModal({
             'IGV (18%)': Number(lineIgv.toFixed(2)),
             'Total': Number(lineTotal.toFixed(2)),
             'Estado Pago': PAYMENT_STATUS_LABEL[o.paymentStatus] ?? o.paymentStatus ?? '',
+            'Condición de Pago': paymentConditionLabel(o),
+            'Vencimiento': o.paymentDueDate ? new Date(o.paymentDueDate).toLocaleDateString('es-PE') : '',
             'Forma de Pago': methods.join(', '),
             'Descuento %': line.discountPct ? Number(line.discountPct) : '',
           };
@@ -1173,6 +1234,8 @@ export default function SalesOrders() {
   const [masterDiscount, setMasterDiscount] = useState(0);
   const [orderNotes,  setOrderNotes]  = useState('');
   const [sucursalId, setSucursalId]   = useState('');
+  const [paymentCondition, setPaymentCondition] = useState<'CONTADO' | 'CREDITO'>('CONTADO');
+  const [creditDays, setCreditDays] = useState('30');
   const [lines, setLines] = useState<{ productId: string; qty: number; unitPrice: string; discountPct: number }[]>([
     { productId: '', qty: 1, unitPrice: '', discountPct: 0 },
   ]);
@@ -1249,6 +1312,15 @@ export default function SalesOrders() {
   // Solo productos terminados y activos: los insumos no se venden.
   const productList  = (products?.data ?? []).filter((p: any) => p.productType === 'FINISHED' && p.isActive !== false);
 
+  // Default payment condition from the customer's terms when the customer changes
+  useEffect(() => {
+    const cust = customerList.find((c: any) => c.id === customerId);
+    const terms = Number(cust?.paymentTermsDays ?? 0);
+    if (terms > 0) { setPaymentCondition('CREDITO'); setCreditDays(String(terms)); }
+    else { setPaymentCondition('CONTADO'); setCreditDays('30'); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerId]);
+
   // Auto-select default sucursal when customer changes
   useEffect(() => {
     if (!customerId) { setSucursalId(''); return; }
@@ -1323,6 +1395,8 @@ export default function SalesOrders() {
       setMasterDiscount(0);
       setInvoiceType('');
       setOrderNotes('');
+      setPaymentCondition('CONTADO');
+      setCreditDays('30');
     },
     onError: (e: any) => toast.error(e.response?.data?.message ?? 'Error al crear pedido'),
   });
@@ -1385,8 +1459,12 @@ export default function SalesOrders() {
     const validLines = lines.filter(l => l.productId);
     if (!customerId) return toast.error('Selecciona un cliente');
     if (validLines.length === 0) return toast.error('Agrega al menos un producto');
+    const days = parseInt(creditDays, 10);
+    if (paymentCondition === 'CREDITO' && !(days >= 1 && days <= 365)) return toast.error('Indica los días de crédito (1–365)');
 
     createOrder.mutate({
+      paymentCondition,
+      creditPaymentTermsDays: paymentCondition === 'CREDITO' ? days : undefined,
       customerId,
       channel,
       invoiceType: invoiceType || undefined,
@@ -1775,6 +1853,53 @@ export default function SalesOrders() {
             </div>
           )}
 
+          {/* Condición de pago */}
+          {(() => {
+            const cust = customerList.find((c: any) => c.id === customerId);
+            const terms = Number(cust?.paymentTermsDays ?? 0);
+            const limit = Number(cust?.creditLimitPen ?? 0);
+            const days = parseInt(creditDays, 10) || 0;
+            // Saldo a crédito abierto del cliente (pedidos a crédito no pagados ni cancelados)
+            const openCredit = (orders?.data ?? [])
+              .filter((o: any) => o.customerId === customerId && Number(o.creditPaymentTermsDays ?? 0) > 0 && o.paymentStatus !== 'PAID' && o.status !== 'CANCELLED')
+              .reduce((s: number, o: any) => s + Number(o.totalPen ?? 0), 0);
+            const warnDays = paymentCondition === 'CREDITO' && customerId && days > terms;
+            const warnLimit = paymentCondition === 'CREDITO' && limit > 0 && openCredit + orderPreview.total > limit;
+            return (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Condición de pago</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+                    {(['CONTADO', 'CREDITO'] as const).map(c => (
+                      <button key={c} type="button" onClick={() => setPaymentCondition(c)}
+                        className={`px-3 py-1.5 text-xs font-medium ${paymentCondition === c ? (c === 'CREDITO' ? 'bg-amber-600 text-white' : 'bg-brand-600 text-white') : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                        {c === 'CONTADO' ? 'Contado' : 'Crédito'}
+                      </button>
+                    ))}
+                  </div>
+                  {paymentCondition === 'CREDITO' && (
+                    <>
+                      {CREDIT_DAY_PRESETS.map(d => (
+                        <button key={d} type="button" onClick={() => setCreditDays(String(d))}
+                          className={`px-2 py-1 rounded text-xs border ${days === d ? 'bg-amber-100 border-amber-400 text-amber-800' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                          {d}
+                        </button>
+                      ))}
+                      <input type="number" min={1} max={365} className="input w-20 py-1 text-xs" value={creditDays} onChange={e => setCreditDays(e.target.value)} />
+                      <span className="text-xs text-gray-500">días{days > 0 ? ` · vence ${new Date(Date.now() + days * 86400000).toLocaleDateString('es-PE')}` : ''}</span>
+                    </>
+                  )}
+                </div>
+                {warnDays && (
+                  <p className="text-xs text-amber-700 mt-1">⚠ El cliente tiene {terms > 0 ? `${terms} días` : 'condición contado'} de crédito; estás dando {days} días.</p>
+                )}
+                {warnLimit && (
+                  <p className="text-xs text-amber-700 mt-1">⚠ Supera el límite de crédito del cliente (S/ {fmtNum(limit)}): crédito abierto S/ {fmtNum(openCredit)} + este pedido S/ {fmtNum(orderPreview.total)}.</p>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Notes + submit */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Notas</label>
@@ -2122,6 +2247,8 @@ export default function SalesOrders() {
                                 ) : (
                                   <span className="text-gray-400">Sin lineas</span>
                                 )}
+
+                                <PaymentConditionEditor order={o} />
 
                                 {(o.payments ?? []).length > 0 && (
                                   <div className="mt-3">

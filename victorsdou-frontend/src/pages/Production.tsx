@@ -735,7 +735,12 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                       const c = consumptions[l.ingredientId] ?? { actualQty: '', lotNumber: '', batchId: '', manual: false };
                       return (
                         <tr key={l.id}>
-                          <td className="px-3 py-2 font-medium">{l.ingredient.name}</td>
+                          <td className="px-3 py-2 font-medium">
+                            {l.ingredient.name}
+                            {(l.ingredient as any).isActive === false && (
+                              <span className="ml-1.5 text-[10px] uppercase tracking-wide text-red-600 bg-red-50 px-1.5 py-0.5 rounded" title="Materia prima inactiva: corrige la receta">Inactiva</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right font-mono text-gray-500 text-xs">
                             {planned.toFixed(3)} {l.uom}
                           </td>
@@ -784,7 +789,12 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
           <button onClick={onClose} className="btn-secondary">Cancelar</button>
           <button
             disabled={!canSubmit || close.isPending}
-            onClick={() => close.mutate({
+            onClick={() => {
+              // Warn before closing with BOM lines left at 0/empty — their
+              // consumption would simply not be recorded.
+              const zeroed = (recipe?.bomLines ?? []).filter(b => !(Number(consumptions[b.ingredientId]?.actualQty) > 0));
+              if (zeroed.length > 0 && !window.confirm(`No se registrará consumo de: ${zeroed.map(b => b.ingredient.name.trim()).join(', ')}.\n¿Seguro que no se consumieron?`)) return;
+              close.mutate({
               completedAt: new Date(completedAt).toISOString(),
               actualYieldQty: Number(actualYieldQty),
               finishedLotNumber: finishedLotNumber || undefined,
@@ -800,7 +810,8 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                   batchId: v.batchId || undefined,
                 }))
                 .filter(c => c.actualQty > 0),
-            })}
+              });
+            }}
             className="btn-primary flex items-center gap-2 disabled:opacity-50"
           >
             {close.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}

@@ -68,7 +68,7 @@ export async function inventoryRoutes(app: FastifyInstance) {
     const ingredient = await prisma.ingredient.create({
       data: {
         sku:           body.sku.toUpperCase(),
-        name:          body.name,
+        name:          String(body.name ?? '').replace(/\s+/g, ' ').trim(),
         category:      body.category,
         baseUom:       body.baseUom,
         avgCostPen:    body.avgCostPen  ?? 0,

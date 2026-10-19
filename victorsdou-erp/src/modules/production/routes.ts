@@ -381,6 +381,12 @@ export async function productionRoutes(app: FastifyInstance) {
   app.patch('/orders/:id/status', { preHandler: [requireAnyOf('PRODUCTION', 'OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { status } = req.body as { status: string };
+    // COMPLETED only via POST /orders/:id/close — that is what posts the
+    // ingredient consumptions and the finished-goods output. Completing via a
+    // plain status change left orders "closed" with no inventory movements.
+    if (status === 'COMPLETED') {
+      return reply.code(422).send({ error: 'Para completar una orden usa "Cerrar orden" (registra el consumo de insumos).' });
+    }
     // Cancelling frees the reserved inventory.
     if (status === 'CANCELLED') {
       await releaseReservations(prisma, id);
@@ -537,10 +543,16 @@ export async function productionRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: recipe });
   });
 
-  /** Replace all BOM lines for a recipe (atomic PUT) */
+  /** Replace all BOM lines for a recipe (atomic PUT).
+   *  Versioning: if the recipe was already used by any production order, the
+   *  edit is saved as a NEW version (v+1, ACTIVE; the previous one → ARCHIVED)
+   *  so past orders keep their original formula and costs. Open orders keep
+   *  pointing at the version they were created with. Unused recipes are edited
+   *  in place. Everything runs in one transaction so a failure can never leave
+   *  a recipe with zero lines. */
   app.put('/recipes/:id/bom', { preHandler: [requireAnyOf('OPS_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { lines, yieldQty, yieldUom, doughWeightPerUnitG } = req.body as {
+    const { lines, yieldQty, yieldUom, doughWeightPerUnitG, changeReason } = (req.body ?? {}) as {
       lines: {
         ingredientId: string;
         qtyRequired: number;
@@ -551,38 +563,83 @@ export async function productionRoutes(app: FastifyInstance) {
       yieldQty?: number;
       yieldUom?: string;
       doughWeightPerUnitG?: number | null;
+      changeReason?: string;
     };
-    // Persist yield + dough-weight edits that come alongside the BOM (the editor
-    // sends them together); previously these were silently dropped here.
+    if (!Array.isArray(lines)) return reply.code(400).send({ error: 'Faltan las líneas de la receta' });
+    for (const l of lines) {
+      if (!l?.ingredientId) return reply.code(400).send({ error: 'Hay una línea sin materia prima' });
+      if (!(Number(l.qtyRequired) > 0)) return reply.code(400).send({ error: 'Todas las cantidades deben ser mayores que 0' });
+      if (!l.uom) return reply.code(400).send({ error: 'Hay una línea sin unidad de medida' });
+    }
+    const ingIds = [...new Set(lines.map(l => l.ingredientId))];
+    const found = await prisma.ingredient.findMany({ where: { id: { in: ingIds } }, select: { id: true } });
+    if (found.length !== ingIds.length) {
+      return reply.code(422).send({ error: 'Alguna materia prima de la receta ya no existe. Recarga la página e inténtalo de nuevo.' });
+    }
+
+    const current = await prisma.recipe.findUnique({ where: { id } });
+    if (!current) return reply.code(404).send({ error: 'Receta no encontrada' });
+
     const recipeData: any = {};
-    if (yieldQty != null && !Number.isNaN(Number(yieldQty))) recipeData.yieldQty = Number(yieldQty);
+    if (yieldQty != null && !Number.isNaN(Number(yieldQty)) && Number(yieldQty) > 0) recipeData.yieldQty = Number(yieldQty);
     if (yieldUom) recipeData.yieldUom = yieldUom;
     if (doughWeightPerUnitG !== undefined) {
       recipeData.doughWeightPerUnitG = doughWeightPerUnitG != null && !Number.isNaN(Number(doughWeightPerUnitG))
         ? Number(doughWeightPerUnitG) : null;
     }
-    if (Object.keys(recipeData).length > 0) {
-      await prisma.recipe.update({ where: { id }, data: recipeData });
-    }
-    // Atomic replace: delete existing, create new
-    await prisma.bOMLine.deleteMany({ where: { recipeId: id } });
-    if (lines.length > 0) {
-      await prisma.bOMLine.createMany({
-        data: lines.map(l => ({
-          recipeId: id,
-          ingredientId: l.ingredientId,
-          qtyRequired: l.qtyRequired,
-          uom: l.uom,
-          wasteFactorPct: l.wasteFactorPct ?? 0,
-          notes: l.notes ?? null,
-        })),
-      });
-    }
+    const lineData = (recipeId: string) => lines.map(l => ({
+      recipeId,
+      ingredientId: l.ingredientId,
+      qtyRequired: Number(l.qtyRequired),
+      uom: l.uom,
+      wasteFactorPct: Number(l.wasteFactorPct ?? 0) || 0,
+      notes: l.notes ?? null,
+    }));
+
+    const usedBy = await prisma.productionOrder.count({ where: { recipeId: id } });
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (usedBy > 0) {
+        // New version — leave the used one untouched.
+        const last = await tx.recipe.findFirst({ where: { productId: current.productId }, orderBy: { version: 'desc' } });
+        const version = (last?.version ?? current.version) + 1;
+        const created = await tx.recipe.create({
+          data: {
+            productId: current.productId,
+            version,
+            yieldQty: recipeData.yieldQty ?? current.yieldQty,
+            yieldUom: recipeData.yieldUom ?? current.yieldUom,
+            doughWeightPerUnitG: recipeData.doughWeightPerUnitG !== undefined ? recipeData.doughWeightPerUnitG : current.doughWeightPerUnitG,
+            effectiveFrom: new Date(),
+            changeReason: changeReason ?? `Edición de receta (v${current.version} → v${version})`,
+            status: 'ACTIVE' as never,
+            createdBy: req.actor!.sub,
+            approvedBy: req.actor!.sub,
+          },
+        });
+        if (lines.length > 0) await tx.bOMLine.createMany({ data: lineData(created.id) });
+        await tx.recipe.updateMany({
+          where: { productId: current.productId, status: 'ACTIVE' as never, id: { not: created.id } },
+          data: { status: 'ARCHIVED' as never, effectiveTo: new Date() },
+        });
+        return { recipeId: created.id, versioned: true, previousVersion: current.version };
+      }
+      if (Object.keys(recipeData).length > 0) {
+        await tx.recipe.update({ where: { id }, data: recipeData });
+      }
+      await tx.bOMLine.deleteMany({ where: { recipeId: id } });
+      if (lines.length > 0) await tx.bOMLine.createMany({ data: lineData(id) });
+      return { recipeId: id, versioned: false, previousVersion: null as number | null };
+    });
+
     const recipe = await prisma.recipe.findUnique({
-      where: { id },
+      where: { id: result.recipeId },
       include: { bomLines: { include: { ingredient: true } } },
     });
-    return reply.send({ data: recipe });
+    const openOrders = result.versioned
+      ? await prisma.productionOrder.count({ where: { recipeId: id, status: { notIn: ['COMPLETED', 'CANCELLED'] as never } } })
+      : 0;
+    return reply.send({ data: recipe, versioned: result.versioned, previousVersion: result.previousVersion, openOrdersOnPreviousVersion: openOrders });
   });
 
   /** Remove a single BOM line */
