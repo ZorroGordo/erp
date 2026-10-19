@@ -94,6 +94,17 @@ export function sunatUnitCode(unitOfSale?: string | null): string {
   return 'NIU';
 }
 
+// Peso a partir del nombre ("PAN CAMPESINO 800 GR", "Harina 1 KG") cuando el
+// producto no tiene weightGrams cargado.
+export function gramsFromName(name?: string | null): number | null {
+  if (!name) return null;
+  const m = name.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilos?|gr|grs|g)\b/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(',', '.'));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return /^k/i.test(m[2]) ? Math.round(n * 1000) : Math.round(n);
+}
+
 // ── Pre-llenado de la guía desde un pedido ───────────────────────────────────
 export async function buildGuiaPrefill(orderId: string) {
   const order = await prisma.salesOrder.findUnique({
@@ -134,7 +145,7 @@ export async function buildGuiaPrefill(orderId: string) {
 
   const items = order.lines.map(l => {
     const qty = Number(l.qty);
-    const grams = l.product?.weightGrams ?? null;
+    const grams = l.product?.weightGrams ?? gramsFromName(l.product?.name);
     return {
       productId:   l.productId,
       sku:         l.product?.sku ?? '',
@@ -149,7 +160,11 @@ export async function buildGuiaPrefill(orderId: string) {
     ? Math.round(knownWeights.reduce((s, i) => s + (i.weightKg ?? 0), 0) * 1000) / 1000
     : null;
 
+  // Pedidos e-commerce cuelgan de un cliente genérico ("Tienda Online"): el
+  // destinatario real es quien compró en la web.
   const customer = order.customer;
+  const isEcom = order.channel === 'ECOMMERCE';
+  const docNo = customer?.docNumber ?? '';
   return {
     order: {
       id: order.id, orderNumber: order.orderNumber, status: order.status,
@@ -158,8 +173,8 @@ export async function buildGuiaPrefill(orderId: string) {
     existingGuia: order.invoices[0] ?? null,
     recipient: {
       docType:  customer?.docType ?? '',
-      docNo:    customer?.docNumber ?? '',
-      name:     customer?.displayName ?? order.ecommerceCustomerName ?? '',
+      docNo:    /^\d{8}(\d{3})?$/.test(docNo) ? docNo : '',
+      name:     (isEcom && order.ecommerceCustomerName) ? order.ecommerceCustomerName : (customer?.displayName ?? order.ecommerceCustomerName ?? ''),
     },
     sender: {
       ruc:  config.COMPANY_RUC,
