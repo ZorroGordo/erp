@@ -9,6 +9,7 @@ import toast from 'react-hot-toast';
 import React, { useState, useRef, useEffect } from 'react';
 import { fmtMoney, fmtNum } from '../lib/fmt';
 import { RucLookupInput } from '../components/RucLookupInput';
+import { GuiaRemisionModal, guiaNumber, printGuiaById } from '../components/GuiaRemision';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DocType = 'FACTURA' | 'BOLETA' | 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'GUIA_REMISION';
@@ -204,6 +205,7 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
   const [paymentDueDays, setPaymentDueDays] = useState(0);
   const [selectedSalesOrderId, setSelectedSalesOrderId] = useState('');
   const [selectedInvoiceRef, setSelectedInvoiceRef] = useState('');
+  const [guiaFor, setGuiaFor] = useState<string | null>(null);
   const productRef = useRef<HTMLDivElement>(null);
 
   const { data: productsData } = useQuery<{ data: any[] }>({
@@ -484,7 +486,7 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
                   <option key={o.id} value={o.id}>{o.orderNumber} — {o.customer?.displayName}</option>
                 ))}
               </select>
-              <p className="text-xs text-teal-500 mt-1.5">Selecciona el pedido al que se generará la guía de remisión.</p>
+              <p className="text-xs text-teal-500 mt-1.5">Selecciona el pedido y pulsa «Continuar con la guía». También puedes generarla desde Ventas.</p>
             </div>
           )}
 
@@ -576,22 +578,28 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
           <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2 rounded-xl hover:bg-gray-200 transition-all">
             Cancelar
           </button>
+          {docType === 'GUIA_REMISION' ? (
+            <button onClick={() => setGuiaFor(selectedSalesOrderId)} disabled={!selectedSalesOrderId}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-all shadow-sm">
+              <Truck size={14} /> Continuar con la guía
+            </button>
+          ) : (
           <div className="flex gap-2">
             <button onClick={() => createMutation.mutate(false)} disabled={!canSave || createMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-white border border-brand-300 text-brand-700 rounded-xl text-sm font-medium hover:bg-brand-50 disabled:opacity-50 transition-all">
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />}
               Guardar borrador
             </button>
-            {docType !== 'GUIA_REMISION' && (
-<button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
+            <button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-all shadow-sm">
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               Guardar y Emitir a SUNAT
             </button>
-)}
           </div>
+          )}
         </div>
       </div>
+      {guiaFor && <GuiaRemisionModal orderId={guiaFor} onClose={() => setGuiaFor(null)} onCreated={() => onClose()} />}
     </div>
   );
 }
@@ -917,18 +925,8 @@ export default function Invoices() {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
 
-  // Guía de Remisión modal state
+  // Guía de Remisión (componente compartido con Ventas)
   const [guiaOrderId, setGuiaOrderId] = useState<string | null>(null);
-  const [guiaMovementType, setGuiaMovementType] = useState('VENTA');
-  const [guiaSenderName, setGuiaSenderName] = useState('Victorsdou SAC');
-  const [guiaSenderAddress, setGuiaSenderAddress] = useState('');
-  const [guiaRecipientName, setGuiaRecipientName] = useState('');
-  const [guiaRecipientAddress, setGuiaRecipientAddress] = useState('');
-  const [guiaTransportistName, setGuiaTransportistName] = useState('');
-  const [guiaTransportistRuc, setGuiaTransportistRuc] = useState('');
-  const [guiaTransportistPlate, setGuiaTransportistPlate] = useState('');
-  const [guiaTransportistLicense, setGuiaTransportistLicense] = useState('');
-  const [guiaGoodsDescription, setGuiaGoodsDescription] = useState('');
   const toggleInvoiceDetail = (id: string) => setExpandedInvoiceId(prev => prev === id ? null : id);
 
   // Fetch detail for expanded invoice
@@ -972,46 +970,15 @@ export default function Invoices() {
     onError: (e: any) => toast.error(e?.response?.data?.detail ?? 'Error'),
   });
 
-  const guiaRemisionMutation = useMutation({
-    mutationFn: (payload: any) => api.post('/v1/invoices/guia-remision', payload),
-    onMutate: () => toast.loading('Generando guía de remisión…', { id: 'guia' }),
+  const anularGuiaMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/v1/invoices/guia-remision/${id}/anular`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['invoices'] });
-      qc.invalidateQueries({ queryKey: ['pending-orders'] });
-      toast.success('Guía de remisión generada — pedido marcado como Listo', { id: 'guia' });
-      setGuiaOrderId(null);
-      setGuiaMovementType('VENTA');
-      setGuiaRecipientName(''); setGuiaRecipientAddress('');
-      setGuiaTransportistName(''); setGuiaTransportistRuc(''); setGuiaTransportistPlate(''); setGuiaTransportistLicense('');
-      setGuiaGoodsDescription('');
+      qc.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.success('Guía anulada');
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Error al crear guía', { id: 'guia' }),
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'No se pudo anular la guía'),
   });
-
-  const handleCreateGuia = () => {
-    if (!guiaOrderId) return;
-    guiaRemisionMutation.mutate({
-      salesOrderId: guiaOrderId,
-      movementType: guiaMovementType,
-      senderName: guiaSenderName,
-      senderAddress: guiaSenderAddress,
-      recipientName: guiaRecipientName,
-      recipientAddress: guiaRecipientAddress,
-      transportistName: guiaTransportistName || undefined,
-      transportistRuc: guiaTransportistRuc || undefined,
-      transportistPlate: guiaTransportistPlate || undefined,
-      transportistLicense: guiaTransportistLicense || undefined,
-      goodsDescription: guiaGoodsDescription || undefined,
-    });
-  };
-
-  const openGuiaModal = (order: any) => {
-    setGuiaOrderId(order.id);
-    setGuiaRecipientName(order.customer?.displayName ?? '');
-    // Auto-fill goods description from order lines
-    const desc = (order.lines ?? []).map((l: any) => `${Number(l.qty)} x ${l.product?.name ?? 'Producto'}`).join('; ');
-    setGuiaGoodsDescription(desc);
-  };
 
   const invoices = invoicesData?.data ?? [];
   const pendingOrders = pendingOrdersData?.data ?? [];
@@ -1037,89 +1004,7 @@ export default function Invoices() {
       {showExport && <ExportModal invoices={invoices} onClose={() => setShowExport(false)} />}
       {editingInvoice && <EditInvoiceModal invoice={editingInvoice} onClose={() => setEditingInvoice(null)} />}
 
-      {/* ── Guía de Remisión Modal ──────────────────────────────────────── */}
-      {guiaOrderId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2"><Truck size={18} className="text-purple-600" /> Generar Guía de Remisión</h3>
-              <button onClick={() => setGuiaOrderId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de movimiento</label>
-                <select className="input" value={guiaMovementType} onChange={e => setGuiaMovementType(e.target.value)}>
-                  <option value="VENTA">Venta</option>
-                  <option value="COMPRA">Compra</option>
-                  <option value="TRASLADO">Traslado entre establecimientos</option>
-                  <option value="DEVOLUCION">Devolución</option>
-                  <option value="OTROS">Otros</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Nombre remitente</label>
-                  <input className="input" value={guiaSenderName} onChange={e => setGuiaSenderName(e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Dirección remitente</label>
-                  <input className="input" value={guiaSenderAddress} onChange={e => setGuiaSenderAddress(e.target.value)} placeholder="Dirección de origen..." />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Nombre destinatario</label>
-                  <input className="input" value={guiaRecipientName} onChange={e => setGuiaRecipientName(e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Dirección destinatario</label>
-                  <input className="input" value={guiaRecipientAddress} onChange={e => setGuiaRecipientAddress(e.target.value)} placeholder="Dirección de destino..." />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Descripción de bienes transportados</label>
-                <textarea className="input min-h-[60px]" value={guiaGoodsDescription} onChange={e => setGuiaGoodsDescription(e.target.value)} placeholder="Detalle de mercadería..." />
-              </div>
-
-              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-3">
-                <div className="text-xs font-semibold text-purple-800">Datos del transportista (opcional)</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Nombre / Razón social</label>
-                    <input className="input text-sm" value={guiaTransportistName} onChange={e => setGuiaTransportistName(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">RUC</label>
-                    <input className="input text-sm" value={guiaTransportistRuc} onChange={e => setGuiaTransportistRuc(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Placa del vehículo</label>
-                    <input className="input text-sm" value={guiaTransportistPlate} onChange={e => setGuiaTransportistPlate(e.target.value)} placeholder="ABC-123" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Licencia</label>
-                    <input className="input text-sm" value={guiaTransportistLicense} onChange={e => setGuiaTransportistLicense(e.target.value)} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button onClick={handleCreateGuia} disabled={guiaRemisionMutation.isPending || !guiaRecipientName}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700 disabled:opacity-50 transition-all">
-                  {guiaRemisionMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
-                  Generar Guía
-                </button>
-                <button onClick={() => setGuiaOrderId(null)} className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200 transition-all">
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {guiaOrderId && <GuiaRemisionModal orderId={guiaOrderId} onClose={() => setGuiaOrderId(null)} />}
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -1200,14 +1085,29 @@ export default function Invoices() {
                           <td className="px-5 py-3 text-xs text-gray-600">{inv.paymentDueDays ? `${inv.paymentDueDays}d` : inv.paymentDueDate ? new Date(inv.paymentDueDate).toLocaleDateString('es-PE') : 'Al contado'}</td>
                           <td className="px-5 py-3 text-right font-mono text-xs text-gray-500">S/ {fmtNum(inv.igvPen)}</td>
                           <td className="px-5 py-3 text-right font-mono font-semibold text-gray-800">S/ {fmtNum(inv.totalPen)}</td>
-                          <td className="px-5 py-3"><StatusBadge status={inv.status} reason={inv.rejectionReason ?? undefined} /></td>
+                          <td className="px-5 py-3">{inv.docType === 'GUIA_REMISION' && inv.status === 'DRAFT'
+                            ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700" title="Representación interna — no enviada a SUNAT"><Truck size={12} /> Interna</span>
+                            : <StatusBadge status={inv.status} reason={inv.rejectionReason ?? undefined} />}</td>
                           <td className="px-5 py-3" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-2">
                               <button onClick={() => toggleInvoiceDetail(inv.id)} className="flex items-center gap-1 px-2 py-1.5 bg-gray-50 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-100 transition-all" title="Ver detalle">
                                 <Eye size={12} />
                                 {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                               </button>
-                              {inv.status === 'DRAFT' && (
+                              {inv.docType === 'GUIA_REMISION' && inv.status !== 'VOIDED' && (
+                                <>
+                                  <button onClick={() => printGuiaById(inv.id)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-xs font-medium hover:bg-purple-100 transition-all">
+                                    <FileDown size={12} /> PDF
+                                  </button>
+                                  {inv.status === 'DRAFT' && (
+                                    <button onClick={() => { if (confirm(`¿Anular la guía ${guiaNumber(inv)}?`)) anularGuiaMutation.mutate(inv.id); }} disabled={anularGuiaMutation.isPending}
+                                      className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-medium hover:bg-red-50 hover:text-red-700 disabled:opacity-50 transition-all">
+                                      Anular
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                              {inv.status === 'DRAFT' && inv.docType !== 'GUIA_REMISION' && (
                                 <>
                                   <button onClick={() => setEditingInvoice(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all">Edit</button>
                                   {inv.docType !== 'GUIA_REMISION' && (
@@ -1227,7 +1127,7 @@ export default function Invoices() {
                                   <FileDown size={12} /> PDF
                                 </a>
                               )}
-                              {inv.status === 'ACCEPTED' && !inv.pdfUrl && (
+                              {inv.status === 'ACCEPTED' && !inv.pdfUrl && inv.docType !== 'GUIA_REMISION' && (
                                 <span className="text-xs text-gray-300 italic">Procesando...</span>
                               )}
                             </div>
@@ -1318,7 +1218,7 @@ export default function Invoices() {
                   {bulkCreateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}Facturar y emitir
                 </button>
                 {selectedOrders.size === 1 && (
-                  <button onClick={() => { const order = pendingOrders.find(o => selectedOrders.has(o.id)); if (order) openGuiaModal(order); }}
+                  <button onClick={() => { const order = pendingOrders.find(o => selectedOrders.has(o.id)); if (order) setGuiaOrderId(order.id); }}
                     className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 transition-all">
                     <Truck size={12} /> Generar Guía de Remisión
                   </button>

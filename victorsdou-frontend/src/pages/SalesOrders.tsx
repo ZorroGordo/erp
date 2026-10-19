@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
+import { GuiaRemisionModal, GUIA_ORDER_STATUSES, guiaNumber, printGuiaById } from '../components/GuiaRemision';
 
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -1194,6 +1195,7 @@ export default function SalesOrders() {
   const [dispatchConfirmOrder, setDispatchConfirmOrder] = useState<any>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showExportReport, setShowExportReport] = useState(false);
+  const [guiaOrderId, setGuiaOrderId] = useState<string | null>(null);
 
   // Column configuration
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -2005,6 +2007,22 @@ export default function SalesOrders() {
                                 <Check size={12} /> Aceptar
                               </button>
                             )}
+                            {(() => {
+                              const guia = (o.invoices ?? [])[0];
+                              if (guia) return (
+                                <button onClick={() => printGuiaById(guia.id)} title="Ver / imprimir guía de remisión"
+                                  className="flex items-center gap-1 px-2 py-1 rounded text-xs font-mono font-medium bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100">
+                                  <Truck size={12} /> {guiaNumber(guia)}
+                                </button>
+                              );
+                              if (GUIA_ORDER_STATUSES.includes(o.status)) return (
+                                <button onClick={() => setGuiaOrderId(o.id)} title="Generar guía de remisión"
+                                  className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700 hover:bg-purple-200">
+                                  <FileText size={12} /> Guía
+                                </button>
+                              );
+                              return null;
+                            })()}
                             {!isEcom && ['DRAFT', 'PENDING_PAYMENT', 'CONFIRMED'].includes(o.status) && (
                               <button onClick={() => statusAction.mutate({ id: o.id, action: 'cancel' })} className="p-1.5 bg-red-100 text-red-700 rounded hover:bg-red-200" title="Cancelar">
                                 <X size={14} />
@@ -2070,6 +2088,11 @@ export default function SalesOrders() {
                                     <span className="text-gray-400">Sin direccion</span>
                                   );
                                 })()}
+                                {(o.invoices ?? [])[0] && (
+                                  <div className="text-xs text-purple-700 mt-1 flex items-center gap-1">
+                                    <Truck size={12} /> Guía de remisión <span className="font-mono">{guiaNumber(o.invoices[0])}</span>
+                                  </div>
+                                )}
                                 {o.deliveryDate && (
                                   <div className="text-gray-600 text-xs mt-1">
                                     {new Date(o.deliveryDate).toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -2137,6 +2160,7 @@ export default function SalesOrders() {
       </div>
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
+      {guiaOrderId && <GuiaRemisionModal orderId={guiaOrderId} onClose={() => setGuiaOrderId(null)} />}
       {showCreateCustomer && (
         <CreateCustomerModal
           onClose={() => setShowCreateCustomer(false)}
