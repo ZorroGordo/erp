@@ -41,7 +41,7 @@ export async function normalizeImageForLlm(mimeType: string, dataBase64: string)
     mime = 'image/jpeg';
   }
 
-  let meta: sharp.Metadata;
+  let meta: { width?: number; height?: number };
   try {
     meta = await sharp(buf).metadata();
   } catch {
