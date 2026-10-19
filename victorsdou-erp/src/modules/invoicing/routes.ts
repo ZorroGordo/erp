@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
-import { emitirDocumento, buildFacturaPayload, buildGuiaPayload, validateGuiaForGre, emitirGuia } from './factpro';
-import { notifyInvoiceEmitted } from '../../services/notifications';
+import { buildGuiaPayload, validateGuiaForGre, emitirGuia } from './factpro';
+import { emitInvoice, refreshInvoiceStatus, nextCorrelative, EmitError } from './emit';
 import { buildGuiaPrefill, getGuiaConfig, saveGuiaConfig, sunatUnitCode, type GuiaConfigData } from './guia';
 
 export async function invoicingRoutes(app: FastifyInstance) {
@@ -138,13 +138,8 @@ export async function invoicingRoutes(app: FastifyInstance) {
                  : docType === 'NOTA_CREDITO' ? `FC${config.FACTPRO_SERIE_FACTURA.slice(1)}`
                  : config.FACTPRO_SERIE_FACTURA;
 
-    // Auto-increment correlative within series
-    const lastInvoice = await prisma.invoice.findFirst({
-      where: { series },
-      orderBy: { correlative: 'desc' },
-      select: { correlative: true },
-    });
-    const correlative = String((parseInt(lastInvoice?.correlative ?? '0') || 0) + 1).padStart(8, '0');
+    // Auto-increment correlative within series (máximo numérico)
+    const correlative = await nextCorrelative(series);
 
     // Compute line totals
     const computedLines = body.items.map(item => {
@@ -288,8 +283,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
 
       const docType = order.invoiceType === 'BOLETA' ? 'BOLETA' : 'FACTURA';
       const series = docType === 'BOLETA' ? config.FACTPRO_SERIE_BOLETA : config.FACTPRO_SERIE_FACTURA;
-      const lastInvoice = await prisma.invoice.findFirst({ where: { series }, orderBy: { correlative: 'desc' }, select: { correlative: true } });
-      const correlative = String((parseInt(lastInvoice?.correlative ?? '0') || 0) + 1).padStart(8, '0');
+      const correlative = await nextCorrelative(series);
 
       const igvRate = 0.18;
       const computedLines = order.lines.map(line => {
@@ -343,39 +337,9 @@ export async function invoicingRoutes(app: FastifyInstance) {
       // Emit if requested
       if (body.emitAfter) {
         try {
-          const tipoDocumento = docType === 'BOLETA' ? '03' : '01';
-          const serie = tipoDocumento === '01' ? config.FACTPRO_SERIE_FACTURA : config.FACTPRO_SERIE_BOLETA;
-          const payload = buildFacturaPayload({
-            tipoDocumento, serie,
-            entityDocType: (order.customer?.docNumber?.length === 11 ? 'RUC' : order.customer?.docNumber?.length === 8 ? 'DNI' : 'CE') as any,
-            entityDocNo: order.customer?.docNumber ?? '',
-            entityName: order.customer?.displayName ?? '',
-            entityEmail: order.customer?.email ?? undefined,
-            issueDate: new Date(),
-            currency: order.currency,
-            items: computedLines.map(l => ({ descripcion: l.description, cantidad: l.qty, valorUnitario: l.unitPrice, igvRate: l.igvRate })),
-          });
-          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'SENT' as never } });
-          const factproRes = await emitirDocumento(payload);
-          const accepted = factproRes.success && factproRes.state_description?.toLowerCase().includes('aceptado');
-          await prisma.invoice.update({
-            where: { id: invoice.id },
-            data: {
-              status: accepted ? 'ACCEPTED' : 'REJECTED',
-              series: factproRes.number?.split('-')[0] ?? invoice.series,
-              correlative: factproRes.number?.split('-')[1] ?? invoice.correlative,
-              hashCpe: factproRes.hash ?? null,
-              qrCodeUrl: factproRes.qr ?? null,
-              pdfUrl: factproRes.links?.pdf ?? null,
-              xmlUrl: factproRes.links?.xml ?? null,
-              nubefactId: factproRes.external_id ?? null,
-              cdrResponse: factproRes as never,
-              rejectionReason: !accepted ? (factproRes.message ?? 'Rechazado') : null,
-            },
-          });
-          results.push({ orderId: order.id, invoiceId: invoice.id, status: accepted ? 'ACCEPTED' : 'REJECTED' });
+          const r = await emitInvoice(invoice.id);
+          results.push({ orderId: order.id, invoiceId: invoice.id, status: r.status, error: r.status === 'REJECTED' ? r.invoice.rejectionReason : undefined });
         } catch (err: any) {
-          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'REJECTED', rejectionReason: err.message } });
           results.push({ orderId: order.id, invoiceId: invoice.id, status: 'ERROR', error: err.message });
         }
       } else {
@@ -389,81 +353,39 @@ export async function invoicingRoutes(app: FastifyInstance) {
   // ── Emit to SUNAT via Factpro ─────────────────────────────────────────────
   app.post('/:id/emit', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-
-    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { lines: true } });
-    if (!invoice) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (invoice.status === 'ACCEPTED') return reply.code(422).send({ error: 'ALREADY_EMITTED' });
-    if (invoice.status === 'VOIDED')   return reply.code(422).send({ error: 'INVOICE_VOIDED' });
-    // Una guía de remisión no es una factura: sin este guard se enviaría a SUNAT como tipo 01.
-    if (invoice.docType === 'GUIA_REMISION') {
-      return reply.code(422).send({
-        error: 'DOC_TYPE_NOT_EMITTABLE',
-        message: 'Este tipo de documento aún no se emite electrónicamente',
-        detail:  'Este tipo de documento aún no se emite electrónicamente',
-      });
-    }
-
-    const tipoDocumento = invoice.docType === "BOLETA" ? "03" : "01";
-    const serie = tipoDocumento === "01" ? config.FACTPRO_SERIE_FACTURA : config.FACTPRO_SERIE_BOLETA;
-
-    const payload = buildFacturaPayload({
-      tipoDocumento,
-      serie,
-      entityDocType:  invoice.entityDocNo.length === 11 ? 'RUC' : invoice.entityDocNo.length === 8 ? 'DNI' : 'CE',
-      entityDocNo:    invoice.entityDocNo,
-      entityName:     invoice.entityName,
-      entityEmail:    (invoice as any).entityEmail ?? undefined,
-      issueDate:      invoice.issueDate,
-      currency:       invoice.currency,
-      items: invoice.lines.map(l => ({
-        descripcion:   l.description,
-        cantidad:      Number(l.qty),
-        valorUnitario: Number(l.unitPrice),
-        igvRate:       Number(l.igvRate),
-      })),
-    });
-
-    // Mark as SENT while we call Factpro
-    await prisma.invoice.update({ where: { id }, data: { status: 'SENT' as never } });
-
-    let factproRes;
     try {
-      factproRes = await emitirDocumento(payload);
+      const r = await emitInvoice(id);
+      return reply.send({ data: r.factpro, invoice: r.invoice, status: r.status, accepted: r.status !== 'REJECTED' });
     } catch (err: any) {
-      await prisma.invoice.update({ where: { id }, data: { status: 'REJECTED', rejectionReason: err.message } });
-      return reply.code(err.statusCode ?? 502).send({ error: 'FACTPRO_ERROR', detail: err.message });
+      if (err instanceof EmitError) return reply.code(err.statusCode).send({ error: err.code, message: err.message, detail: err.message });
+      throw err;
     }
+  });
 
-    const accepted = factproRes.success && factproRes.state_description?.toLowerCase().includes('aceptado');
-    await prisma.invoice.update({
-      where: { id },
-      data: {
-        status:          accepted ? 'ACCEPTED' : 'REJECTED',
-        series:          factproRes.number?.split('-')[0] ?? invoice.series,
-        correlative:     factproRes.number?.split('-')[1] ?? invoice.correlative,
-        hashCpe:         factproRes.hash    ?? null,
-        qrCodeUrl:       factproRes.qr      ?? null,
-        pdfUrl:          factproRes.links?.pdf ?? null,
-        xmlUrl:          factproRes.links?.xml ?? null,
-        nubefactId:      factproRes.external_id ?? null,   // reuse field for factpro external_id
-        cdrResponse:     factproRes as never,
-        rejectionReason: !accepted ? (factproRes.message ?? factproRes.errors?.join('; ') ?? 'Rechazado por SUNAT') : null,
-      },
+  // ── POST /:id/refresh-status — consultar estado SUNAT en Factpro ─────────
+  app.post('/:id/refresh-status', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const r = await refreshInvoiceStatus(id);
+      return reply.send({ data: r.invoice, status: r.status });
+    } catch (err: any) {
+      if (err instanceof EmitError) return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  // ── POST /refresh-sent — actualizar todos los comprobantes «Enviados» ────
+  app.post('/refresh-sent', { preHandler: [requireAnyOf('ACCOUNTANT', 'FINANCE_MGR', 'SALES_MGR', 'SUPER_ADMIN')] }, async (_req, reply) => {
+    const sent = await prisma.invoice.findMany({
+      where: { status: 'SENT' as never, docType: { in: ['FACTURA', 'BOLETA'] as never[] } },
+      select: { id: true }, orderBy: { issueDate: 'desc' }, take: 50,
     });
-
-    // Fire-and-forget: notify client + ops after successful emission
-    if (accepted) {
-      notifyInvoiceEmitted({
-        series:      factproRes.number?.split('-')[0] ?? invoice.series,
-        correlative: factproRes.number?.split('-')[1] ?? invoice.correlative,
-        entityName:  invoice.entityName,
-        entityEmail: (invoice as any).entityEmail ?? null,
-        totalPen:    Number(invoice.totalPen),
-        pdfUrl:      factproRes.links?.pdf ?? null,
-      }).catch(console.error);
+    const out: { id: string; status?: string; error?: string }[] = [];
+    for (const { id } of sent) {
+      try { out.push({ id, status: (await refreshInvoiceStatus(id)).status }); }
+      catch (err: any) { out.push({ id, error: err.message }); }
     }
-
-    return reply.send({ data: factproRes, accepted });
+    return reply.send({ data: out });
   });
 
   // ── Guía de Remisión (remitente) ─────────────────────────────────────────
