@@ -67,7 +67,9 @@ export async function createOrder(input: {
   deliveryAddressId?: string; sucursalId?: string;
   lines: { productId: string; qty: number; notes?: string; unitPriceOverride?: number; discountPct?: number }[];
   notes?: string; createdBy: string; invoiceType?: string; masterDiscountPct?: number;
+  paymentCondition?: 'CONTADO' | 'CREDITO'; creditPaymentTermsDays?: number | null;
 }) {
+  const credit = resolvePaymentCondition(input.paymentCondition, input.creditPaymentTermsDays, input.deliveryDate ?? null, new Date());
   const pricing = await previewOrderPricing(input.customerId, input.lines);
   const orderNumber = `OV-${Date.now()}`;
 
@@ -110,6 +112,8 @@ export async function createOrder(input: {
       ...(input.sucursalId ? { sucursalId: input.sucursalId } : {}),
       notes: input.notes ?? null,
       createdBy: input.createdBy,
+      creditPaymentTermsDays: credit.creditPaymentTermsDays,
+      paymentDueDate: credit.paymentDueDate,
       lines: {
         create: finalLines.map((l) => ({
           productId: l.productId,
@@ -123,4 +127,25 @@ export async function createOrder(input: {
     },
     include: { lines: { include: { product: true } }, customer: true },
   });
+}
+
+/** Condición de pago del pedido.
+ *  Sin campo extra en BD: creditPaymentTermsDays null/0 = CONTADO, > 0 = CRÉDITO.
+ *  El vencimiento se cuenta desde la fecha de entrega si existe; si no, desde la
+ *  fecha del pedido. */
+export class PaymentConditionError extends Error {}
+export function resolvePaymentCondition(
+  condition: string | undefined | null,
+  days: number | string | null | undefined,
+  deliveryDate: string | Date | null,
+  orderDate: Date,
+): { creditPaymentTermsDays: number | null; paymentDueDate: Date | null } {
+  if (condition !== 'CREDITO') return { creditPaymentTermsDays: null, paymentDueDate: null };
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 1 || n > 365 || !Number.isInteger(n)) {
+    throw new PaymentConditionError('Días de crédito inválidos (entero entre 1 y 365)');
+  }
+  const base = deliveryDate ? new Date(deliveryDate) : orderDate;
+  const baseOk = Number.isNaN(base.getTime()) ? orderDate : base;
+  return { creditPaymentTermsDays: n, paymentDueDate: new Date(baseOk.getTime() + n * 86_400_000) };
 }

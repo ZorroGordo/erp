@@ -309,9 +309,12 @@ export async function invoicingRoutes(app: FastifyInstance) {
       const igvPen = computedLines.reduce((s, l) => s + l.igv, 0);
       const totalPen = computedLines.reduce((s, l) => s + l.total, 0);
 
-      const dueDate = order.customer?.paymentTermsDays
-        ? new Date(Date.now() + order.customer.paymentTermsDays * 86400_000)
-        : undefined;
+      // Credit condition chosen on the order wins; fall back to the customer's terms.
+      const dueDate = (order as any).paymentDueDate
+        ? new Date((order as any).paymentDueDate)
+        : order.customer?.paymentTermsDays
+          ? new Date(Date.now() + order.customer.paymentTermsDays * 86400_000)
+          : undefined;
 
       const invoice = await prisma.invoice.create({
         data: {

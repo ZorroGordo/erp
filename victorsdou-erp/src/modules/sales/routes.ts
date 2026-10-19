@@ -247,10 +247,16 @@ export async function salesRoutes(app: FastifyInstance) {
 
     // For CREDIT: amount = order total, paidAt = due date (future)
     const paymentAmount = isCredit ? Number(order.totalPen) : body.amountPen;
+    // Default: the condition chosen when the order was created, then the customer's terms.
+    const orderDays = order.creditPaymentTermsDays ?? 0;
     const termsDays = isCredit
-      ? (body.creditPaymentTermsDays ?? (order.customer as any)?.paymentTermsDays ?? 0)
+      ? (body.creditPaymentTermsDays ?? (orderDays > 0 ? orderDays : (order.customer as any)?.paymentTermsDays ?? 0))
       : 0;
-    const dueDate = isCredit ? new Date(Date.now() + termsDays * 86400000) : null;
+    // Keep the due date fixed at order creation when the days didn't change.
+    const dueDate = !isCredit ? null
+      : (orderDays > 0 && termsDays === orderDays && order.paymentDueDate)
+        ? order.paymentDueDate
+        : new Date(Date.now() + termsDays * 86400000);
 
     const payment = await prisma.paymentRecord.create({
       data: {
@@ -289,6 +295,25 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: payment });
   });
 
+  // ── Condición de pago (Contado / Crédito N días) de un pedido existente ──
+  app.patch('/:id/payment-condition', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { paymentCondition?: 'CONTADO' | 'CREDITO'; creditPaymentTermsDays?: number };
+    const order = await prisma.salesOrder.findUnique({ where: { id }, select: { id: true, deliveryDate: true, createdAt: true, paymentStatus: true, status: true } });
+    if (!order) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Pedido no encontrado' });
+    if (String(order.paymentStatus) === 'PAID' || String(order.status) === 'CANCELLED') {
+      return reply.code(422).send({ error: 'ORDER_CLOSED', message: 'No se puede cambiar la condición de pago de un pedido pagado o cancelado' });
+    }
+    let credit;
+    try {
+      credit = SalesService.resolvePaymentCondition(body.paymentCondition, body.creditPaymentTermsDays, order.deliveryDate, order.createdAt);
+    } catch (e: any) {
+      return reply.code(400).send({ error: 'INVALID_PAYMENT_CONDITION', message: e.message });
+    }
+    const updated = await prisma.salesOrder.update({ where: { id }, data: credit });
+    return reply.send({ data: updated });
+  });
+
   // ── Update invoice type ──────────────────────────────────────────────────────
   app.patch('/:id/invoice-type', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -325,8 +350,15 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.post('/', { preHandler: [requireAnyOf('SALES_AGENT', 'SALES_MGR')] }, async (req, reply) => {
     const body = req.body as Parameters<typeof SalesService.createOrder>[0];
-    const order = await SalesService.createOrder({ ...body, createdBy: req.actor!.sub });
-    return reply.code(201).send({ data: order });
+    try {
+      const order = await SalesService.createOrder({ ...body, createdBy: req.actor!.sub });
+      return reply.code(201).send({ data: order });
+    } catch (e) {
+      if (e instanceof SalesService.PaymentConditionError) {
+        return reply.code(400).send({ error: 'INVALID_PAYMENT_CONDITION', message: e.message });
+      }
+      throw e;
+    }
   });
 
   // ── PUBLIC: Create order from ecommerce ───────────────────────────────────

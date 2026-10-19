@@ -4,10 +4,11 @@ import { useState, useMemo, useRef } from 'react';
 import { Plus, ShoppingBag, ChevronDown, ChevronRight, Trash2, FlaskConical, CheckCircle2, Archive, Settings2, Pencil, X, Loader2, Search, Globe, ImagePlus, Star } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtNum } from '../lib/fmt';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface Ingredient { id: string; name: string; sku: string; baseUom: string; avgCostPen: string; }
+interface Ingredient { id: string; name: string; sku: string; baseUom: string; avgCostPen: string; isActive?: boolean; }
 interface BOMLine { id: string; ingredientId: string; ingredient: Ingredient; qtyRequired: string; uom: string; wasteFactorPct: string; notes: string | null; }
 interface Recipe { id: string; productId: string; version: number; status: string; yieldQty: string; yieldUom: string; doughWeightPerUnitG?: string | null; bomLines: BOMLine[]; }
 interface Product {
@@ -107,7 +108,7 @@ function computeCosts(recipe: Recipe | null, overheadRate: number, applyOverhead
 
 // ── Recipe Editor Modal ────────────────────────────────────────────────────────
 
-interface BOMLineEdit { tempId: string; ingredientId: string; ingredientName: string; qtyRequired: string; uom: string; wasteFactorPct: string; }
+interface BOMLineEdit { tempId: string; ingredientId: string; ingredientName: string; qtyRequired: string; uom: string; wasteFactorPct: string; inactive?: boolean; }
 
 const ALLOWED_BOM_TYPES: Record<string, string[]> = {
   FINISHED: ['RAW_MATERIAL', 'INTERMEDIATE'],
@@ -136,8 +137,11 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
       qtyRequired: String(l.qtyRequired),
       uom: normalizeUom(l.uom),
       wasteFactorPct: String(l.wasteFactorPct),
+      inactive: l.ingredient.isActive === false,
     }))
   );
+  // Recipes already used by production orders are saved as a new version (the
+  // backend decides); we only need to tell the user what happened.
   const [ingSearch, setIngSearch] = useState('');
   const [ingOpen, setIngOpen] = useState(false);
   const [tplSearch, setTplSearch] = useState('');
@@ -154,9 +158,10 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
     // masa-madre build uses a portion of existing masa madre as a starter. Only
     // finished goods are barred from referencing their own output.
     .filter(i => product.productType === 'INTERMEDIATE' ? true : i.sku !== product.sku);
+  const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   const filteredIngs = allowedIngs.filter(i =>
-    !ingSearch || i.name?.toLowerCase().includes(ingSearch.toLowerCase()) || i.sku?.toLowerCase().includes(ingSearch.toLowerCase())
-  ).slice(0, 8);
+    !ingSearch || norm(i.name ?? '').includes(norm(ingSearch)) || norm(i.sku ?? '').includes(norm(ingSearch))
+  ).slice(0, 30);
 
   // Existing ACTIVE recipes usable as templates.
   const { data: tplData } = useQuery<{ data: any[] }>({
@@ -181,6 +186,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
         qtyRequired: String(l.qtyRequired),
         uom: normalizeUom(l.uom),
         wasteFactorPct: String(l.wasteFactorPct),
+        inactive: l.ingredient?.isActive === false,
       }));
     setLines(copied);
     setStep('edit');
@@ -205,7 +211,10 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
         const r = await api.post('/v1/production/recipes', { productId: product.id, yieldQty: parseFloat(yieldQty) || 1, yieldUom, doughWeightPerUnitG: doughG });
         recipeId = r.data.data.id;
       }
-      await api.put(`/v1/production/recipes/${recipeId}/bom`, {
+      if (lines.some(l => !(parseFloat(l.qtyRequired) > 0))) {
+        throw { response: { data: { error: 'Todas las cantidades deben ser mayores que 0' } } };
+      }
+      const put = await api.put(`/v1/production/recipes/${recipeId}/bom`, {
         yieldQty: parseFloat(yieldQty) || 1,
         yieldUom,
         doughWeightPerUnitG: doughG,
@@ -214,16 +223,28 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
       // Activate the recipe so it becomes the product's active receta. Without
       // this the recipe stays in DRAFT and the panel keeps showing "sin receta
       // activa", which looked like the formula wasn't being saved.
-      await api.patch(`/v1/production/recipes/${recipeId}/status`, { status: 'ACTIVE' });
+      // When the recipe was already used, the backend saved a NEW version — use its id.
+      const savedId: string = put.data?.data?.id ?? recipeId;
+      await api.patch(`/v1/production/recipes/${savedId}/status`, { status: 'ACTIVE' });
+      return put.data as { versioned?: boolean; data?: { version?: number }; openOrdersOnPreviousVersion?: number };
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['recipe'] });
       qc.invalidateQueries({ queryKey: ['all-recipes-summary'] });
+      qc.invalidateQueries({ queryKey: ['recipe-templates'] });
       qc.invalidateQueries({ queryKey: ['products'] });
-      toast.success('Receta guardada');
+      if (res?.versioned) {
+        const open = res.openOrdersOnPreviousVersion ?? 0;
+        toast.success(`Receta guardada como v${res.data?.version ?? ''}. Las órdenes ya producidas conservan la versión anterior${open > 0 ? ` (y ${open} OP abierta${open > 1 ? 's' : ''} sigue${open > 1 ? 'n' : ''} con ella)` : ''}.`, { duration: 7000 });
+      } else {
+        toast.success('Receta guardada');
+      }
       onClose();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? 'Error al guardar receta'),
+    onError: (e: any) => {
+      if (e?.response?.status === 403) return toast.error('No tienes permiso para editar recetas (requiere rol Gerente de Operaciones).');
+      toast.error(e?.response?.data?.error ?? e?.response?.data?.message ?? 'Error al guardar receta');
+    },
   });
 
   const UOM_OPTIONS = ['g', 'kg', 'ml', 'l', 'unidades', 'cl', 'dl', 'tsp', 'tbsp'];
@@ -316,13 +337,21 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
                   <input className="flex-1 text-sm outline-none bg-transparent placeholder:text-gray-400"
                     placeholder="Buscar materia prima del inventario…"
                     value={ingSearch} onChange={e => { setIngSearch(e.target.value); setIngOpen(true); }}
-                    onFocus={() => setIngOpen(true)} />
+                    onFocus={() => setIngOpen(true)}
+                    onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                    onKeyDown={e => { if (e.key === 'Escape') setIngOpen(false); if (e.key === 'Enter' && filteredIngs[0]) { e.preventDefault(); addIngredient(filteredIngs[0]); } }} />
                   {ingSearch && <button onClick={() => { setIngSearch(''); setIngOpen(false); }} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
                 </div>
+                {ingOpen && ingSearch && filteredIngs.length === 0 && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg px-4 py-3 text-sm text-gray-400">
+                    {ingsData ? `Sin resultados para “${ingSearch}”. Si es nuevo, créalo primero como materia prima.` : 'Cargando materias primas…'}
+                  </div>
+                )}
                 {ingOpen && filteredIngs.length > 0 && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-hidden">
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-brand-200 rounded-xl shadow-lg overflow-y-auto max-h-64">
                     {filteredIngs.map(ing => (
-                      <button key={ing.id} className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors"
+                      <button key={ing.id} type="button" className="w-full px-4 py-2.5 text-left hover:bg-indigo-50 flex items-center gap-3 transition-colors"
+                        onMouseDown={e => e.preventDefault()}
                         onClick={() => addIngredient(ing)}>
                         <span className="flex-1 text-sm font-medium text-gray-800 truncate">{ing.name}</span>
                         {ing.productType === 'INTERMEDIATE' && <span className="text-[10px] uppercase tracking-wide text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded">Interm.</span>}
@@ -342,7 +371,10 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
                 </div>
                 {lines.map(l => (
                   <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
-                    <span className="text-sm text-gray-800 truncate">{l.ingredientName}</span>
+                    <span className="text-sm text-gray-800 truncate flex items-center gap-1.5" title={l.inactive ? 'Esta materia prima está inactiva: no tiene compras ni stock visibles. Reemplázala por la activa.' : undefined}>
+                      {l.ingredientName}
+                      {l.inactive && <span className="text-[10px] uppercase tracking-wide text-red-600 bg-red-50 px-1.5 py-0.5 rounded">Inactiva</span>}
+                    </span>
                     <input type="number" min={0.001} step={0.001} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
                       value={l.qtyRequired} onChange={e => updateLine(l.tempId, 'qtyRequired', e.target.value)} />
                     <select className="text-xs border border-gray-200 rounded px-1 py-1 w-full focus:ring-1 focus:ring-indigo-300 outline-none"
@@ -360,6 +392,14 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
             )}
             {lines.length === 0 && (
               <p className="text-sm text-gray-400 italic text-center py-4">Sin materias primas. Busca y agrega materias primas arriba.</p>
+            )}
+            {lines.some(l => l.inactive) && (
+              <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                Hay materias primas <b>inactivas</b> en esta receta. Su consumo se descuenta de un ítem que no aparece en inventario. Quítalas y agrega la versión activa.
+              </p>
+            )}
+            {recipe && (
+              <p className="text-xs text-gray-400">Si esta receta ya se usó en órdenes de producción, al guardar se crea una nueva versión (v{recipe.version + 1}); las órdenes anteriores y las OP abiertas mantienen la versión actual.</p>
             )}
           </div>
         )}
@@ -1187,6 +1227,8 @@ interface RecipePanelProps {
 }
 
 function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCost, overheadRate, totalProductCost, doughWeightG, basePrice, grossMargin, onEdit }: RecipePanelProps) {
+  const { user } = useAuth();
+  const canEditRecipe = (user?.roles ?? []).some(r => r === 'OPS_MGR' || r === 'SUPER_ADMIN');
   // Raw materials don't have recipes — no option to create/generate one.
   if (product.productType === 'RAW_MATERIAL') {
     return (
@@ -1203,7 +1245,9 @@ function RecipePanel({ product, recipe, costLines, effectiveUnitCost, overheadCo
         {recipe && <span className="text-xs font-normal text-indigo-400 ml-1">v{recipe.version} - Rinde {recipe.yieldQty} {recipe.yieldUom}</span>}
         <button
           onClick={onEdit}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+          disabled={!canEditRecipe}
+          title={canEditRecipe ? undefined : 'Solo el Gerente de Operaciones puede editar recetas'}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Pencil size={11} /> {recipe ? 'Editar receta' : 'Crear receta'}
         </button>

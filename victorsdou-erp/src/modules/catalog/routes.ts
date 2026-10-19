@@ -197,6 +197,22 @@ export async function catalogRoutes(app: FastifyInstance) {
       autoCode?: boolean;
       categoryCode?: string; // 2-letter short code for the category
     };
+    // Normalise the name (a trailing space created a second "SAL " ingredient
+    // next to the original "SAL" — Oct 2026) and refuse duplicates.
+    body.name = String(body.name ?? '').replace(/\s+/g, ' ').trim();
+    if (!body.name) return reply.code(400).send({ error: 'El nombre es obligatorio', message: 'El nombre es obligatorio' });
+    const dupRows = await prisma.$queryRaw<{ sku: string; name: string; isActive: boolean }[]>`
+      SELECT sku, name, "isActive" FROM products
+      WHERE lower(regexp_replace(trim(name), '\s+', ' ', 'g')) = lower(${body.name})
+        AND ("productType"::text = ${body.productType ?? ''} OR ${body.productType ?? ''} = '')
+      LIMIT 1`;
+    if (dupRows.length > 0) {
+      const d = dupRows[0];
+      const msg = d.isActive
+        ? `Ya existe un producto llamado "${d.name.trim()}" (${d.sku}).`
+        : `Ya existe "${d.name.trim()}" (${d.sku}) pero está inactivo. Reactívalo en lugar de crear uno nuevo.`;
+      return reply.code(409).send({ error: msg, message: msg });
+    }
 
     // Raw materials are classified by rawFamily; finished goods by family.
     const familyForCode = body.productType === 'RAW_MATERIAL' ? body.rawFamily : body.family;
@@ -271,7 +287,20 @@ export async function catalogRoutes(app: FastifyInstance) {
     if (categoryId !== undefined) {
       data.category = { connect: { id: categoryId } };
     }
+    if (typeof data.name === 'string') data.name = (data.name as string).replace(/\s+/g, ' ').trim();
     const product = await prisma.product.update({ where: { id }, data: data as never });
+    // Keep the mirrored Ingredient in sync. Re-activating a product used to leave
+    // its ingredient inactive, so it vanished from PO / recipe / inventory lists
+    // and the team created a duplicate (SAL vs "SAL ", Oct 2026).
+    if (product.productType === 'RAW_MATERIAL' || product.productType === 'INTERMEDIATE') {
+      const sync: Record<string, unknown> = {};
+      if (rest.isActive !== undefined) sync.isActive = !!rest.isActive;
+      if (typeof data.name === 'string' && data.name) sync.name = data.name;
+      if (rest.rawFamily !== undefined) sync.rawFamily = rest.rawFamily || null;
+      if (Object.keys(sync).length > 0) {
+        await prisma.ingredient.updateMany({ where: { sku: product.sku }, data: sync as never });
+      }
+    }
     return reply.send({ data: product });
   });
 
