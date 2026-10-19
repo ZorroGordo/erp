@@ -308,13 +308,16 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
           igvRate: l.igvRate,
         })),
       }).then(async (r) => {
-        if (emitAfter) await api.post(`/v1/invoices/${r.data.data.id}/emit`);
+        if (emitAfter) {
+          try { await api.post(`/v1/invoices/${r.data.data.id}/emit`); }
+          catch (e: any) { qc.invalidateQueries({ queryKey: ['invoices'] }); onClose(); throw new Error(`Borrador guardado, pero no se pudo emitir: ${e?.response?.data?.message ?? e?.message}`); }
+        }
         return r.data.data;
       }),
     onSuccess: (_, emitAfter) => {
       qc.invalidateQueries({ queryKey: ['invoices'] });
       qc.invalidateQueries({ queryKey: ['pending-orders'] });
-      toast.success(emitAfter ? '✅ Factura emitida a SUNAT' : 'Borrador guardado');
+      toast.success(emitAfter ? '✅ Comprobante enviado a SUNAT' : 'Borrador guardado');
       onClose();
     },
     onError: (e: any) => toast.error(e?.response?.data?.detail ?? e?.response?.data?.error ?? e?.message ?? 'Error'),
@@ -954,10 +957,23 @@ export default function Invoices() {
     onMutate: () => toast.loading('Enviando a SUNAT…', { id: 'emit' }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['invoices'] });
-      res.accepted ? toast.success('✅ Comprobante aceptado por SUNAT', { id: 'emit' }) : toast.error('⚠️ Rechazado', { id: 'emit' });
+      if (res.status === 'ACCEPTED') toast.success('✅ Comprobante aceptado por SUNAT', { id: 'emit' });
+      else if (res.status === 'SENT') toast.success('Comprobante enviado — SUNAT confirma en unos minutos', { id: 'emit' });
+      else toast.error(`⚠️ Rechazado: ${res.invoice?.rejectionReason ?? ''}`, { id: 'emit' });
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail ?? 'Error al emitir', { id: 'emit' }),
+    onError: (err: any) => {
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      toast.error(err?.response?.data?.message ?? err?.response?.data?.detail ?? 'Error al emitir', { id: 'emit' });
+    },
   });
+
+  const refreshMutation = useMutation({
+    mutationFn: (id?: string) => (id ? api.post(`/v1/invoices/${id}/refresh-status`) : api.post('/v1/invoices/refresh-sent')).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['invoices'] }),
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'No se pudo consultar SUNAT'),
+  });
+  // Al abrir Facturación, actualizar los comprobantes que siguen «Enviados»
+  useEffect(() => { refreshMutation.mutate(undefined); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const bulkCreateMutation = useMutation({
     mutationFn: (payload: { orderIds: string[]; emitAfter?: boolean }) => api.post('/v1/invoices/from-orders', payload),
@@ -1032,7 +1048,7 @@ export default function Invoices() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Facturación electrónica</h1>
-          <p className="text-gray-500 text-sm">Comprobantes SUNAT — vía Factpro · Plan gratuito · DEMO</p>
+          <p className="text-gray-500 text-sm">Comprobantes SUNAT — vía Factpro</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowExport(true)} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-brand-200 text-brand-600 rounded-xl text-sm font-medium hover:bg-brand-50 transition-all">
@@ -1151,7 +1167,13 @@ export default function Invoices() {
                                   {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Reintentar
                                 </button>
                               )}
-                              {inv.status === 'ACCEPTED' && inv.pdfUrl && (
+                              {inv.status === 'SENT' && (inv.docType === 'FACTURA' || inv.docType === 'BOLETA') && (
+                                <button onClick={() => refreshMutation.mutate(inv.id)} disabled={refreshMutation.isPending} title="Consultar estado en SUNAT"
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-lg text-xs font-medium hover:bg-yellow-100 disabled:opacity-50 transition-all">
+                                  {refreshMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Clock size={12} />} Actualizar
+                                </button>
+                              )}
+                              {(inv.status === 'ACCEPTED' || inv.status === 'SENT') && inv.pdfUrl && (
                                 <a href={inv.pdfUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-medium hover:bg-green-100 transition-all">
                                   <FileDown size={12} /> PDF
                                 </a>
@@ -1314,7 +1336,7 @@ export default function Invoices() {
         <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
         <span>
           Integrado con <strong>Factpro</strong> · Búsqueda RUC/DNI vía <a href="https://apis.net.pe" target="_blank" rel="noopener noreferrer" className="underline hover:text-brand-600">apis.net.pe</a>
-          Para producción cambia <code className="bg-gray-100 px-1 rounded">FACTPRO_BASE_URL</code> a <code className="bg-gray-100 px-1 rounded">https://api.factpro.la/api/v2</code>.
+          · API v3. Demo o producción se cambia en Factpro (entorno de la empresa).
         </span>
       </div>
     </div>

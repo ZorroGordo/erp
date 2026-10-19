@@ -300,9 +300,10 @@ export interface FactproV3Response {
 
 const MOTIVO_CODE: Record<string, string> = { VENTA: '01', COMPRA: '02', TRASLADO: '04', DEVOLUCION: '06', OTROS: '13' };
 
-/** Base v3: FACTPRO_GRE_BASE_URL o, si no está, FACTPRO_BASE_URL con /v2 → /v3. */
+/** Base v3. En v3 hay un solo host: demo/producción lo decide el entorno de la
+ *  empresa en Factpro (PUT /empresas/entorno), no la URL. */
 export function factproV3Base(): string {
-  return (process.env.FACTPRO_GRE_BASE_URL ?? config.FACTPRO_BASE_URL.replace(/\/api\/v2\/?$/, '/api/v3')).replace(/\/$/, '');
+  return (process.env.FACTPRO_V3_BASE_URL ?? process.env.FACTPRO_GRE_BASE_URL ?? 'https://api.factpro.la/api/v3').replace(/\/$/, '');
 }
 
 export function buildGuiaPayload(g: {
@@ -402,4 +403,126 @@ export async function emitirGuia(body: FactproGuiaBody): Promise<FactproV3Respon
     });
   }
   return json as FactproV3Response;
+}
+
+// ─── Facturas / boletas — API v3 (Sprint D) ───────────────────────────────────
+// POST {v3}/documentos. El tipo lo define la serie (F… factura, B… boleta).
+// Probado en DEMO 19/10/2026: factura contado/crédito y boleta con y sin DNI.
+// Códigos Factpro (no SUNAT): cliente_tipo_documento 1 sin RUC/varios, 2 DNI,
+// 3 CE, 4 RUC, 5 pasaporte · tipo_tax 1 IGV 18%, 20 exonerado, 30 inafecto ·
+// tipo_operacion 1 venta interna.
+
+export interface FactproDocV3Body {
+  serie: string;
+  numero: '#';
+  tipo_operacion: '1';
+  fecha_de_emision: string;           // YYYY-MM-DD
+  moneda: string;
+  enviar_automaticamente_al_cliente: boolean;
+  cliente: {
+    cliente_tipo_documento: string;
+    cliente_numero_documento: string;
+    cliente_denominacion: string;
+    cliente_direccion: string;
+    cliente_email: string;
+    cliente_telefono: string;
+  };
+  items: {
+    unidad: string; codigo: string; descripcion: string; cantidad: number;
+    precio: number; incluye_tax: boolean; tipo_tax: string; descuento: number;
+  }[];
+  condicion_de_pago: { tipo_de_condicion: '0' | '1'; forma_de_pago: string; fecha?: string; monto: number }[];
+  observaciones: string;
+  formato_pdf: 'a4';
+}
+
+export function clienteTipoDocV3(docNo: string): { tipo: string; numero: string } {
+  const d = (docNo ?? '').trim();
+  if (/^\d{11}$/.test(d)) return { tipo: '4', numero: d };
+  if (/^\d{8}$/.test(d))  return { tipo: '2', numero: d };
+  if (/^[A-Za-z0-9]{9,12}$/.test(d)) return { tipo: '3', numero: d };   // CE
+  return { tipo: '1', numero: '00000000' };                             // clientes varios (boleta)
+}
+
+export function buildDocumentoV3(args: {
+  serie: string;
+  entityDocNo: string;
+  entityName: string;
+  entityAddress?: string | null;
+  entityEmail?: string | null;
+  issueDate: Date;
+  currency: string;
+  paymentDueDate?: Date | null;     // si vence después de la emisión → crédito
+  totalPen: number;
+  observaciones?: string;
+  items: { descripcion: string; cantidad: number; valorUnitario: number; igvRate: number; unidad?: string | null; codigo?: string | null }[];
+}): FactproDocV3Body {
+  const lima = (d: Date, fmt: 'iso' | 'pe') => fmt === 'iso'
+    ? d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' })
+    : d.toLocaleDateString('en-GB', { timeZone: 'America/Lima' }).replace(/\//g, '-');   // dd-mm-yyyy
+  const cli = clienteTipoDocV3(args.entityDocNo);
+  const issueIso = lima(args.issueDate, 'iso');
+  const credito = !!args.paymentDueDate && lima(args.paymentDueDate, 'iso') > issueIso;
+  return {
+    serie: args.serie,
+    numero: '#',
+    tipo_operacion: '1',
+    fecha_de_emision: issueIso,
+    moneda: args.currency || 'PEN',
+    enviar_automaticamente_al_cliente: !!args.entityEmail,
+    cliente: {
+      cliente_tipo_documento: cli.tipo,
+      cliente_numero_documento: cli.numero,
+      cliente_denominacion: (args.entityName || 'CLIENTES VARIOS').trim(),
+      cliente_direccion: args.entityAddress ?? '',
+      cliente_email: args.entityEmail ?? '',
+      cliente_telefono: '',
+    },
+    items: args.items.map(i => ({
+      unidad: i.unidad || 'NIU',
+      codigo: i.codigo ?? '',
+      descripcion: i.descripcion,
+      cantidad: i.cantidad,
+      precio: Math.round(i.valorUnitario * 1e6) / 1e6,   // sin IGV
+      incluye_tax: false,
+      tipo_tax: i.igvRate > 0 ? '1' : '30',
+      descuento: 0,
+    })),
+    condicion_de_pago: credito
+      ? [{ tipo_de_condicion: '1', forma_de_pago: '', fecha: lima(args.paymentDueDate!, 'pe'), monto: Math.round(args.totalPen * 100) / 100 }]
+      : [{ tipo_de_condicion: '0', forma_de_pago: '0', monto: 0 }],
+    observaciones: args.observaciones ?? '',
+    formato_pdf: 'a4',
+  };
+}
+
+async function postV3(path: string, body: unknown): Promise<FactproV3Response> {
+  const res = await fetch(`${factproV3Base()}${path}`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) });
+  const text = await res.text();
+  let json: any;
+  try { json = JSON.parse(text); } catch { json = { exito: false, mensaje: text.slice(0, 300) }; }
+  if (!res.ok && json.exito !== false) {
+    throw Object.assign(new Error(`Factpro error: ${json?.mensaje ?? json?.message ?? `HTTP ${res.status}`}`), {
+      statusCode: res.status >= 500 ? 502 : 422, code: 'FACTPRO_ERROR', detail: json,
+    });
+  }
+  return json as FactproV3Response;
+}
+
+export const emitirDocumentoV3 = (body: FactproDocV3Body) => postV3('/documentos', body);
+export const consultarDocumentoV3 = (serie: string, numero: number) => postV3('/consulta', { serie, numero });
+
+/** Mensaje legible de un error de Factpro v3. */
+export function factproErrorText(res: FactproV3Response): string {
+  const errs = (res as any)?.errors;
+  if (Array.isArray(errs)) return errs.map((e: any) => e?.message ?? String(e)).join('; ');
+  return res.mensaje ?? 'Rechazado';
+}
+
+/** REGISTRADO/ENVIADO → SENT · ACEPTADO/OBSERVADO → ACCEPTED · RECHAZADO/ANULADO o exito=false → REJECTED. */
+export function v3Status(res: FactproV3Response): 'SENT' | 'ACCEPTED' | 'REJECTED' {
+  const e = (res.data?.descripcion_estado ?? '').toUpperCase();
+  if (res.exito === false || e.includes('RECHAZ') || e.includes('ANULAD')) return 'REJECTED';
+  if (e.includes('ACEPT') || e.includes('OBSERV')) return 'ACCEPTED';
+  return 'SENT';
 }
