@@ -1234,8 +1234,8 @@ export default function SalesOrders() {
     queryFn:  () => api.get('/v1/customers/?includeSucursales=1').then(r => r.data),
   });
   const { data: products } = useQuery({
-    queryKey: ['products'],
-    queryFn:  () => api.get('/v1/products/').then(r => r.data),
+    queryKey: ['products', 'sellable'],
+    queryFn:  () => api.get('/v1/products/?productType=FINISHED&active=true').then(r => r.data),
   });
 
   const { data: quotations } = useQuery({
@@ -1244,7 +1244,8 @@ export default function SalesOrders() {
   });
 
   const customerList = customers?.data ?? [];
-  const productList  = products?.data ?? [];
+  // Solo productos terminados y activos: los insumos no se venden.
+  const productList  = (products?.data ?? []).filter((p: any) => p.productType === 'FINISHED' && p.isActive !== false);
 
   // Auto-select default sucursal when customer changes
   useEffect(() => {

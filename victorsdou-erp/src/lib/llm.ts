@@ -167,7 +167,7 @@ function errorDetail(status: number, body: string): string {
 async function completeAnthropic(
   prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal, att: LlmAttachment | null,
 ): Promise<LlmResult> {
-  const mime = (att?.mimeType ?? '').toLowerCase();
+  const mime = (att?.mimeType ?? '').toLowerCase().replace('image/jpg', 'image/jpeg');
   const fileBlock = !att ? null
     : mime === 'application/pdf'
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: att.dataBase64 } }
@@ -205,7 +205,7 @@ async function completeOpenAI(
   prompt: string, opts: LlmOptions, status: LlmStatus, signal: AbortSignal, att: LlmAttachment | null,
 ): Promise<LlmResult> {
   // The chat/completions shape only takes images portably; PDFs go as text.
-  const mime = (att?.mimeType ?? '').toLowerCase();
+  const mime = (att?.mimeType ?? '').toLowerCase().replace('image/jpg', 'image/jpeg');
   const userContent = att && /^image\//.test(mime)
     ? [{ type: 'image_url', image_url: { url: `data:${mime};base64,${att.dataBase64}` } }, { type: 'text', text: prompt }]
     : prompt;

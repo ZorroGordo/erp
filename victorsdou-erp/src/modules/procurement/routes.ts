@@ -642,8 +642,9 @@ export async function procurementRoutes(app: FastifyInstance) {
     return reply.send({ ok: true });
   });
 
-  app.get('/suppliers', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR')] }, async (_req, reply) => {
-    const suppliers = await prisma.supplier.findMany({ where: { isActive: true }, orderBy: { businessName: 'asc' } });
+  app.get('/suppliers', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR')] }, async (req, reply) => {
+    const includeInactive = ['1', 'true'].includes(String((req.query as any)?.includeInactive ?? ''));
+    const suppliers = await prisma.supplier.findMany({ where: includeInactive ? {} : { isActive: true }, orderBy: { businessName: 'asc' } });
     return reply.send({ data: suppliers });
   });
 
@@ -652,15 +653,65 @@ export async function procurementRoutes(app: FastifyInstance) {
     if (!body?.businessName || !body?.ruc) {
       return reply.code(400).send({ error: 'Razón social y RUC son requeridos' });
     }
-    const supplier = await prisma.supplier.create({ data: normalizeSupplierBody(body) });
+    const rucNew = String(body.ruc ?? '').replace(/\D/g, '');
+    const dupNew = rucNew ? await prisma.supplier.findFirst({ where: { ruc: rucNew } }) : null;
+    if (dupNew) {
+      const m = `Ya existe un proveedor con ese RUC: ${dupNew.businessName}`;
+      return reply.code(409).send({ error: m, message: m });
+    }
+    let supplier;
+    try {
+      supplier = await prisma.supplier.create({ data: normalizeSupplierBody(body) });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const m = 'Ya existe un proveedor con ese RUC';
+        return reply.code(409).send({ error: m, message: m });
+      }
+      throw e;
+    }
     return reply.code(201).send({ data: supplier });
   });
 
   app.patch('/suppliers/:id', { preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'SUPER_ADMIN')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    // Never change the RUC on edit (unique identity); drop it from the update.
-    const { ruc: _ruc, ...rest } = normalizeSupplierBody(req.body as any);
-    const supplier = await prisma.supplier.update({ where: { id }, data: rest });
-    return reply.send({ data: supplier });
+    const body = (req.body ?? {}) as any;
+    // PATCH parcial: solo se actualizan las claves enviadas (p. ej. { isActive: false } no debe borrar contacto, banco, etc.).
+    const full = normalizeSupplierBody(body) as Record<string, any>;
+    const data: Record<string, any> = {};
+    for (const k of Object.keys(full)) if (k in body) data[k] = full[k];
+    if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
+
+    const current = await prisma.supplier.findUnique({ where: { id } });
+    if (!current) return reply.code(404).send({ error: 'Proveedor no encontrado', message: 'Proveedor no encontrado' });
+
+    // El RUC ahora es editable: 11 dígitos y único.
+    if ('ruc' in data) {
+      const ruc = String(body.ruc ?? '').replace(/\D/g, '');
+      if (ruc === current.ruc) {
+        delete data.ruc;
+      } else {
+        if (ruc.length !== 11) {
+          const m = 'El RUC debe tener 11 dígitos';
+          return reply.code(400).send({ error: m, message: m });
+        }
+        const dup = await prisma.supplier.findFirst({ where: { ruc, id: { not: id } } });
+        if (dup) {
+          const m = `Ya existe un proveedor con ese RUC: ${dup.businessName}`;
+          return reply.code(409).send({ error: m, message: m });
+        }
+        data.ruc = ruc;
+      }
+    }
+
+    try {
+      const supplier = await prisma.supplier.update({ where: { id }, data });
+      return reply.send({ data: supplier });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const m = 'Ya existe un proveedor con ese RUC';
+        return reply.code(409).send({ error: m, message: m });
+      }
+      throw e;
+    }
   });
 }

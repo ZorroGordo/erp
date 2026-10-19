@@ -63,6 +63,12 @@ export function RucLookupInput({ docType, value, onChange, onFound, disabled, la
           placeholder={ph}
           value={value}
           maxLength={expectedLen}
+          type="text"
+          autoComplete="off"
+          name="doc-number-lookup"
+          inputMode="numeric"
+          data-form-type="other"
+          data-lpignore="true"
           disabled={disabled}
           onChange={e => { onChange(e.target.value.replace(/\D/g, '')); setStatus('idle'); setDismissed(false); }}
           onKeyDown={e => e.key === 'Enter' && runLookup()}
