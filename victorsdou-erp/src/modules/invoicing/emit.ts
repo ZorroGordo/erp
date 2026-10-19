@@ -91,15 +91,28 @@ export async function emitInvoice(id: string) {
   }
 
   const { status, data } = fieldsFromResponse(res);
-  const [s, n] = (res.data?.numero ?? '').split('-');
-  const updated = await prisma.invoice.update({
-    where: { id },
-    data: {
-      ...data,
-      ...(s && n ? { series: s, correlative: n } : {}),
-      issueDate: new Date(),
-    },
-  });
+  // 1) Guardar SIEMPRE la respuesta de Factpro primero (que no se pierda nada).
+  let updated = await prisma.invoice.update({ where: { id }, data: { ...data, issueDate: new Date() } });
+  // 2) Número oficial: «F001-3» / «F001-00000003» → serie F001, correlativo "3".
+  const m = (res.data?.numero ?? '').match(/^([A-Z0-9]{4})-0*(\d+)$/i);
+  if (m) {
+    const [, s, n] = m;
+    // Un borrador/rechazado local (nunca emitido) puede ocupar ese número: se le
+    // asigna otro número local. Un comprobante ya emitido nunca se toca.
+    const clash = await prisma.invoice.findFirst({
+      where: { series: s, correlative: { in: [n, n.padStart(8, '0')] }, id: { not: id } },
+      select: { id: true, hashCpe: true, status: true },
+    });
+    if (clash && !clash.hashCpe && (clash.status === 'DRAFT' || clash.status === 'REJECTED')) {
+      const tmp = `L${Date.now().toString().slice(-7)}`;   // número local temporal, fuera del rango fiscal
+      await prisma.invoice.update({ where: { id: clash.id }, data: { correlative: tmp } });
+    }
+    try {
+      updated = await prisma.invoice.update({ where: { id }, data: { series: s, correlative: n } });
+    } catch (err: any) {
+      console.error('[emit] no se pudo guardar el número Factpro', res.data?.numero, err?.code, err?.meta);
+    }
+  }
 
   if (status !== 'REJECTED') {
     notifyInvoiceEmitted({
