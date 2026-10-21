@@ -3,7 +3,7 @@ import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { config } from '../../config';
 import { buildGuiaPayload, validateGuiaForGre, emitirGuia } from './factpro';
-import { emitInvoice, refreshInvoiceStatus, nextCorrelative, EmitError } from './emit';
+import { emitInvoice, refreshInvoiceStatus, nextCorrelative, EmitError, facturasEnabled } from './emit';
 import { buildGuiaPrefill, getGuiaConfig, saveGuiaConfig, sunatUnitCode, type GuiaConfigData } from './guia';
 
 export async function invoicingRoutes(app: FastifyInstance) {
@@ -398,7 +398,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
 
   // GET /guia-config — valores por defecto (partida, vehículo, conductor)
   app.get('/guia-config', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (_req, reply) => {
-    return reply.send({ data: { ...(await getGuiaConfig()), companyRuc: config.COMPANY_RUC, companyName: config.COMPANY_NAME, greEnabled: process.env.FACTPRO_GRE_ENABLED === 'true' } });
+    return reply.send({ data: { ...(await getGuiaConfig()), companyRuc: config.COMPANY_RUC, companyName: config.COMPANY_NAME, greEnabled: process.env.FACTPRO_GRE_ENABLED === 'true', facturasEnabled: facturasEnabled() } });
   });
 
   // PUT /guia-config
