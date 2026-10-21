@@ -37,7 +37,14 @@ function fieldsFromResponse(res: FactproV3Response) {
 }
 
 /** Emite una factura o boleta en estado DRAFT/REJECTED. Devuelve el estado final. */
+export const facturasEnabled = () => process.env.FACTPRO_FACTURAS_ENABLED === 'true';
+
 export async function emitInvoice(id: string) {
+  // Apagado por defecto: el equipo comercial (Luis) da el visto bueno antes de
+  // emitir facturas/boletas desde el ERP. Activar con FACTPRO_FACTURAS_ENABLED=true.
+  if (!facturasEnabled()) {
+    throw new EmitError(503, 'FACTURAS_DISABLED', 'La emisión de facturas desde el ERP aún no está habilitada');
+  }
   const invoice = await prisma.invoice.findUnique({
     where: { id },
     include: { lines: true, customer: { include: { addresses: true } } },

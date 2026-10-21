@@ -188,9 +188,20 @@ function CustomerSearch({ onSelect }: { onSelect: (c: Customer | null) => void }
   );
 }
 
+// Emisión de facturas desde el ERP: apagada hasta el visto bueno comercial
+// (FACTPRO_FACTURAS_ENABLED en Railway). Mismo query que usa la página.
+function useGuiaCfg() {
+  return useQuery<any>({
+    queryKey: ['guia-config'],
+    queryFn: () => api.get('/v1/invoices/guia-config').then(r => r.data.data),
+    staleTime: 300_000,
+  }).data;
+}
+
 // ─── Create invoice modal ──────────────────────────────────────────────────────
 function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; salesOrderId?: string }) {
   const qc = useQueryClient();
+  const facturasOn = !!useGuiaCfg()?.facturasEnabled;
   const [docType, setDocType] = useState<DocType>('FACTURA');
   const [entityId, setEntityId] = useState('');
   const [entityDocNo, setEntityDocNo] = useState('');
@@ -594,11 +605,11 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />}
               Guardar borrador
             </button>
-            <button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
+            {facturasOn && <button onClick={() => createMutation.mutate(true)} disabled={!canSave || createMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-all shadow-sm">
               {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               Guardar y Emitir a SUNAT
-            </button>
+            </button>}
           </div>
           )}
         </div>
@@ -611,6 +622,7 @@ function CreateInvoiceModal({ onClose, salesOrderId }: { onClose: () => void; sa
 // ─── Edit invoice modal ────────────────────────────────────────────────────────
 function EditInvoiceModal({ invoice, onClose }: { invoice: Invoice; onClose: () => void }) {
   const qc = useQueryClient();
+  const facturasOn = !!useGuiaCfg()?.facturasEnabled;
   const [entityDocNo, setEntityDocNo] = useState(invoice.entityDocNo);
   const [entityName, setEntityName] = useState(invoice.entityName);
   const [entityEmail, setEntityEmail] = useState(invoice.customer?.displayName || '');
@@ -782,7 +794,7 @@ function EditInvoiceModal({ invoice, onClose }: { invoice: Invoice; onClose: () 
               {editMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />}
               Guardar
             </button>
-            {invoice.docType !== 'GUIA_REMISION' && (
+            {invoice.docType !== 'GUIA_REMISION' && facturasOn && (
 <button onClick={() => editMutation.mutate(true)} disabled={!canSave || editMutation.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-all shadow-sm">
               {editMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
@@ -993,6 +1005,7 @@ export default function Invoices() {
     staleTime: 300_000,
   });
   const greEnabled = !!guiaCfg?.greEnabled;
+  const facturasOn = !!guiaCfg?.facturasEnabled;
 
   const emitGuiaMutation = useMutation({
     mutationFn: (id: string) => api.post(`/v1/invoices/guia-remision/${id}/emitir`).then(r => r.data),
@@ -1155,14 +1168,14 @@ export default function Invoices() {
                               {inv.status === 'DRAFT' && inv.docType !== 'GUIA_REMISION' && (
                                 <>
                                   <button onClick={() => setEditingInvoice(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all">Edit</button>
-                                  {inv.docType !== 'GUIA_REMISION' && (
+                                  {inv.docType !== 'GUIA_REMISION' && facturasOn && (
 <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                                     {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Emitir
                                   </button>
 )}
                                 </>
                               )}
-                              {inv.status === 'REJECTED' && inv.docType !== 'GUIA_REMISION' && (
+                              {inv.status === 'REJECTED' && inv.docType !== 'GUIA_REMISION' && facturasOn && (
                                 <button onClick={() => emitMutation.mutate(inv.id)} disabled={emitMutation.isPending} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                                   {emitMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Reintentar
                                 </button>
@@ -1264,10 +1277,11 @@ export default function Invoices() {
                   className="flex items-center gap-2 px-3 py-1.5 bg-white border border-brand-300 text-brand-700 rounded-lg text-xs font-medium hover:bg-brand-50 disabled:opacity-50 transition-all">
                   {bulkCreateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Receipt size={12} />}Facturar
                 </button>
+                {facturasOn && (
                 <button onClick={() => bulkCreateMutation.mutate({ orderIds: Array.from(selectedOrders), emitAfter: true })} disabled={bulkCreateMutation.isPending}
                   className="flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white rounded-lg text-xs font-medium hover:bg-brand-700 disabled:opacity-50 transition-all">
                   {bulkCreateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}Facturar y emitir
-                </button>
+                </button>)}
                 {selectedOrders.size === 1 && (
                   <button onClick={() => { const order = pendingOrders.find(o => selectedOrders.has(o.id)); if (order) setGuiaOrderId(order.id); }}
                     className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 transition-all">
