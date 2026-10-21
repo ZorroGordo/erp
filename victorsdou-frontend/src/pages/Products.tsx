@@ -367,7 +367,7 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
             {lines.length > 0 && (
               <div className="border border-indigo-200 rounded-xl overflow-hidden">
                 <div className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 bg-indigo-50 text-xs font-semibold text-indigo-600 uppercase tracking-wide">
-                  <span>Materia prima</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span />
+                  <span>Materia prima</span><span className="text-right">Cantidad</span><span className="text-center">UoM</span><span className="text-right">Merma %</span><span className="text-center normal-case text-[10px]">Quitar</span>
                 </div>
                 {lines.map(l => (
                   <div key={l.tempId} className="grid grid-cols-[1fr_80px_80px_70px_32px] gap-1 px-3 py-1.5 items-center border-t border-indigo-100 hover:bg-indigo-50/40">
@@ -383,8 +383,8 @@ function RecipeEditorModal({ product, recipe, onClose }: { product: Product; rec
                     </select>
                     <input type="number" min={0} max={99} step={0.5} className="text-xs border border-gray-200 rounded px-1.5 py-1 text-right w-full focus:ring-1 focus:ring-indigo-300 outline-none"
                       value={l.wasteFactorPct} onChange={e => updateLine(l.tempId, 'wasteFactorPct', e.target.value)} />
-                    <button onClick={() => removeLine(l.tempId)} className="text-gray-300 hover:text-red-400 flex items-center justify-center transition-colors">
-                      <X size={14} />
+                    <button type="button" onClick={() => removeLine(l.tempId)} title={`Quitar ${l.ingredientName} de la receta`} aria-label={`Quitar ${l.ingredientName}`} className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md p-1 flex items-center justify-center transition-colors">
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 ))}

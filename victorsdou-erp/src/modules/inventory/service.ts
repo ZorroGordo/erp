@@ -69,6 +69,48 @@ export async function updateWAC(
   return { newAvgCost, newQtyOnHand: totalQty };
 }
 
+// ── Re-cost after a price correction ─────────────────────────────────────────
+//
+// Replays the full movement history of an ingredient with the same weighted
+// average rule as updateWAC (receipts/outputs use their stored unit cost, outs
+// only reduce quantity) and rewrites avgCostPen on every warehouse level and on
+// the ingredient. Used when a receipt's unit cost is corrected after the fact.
+// Consumption movements keep the cost they were booked at.
+export async function recomputeAvgCost(
+  tx: Prisma.TransactionClient,
+  ingredientId: string,
+): Promise<{ avgCostPen: number; perWarehouse: Record<string, number> }> {
+  const moves = await tx.stockMovement.findMany({
+    where:   { ingredientId },
+    orderBy: { createdAt: 'asc' },
+    select:  { warehouseId: true, qtyIn: true, qtyOut: true, unitCostPen: true },
+  });
+  const step = (st: { qty: number; avg: number }, qi: number, qo: number, c: number) => {
+    if (qi > 0) {
+      const total = st.qty + qi;
+      st.avg = total > 0 ? (st.qty * st.avg + qi * c) / total : c;
+      st.qty = total;
+    }
+    if (qo > 0) st.qty -= qo;
+  };
+  const global = { qty: 0, avg: 0 };
+  const wh = new Map<string, { qty: number; avg: number }>();
+  for (const m of moves) {
+    const st = wh.get(m.warehouseId) ?? { qty: 0, avg: 0 };
+    wh.set(m.warehouseId, st);
+    const qi = Number(m.qtyIn), qo = Number(m.qtyOut), c = Number(m.unitCostPen);
+    step(st, qi, qo, c);
+    step(global, qi, qo, c);
+  }
+  const perWarehouse: Record<string, number> = {};
+  for (const [warehouseId, st] of wh) {
+    perWarehouse[warehouseId] = st.avg;
+    await tx.stockLevel.updateMany({ where: { ingredientId, warehouseId }, data: { avgCostPen: st.avg } });
+  }
+  await tx.ingredient.update({ where: { id: ingredientId }, data: { avgCostPen: global.avg } });
+  return { avgCostPen: global.avg, perWarehouse };
+}
+
 // ── Stock Movement ────────────────────────────────────────────────────────────
 
 interface MovementInput {

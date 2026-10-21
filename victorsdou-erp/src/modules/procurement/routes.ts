@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { requireAnyOf } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import { notifyPurchaseOrderCreated } from '../../services/notifications';
-import { registerReceipt } from '../inventory/service';
-import { resolveConvertQty } from '../../lib/uomResolver';
+import { registerReceipt, recomputeAvgCost } from '../inventory/service';
+import { resolveConvertQty, resolveConversionFactor } from '../../lib/uomResolver';
 import { autoExtract, archivoTipoFromMime } from '../comprobantes/extractor';
 import { extractLotsFromAttachment, type DetectedLot } from './certExtractor';
 
@@ -377,6 +377,127 @@ export async function procurementRoutes(app: FastifyInstance) {
     return reply.send({ data: po });
   });
 
+
+  // ── PATCH /purchase-orders/:id/lines/:lineId/price — correct the unit price of a
+  // line on an order that is no longer a draft (typically one received with a
+  // wrong or missing price). Updates the line + order totals, re-costs the stock
+  // receipts that came from that line (movements, lotes, GRN lines) and
+  // recalculates the ingredient's weighted average cost. Quantities untouched.
+  app.patch('/purchase-orders/:id/lines/:lineId/price', {
+    preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR')],
+  }, async (req, reply) => {
+    const { id, lineId } = req.params as { id: string; lineId: string };
+    const body = (req.body ?? {}) as { unitPrice?: number };
+    const price = Number(body.unitPrice);
+    if (!Number.isFinite(price) || price < 0) return reply.code(400).send({ error: 'Precio inválido' });
+
+    const po = await prisma.purchaseOrder.findUnique({ where: { id }, include: { lines: { include: { ingredient: true } } } });
+    if (!po) return reply.code(404).send({ error: 'OC no encontrada' });
+    if (!['APPROVED', 'SENT', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'].includes(po.status)) {
+      return reply.code(422).send({ error: 'Solo se puede corregir el precio de órdenes aprobadas o recibidas (los borradores se editan normalmente)' });
+    }
+    const line = po.lines.find(l => l.id === lineId);
+    if (!line) return reply.code(404).send({ error: 'Línea no encontrada' });
+
+    const rate      = Number(po.exchangeRate) || 1;
+    const oldPrice  = Number(line.unitPrice);
+    const costPen   = price * rate;
+    const baseUom   = line.ingredient?.baseUom ?? line.uom;
+    const conv      = await resolveConvertQty(1, line.uom, baseUom, line.ingredientId);
+    const stockCost = conv.converted ? costPen / conv.factor : costPen;
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.purchaseOrderLine.update({
+        where: { id: line.id },
+        data:  { unitPrice: price, lineTotalPen: parseFloat((Number(line.qtyOrdered) * costPen).toFixed(4)) },
+      });
+      const lines = await tx.purchaseOrderLine.findMany({ where: { purchaseOrderId: po.id } });
+      const subtotal = lines.reduce((s, l) => s + Number(l.lineTotalPen), 0);
+      const igv = parseFloat((subtotal * 0.18).toFixed(4));
+      const stamp = `[${new Date().toISOString().slice(0, 10)}] Precio corregido: ${line.ingredient?.name ?? line.ingredientId} ${oldPrice} → ${price}`;
+      await tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: {
+          subtotalPen: subtotal, igvPen: igv, totalPen: parseFloat((subtotal + igv).toFixed(4)),
+          notes: po.notes ? `${po.notes}\n${stamp}` : stamp,
+        },
+      });
+
+      let recosted = 0;
+      if (Number(line.qtyReceived) > 0) {
+        const moves = await tx.stockMovement.findMany({
+          where: { ingredientId: line.ingredientId, type: 'PURCHASE_RECEIPT', qtyIn: { gt: 0 }, notes: { contains: `OC: ${po.poNumber}` } },
+        });
+        for (const m of moves) {
+          await tx.stockMovement.update({
+            where: { id: m.id },
+            data:  { unitCostPen: stockCost, totalCostPen: parseFloat((Number(m.qtyIn) * stockCost).toFixed(4)) },
+          });
+          if (m.batchId) await tx.batch.update({ where: { id: m.batchId }, data: { unitCostPen: stockCost } });
+          recosted++;
+        }
+        await tx.goodsReceiptLine.updateMany({ where: { purchaseOrderLineId: line.id }, data: { unitCostPen: costPen } });
+        if (recosted > 0) await recomputeAvgCost(tx, line.ingredientId);
+      }
+      return { recosted, subtotal, igv };
+    }, { timeout: 30_000 });
+
+    const ing = await prisma.ingredient.findUnique({ where: { id: line.ingredientId }, select: { avgCostPen: true } });
+    return reply.send({
+      data: { lineId, oldPrice, unitPrice: price, receiptsRecosted: result.recosted, avgCostPen: Number(ing?.avgCostPen ?? 0), totalPen: result.subtotal + result.igv },
+    });
+  });
+
+  // ── GET /purchase-orders/price-suggestions?items=<ingredientId>:<uom>,… ─────────
+  // Suggested purchase price per (ingredient, purchase unit), computed from the
+  // prices actually received: weighted average of the last 5 receipts with a
+  // price, plus last / min / max. Converted to the requested purchase unit when
+  // a conversion exists; otherwise returned in the ingredient's base unit.
+  app.get('/purchase-orders/price-suggestions', {
+    preHandler: [requireAnyOf('PROCUREMENT', 'OPS_MGR', 'FINANCE_MGR', 'WAREHOUSE')],
+  }, async (req, reply) => {
+    const { items } = req.query as { items?: string };
+    const pairs = (items ?? '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 100).map(x => {
+      const [ingredientId, ...rest] = x.split(':');
+      return { ingredientId, uom: rest.join(':') };
+    }).filter(p => p.ingredientId);
+    if (!pairs.length) return reply.send({ data: {} });
+
+    const ids = [...new Set(pairs.map(p => p.ingredientId))];
+    const [ings, moves] = await Promise.all([
+      prisma.ingredient.findMany({ where: { id: { in: ids } }, select: { id: true, baseUom: true } }),
+      prisma.stockMovement.findMany({
+        where:   { ingredientId: { in: ids }, type: 'PURCHASE_RECEIPT', qtyIn: { gt: 0 }, unitCostPen: { gt: 0 } },
+        orderBy: { createdAt: 'desc' },
+        select:  { ingredientId: true, qtyIn: true, unitCostPen: true, createdAt: true },
+      }),
+    ]);
+    const baseOf = new Map(ings.map(i => [i.id, i.baseUom]));
+    const byIng = new Map<string, typeof moves>();
+    for (const m of moves) { const a = byIng.get(m.ingredientId) ?? []; a.push(m); byIng.set(m.ingredientId, a); }
+
+    const out: Record<string, any> = {};
+    for (const p of pairs) {
+      const all = byIng.get(p.ingredientId) ?? [];
+      const baseUom = baseOf.get(p.ingredientId);
+      if (!all.length || !baseUom) continue;
+      let uom = baseUom, factor = 1;
+      if (p.uom && p.uom !== baseUom) {
+        const f = await resolveConversionFactor(p.uom, baseUom, p.ingredientId); // 1 purchase unit = f base units
+        if (f && f > 0) { uom = p.uom; factor = f; }
+      }
+      const recent = all.slice(0, 5);
+      const qty = recent.reduce((s, m) => s + Number(m.qtyIn), 0);
+      const avg = qty > 0 ? recent.reduce((s, m) => s + Number(m.qtyIn) * Number(m.unitCostPen), 0) / qty : 0;
+      const costs = recent.map(m => Number(m.unitCostPen));
+      const r = (n: number) => parseFloat((n * factor).toFixed(4));
+      out[`${p.ingredientId}:${p.uom}`] = {
+        uom, suggested: r(avg), last: r(Number(recent[0].unitCostPen)), min: r(Math.min(...costs)), max: r(Math.max(...costs)),
+        receipts: all.length, basedOn: recent.length, lastDate: recent[0].createdAt,
+      };
+    }
+    return reply.send({ data: out });
+  });
 
   // ══════════════════════════════════════════════════════════════════════════
   //  Adjuntos de la OC — factura, certificado de calidad, cotización

@@ -1019,6 +1019,31 @@ export default function Procurement() {
   const [showPOForm, setShowPOForm] = useState(false);
   const [editingPOId, setEditingPOId] = useState<string | null>(null);
   const [viewingPO, setViewingPO] = useState<any>(null);
+  // Corrección de precio en OCs ya aprobadas/recibidas (recostea ingresos y costo promedio).
+  const PRICE_EDITABLE_STATUSES = ['APPROVED', 'SENT', 'PARTIAL_RECEIVED', 'FULLY_RECEIVED'];
+  const [editLine, setEditLine] = useState<{ id: string; value: string } | null>(null);
+  const [savingPrice, setSavingPrice] = useState(false);
+  const fmtP = (n: any) => String(parseFloat(Number(n ?? 0).toFixed(4)));
+  const savePrice = async (po: any, lineId: string, value: string) => {
+    const v = Number(value);
+    if (!Number.isFinite(v) || v < 0) { toast.error('Precio inválido'); return; }
+    setSavingPrice(true);
+    try {
+      const r = await api.patch(`/v1/procurement/purchase-orders/${po.id}/lines/${lineId}/price`, { unitPrice: v });
+      const n = r.data?.data?.receiptsRecosted ?? 0;
+      toast.success(n > 0 ? `Precio actualizado · ${n} ingreso(s) recosteados` : 'Precio actualizado');
+      const list = await api.get('/v1/procurement/purchase-orders').then(x => x.data);
+      qc.setQueryData(['pos'], list);
+      const arr = Array.isArray(list) ? list : (list?.data ?? []);
+      const fresh = arr.find((x: any) => x.id === po.id);
+      if (fresh) setViewingPO(fresh);
+      qc.invalidateQueries({ queryKey: ['inventory-dashboard'] });
+      qc.invalidateQueries({ queryKey: ['ingredient-master'] });
+      setEditLine(null);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error ?? 'No se pudo actualizar el precio');
+    } finally { setSavingPrice(false); }
+  };
   const [receivingPO, setReceivingPO] = useState<any>(null);
   const [attachmentsPO, setAttachmentsPO] = useState<any>(null);
   const RECEIVABLE_STATUSES = ['APPROVED', 'SENT', 'PARTIAL_RECEIVED'];
@@ -1055,6 +1080,14 @@ export default function Procurement() {
     onError: (e: any) => toast.error(e.response?.data?.message ?? e.response?.data?.error ?? 'Error'),
   });
   const { data: ingredients } = useQuery({ queryKey: ['ingredient-master'], queryFn: () => api.get('/v1/inventory/ingredient-master').then(r => r.data) });
+  // Precio sugerido por línea (promedio ponderado de las últimas compras recibidas).
+  const sugItems = poForm.lines.filter(l => l.ingredientId).map(l => `${l.ingredientId}:${l.uom}`).join(',');
+  const { data: priceSug } = useQuery({
+    queryKey: ['po-price-suggestions', sugItems],
+    enabled: showPOForm && !!sugItems,
+    staleTime: 30_000,
+    queryFn: () => api.get(`/v1/procurement/purchase-orders/price-suggestions?items=${encodeURIComponent(sugItems)}`).then(r => r.data),
+  });
   const approvePO = useMutation({
     mutationFn: (id: string) => api.patch(`/v1/procurement/purchase-orders/${id}/approve`, { approved: true }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pos'] }); toast.success('OC aprobada'); }
@@ -1181,7 +1214,24 @@ export default function Procurement() {
                             <td className="px-3 py-2">{l.ingredient?.name ?? ingName(l.ingredientId)}</td>
                             <td className="px-3 py-2 text-right">{fmtNum(qty)}</td>
                             <td className="px-3 py-2 text-center text-gray-500">{l.uom}</td>
-                            <td className="px-3 py-2 text-right font-mono">{fmtNum(price)}</td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {editLine?.id === l.id ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <input type="number" min={0} step="0.0001" autoFocus className="input w-24 text-right" value={editLine!.value}
+                                    onChange={e => setEditLine({ id: l.id, value: e.target.value })}
+                                    onKeyDown={e => { if (e.key === 'Enter') savePrice(po, l.id, editLine!.value); if (e.key === 'Escape') setEditLine(null); }} />
+                                  <button type="button" disabled={savingPrice} onClick={() => savePrice(po, l.id, editLine!.value)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="Guardar precio"><Check size={14} /></button>
+                                  <button type="button" onClick={() => setEditLine(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded" title="Cancelar"><X size={14} /></button>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5">
+                                  {fmtNum(price)}
+                                  {PRICE_EDITABLE_STATUSES.includes(po.status) && l.id && (
+                                    <button type="button" onClick={() => setEditLine({ id: l.id, value: String(price) })} className="text-gray-400 hover:text-brand-600 p-0.5 rounded" title="Corregir precio (recostea el stock recibido)"><Pencil size={12} /></button>
+                                  )}
+                                </span>
+                              )}
+                            </td>
                             <td className="px-3 py-2 text-right font-mono">S/ {fmtNum(l.lineTotalPen ?? qty * price * rate)}</td>
                           </tr>
                         );
@@ -1189,6 +1239,9 @@ export default function Procurement() {
                     </tbody>
                   </table>
                 </div>
+                {PRICE_EDITABLE_STATUSES.includes(po.status) && (
+                  <p className="text-xs text-gray-400">Para corregir un precio, usa el lápiz junto al precio. Si la línea ya se recibió, se recalcula el costo del ingreso y el costo promedio del insumo (los consumos ya hechos no cambian).</p>
+                )}
                 <div className="ml-auto w-56 text-sm space-y-1">
                   <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><span className="font-mono">S/ {fmtNum(po.subtotalPen ?? 0)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500">IGV 18%</span><span className="font-mono">S/ {fmtNum(po.igvPen ?? 0)}</span></div>
@@ -1314,6 +1367,19 @@ export default function Procurement() {
                     {l.uom && !UOM_OPTIONS.includes(l.uom) && <option value={l.uom}>{l.uom}</option>}
                   </select>
                   <input type="number" className="input w-32" placeholder={`Precio ${poForm.currency === 'PEN' ? 'S/' : poForm.currency}`} min={0} step="0.01" value={l.unitPricePen} onChange={e => setPoForm(f => ({ ...f, lines: f.lines.map((x,j) => j===i ? {...x, unitPricePen: parseFloat(e.target.value)||0} : x) }))} />
+                  {(() => {
+                    const sg = l.ingredientId ? priceSug?.data?.[`${l.ingredientId}:${l.uom}`] : null;
+                    if (!sg) return <span className="w-28 shrink-0 text-xs text-gray-300 flex items-center justify-center" title="Sin compras recibidas con precio para este insumo">Sug. —</span>;
+                    const tip = `Promedio ponderado de las últimas ${sg.basedOn} compra(s) recibidas · última S/ ${fmtP(sg.last)} · rango S/ ${fmtP(sg.min)}–${fmtP(sg.max)} por ${sg.uom}${sg.uom !== l.uom ? ' (sin conversión a la unidad de compra)' : ''}`;
+                    const canUse = poForm.currency === 'PEN' && sg.uom === l.uom;
+                    return (
+                      <button type="button" disabled={!canUse} title={tip}
+                        className={`w-28 shrink-0 text-xs rounded-lg border px-1.5 py-1 text-center ${canUse ? 'border-brand-200 text-brand-700 bg-brand-50 hover:bg-brand-100' : 'border-gray-200 text-gray-500 bg-gray-50'}`}
+                        onClick={() => setPoForm(f => ({ ...f, lines: f.lines.map((x, j) => j === i ? { ...x, unitPricePen: sg.suggested } : x) }))}>
+                        Sug. S/ {fmtP(sg.suggested)}/{sg.uom}
+                      </button>
+                    );
+                  })()}
                 </div>
               ))}
               <button className="text-sm text-brand-600 hover:underline" onClick={() => setPoForm(f => ({ ...f, lines: [...f.lines, { ingredientId: '', quantity: 1, uom: '', unitPricePen: 0 }] }))}>+ Línea</button>
