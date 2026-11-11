@@ -755,14 +755,15 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
   const batches: any[] = data?.data ?? [];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editExpiry, setEditExpiry] = useState('');
+  const [editLot, setEditLot] = useState('');
   const toISODate = (d: any) => d ? new Date(d).toISOString().slice(0, 10) : '';
   const saveExpiry = useMutation({
-    mutationFn: (b: { id: string; expiryDate: string }) =>
-      api.patch(`/v1/inventory/batches/${b.id}`, { expiryDate: b.expiryDate || null }),
+    mutationFn: (b: { id: string; expiryDate: string; lotNumber: string }) =>
+      api.patch(`/v1/inventory/batches/${b.id}`, { expiryDate: b.expiryDate || null, lotNumber: b.lotNumber.trim() || null }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ingredient-batches', item.id] });
       qc.invalidateQueries({ queryKey: ['expiry-alerts'] });
-      toast.success('Fecha de vencimiento actualizada');
+      toast.success('Lote actualizado');
       setEditingId(null);
     },
     onError: (e: any) => toast.error(e.response?.data?.error ?? 'Error al actualizar'),
@@ -802,12 +803,16 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
               <tbody className="divide-y divide-gray-100">
                 {batches.map(b => (
                   <tr key={b.id} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 font-mono">{b.supplierLotNo || <span className="text-gray-300">sin lote</span>}</td>
+                    <td className="px-3 py-2 font-mono">
+                      {editingId === b.id
+                        ? <input className="input py-1 text-xs font-mono w-28" value={editLot} onChange={e => setEditLot(e.target.value)} placeholder="N° de lote" />
+                        : (b.supplierLotNo || <span className="text-gray-300">sin lote</span>)}
+                    </td>
                     <td className="px-3 py-2 text-gray-500">{b.receivedDate ? new Date(b.receivedDate).toLocaleDateString('es-PE') : '—'}</td>
                     <td className="px-3 py-2 text-gray-500">{b.productionDate ? new Date(b.productionDate).toLocaleDateString('es-PE') : '—'}</td>
                     <td className="px-3 py-2 text-gray-500">
                       {editingId === b.id ? (
-                        <input type="date" className="input py-1 text-xs" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} autoFocus />
+                        <input type="date" className="input py-1 text-xs" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} />
                       ) : (
                         b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('es-PE') : '—'
                       )}
@@ -821,15 +826,15 @@ function LotesModal({ item, onClose }: { item: IngredientDashItem; onClose: () =
                           <button
                             className="text-xs bg-brand-600 text-white px-2 py-1 rounded disabled:opacity-50"
                             disabled={saveExpiry.isPending}
-                            onClick={() => saveExpiry.mutate({ id: b.id, expiryDate: editExpiry })}
+                            onClick={() => saveExpiry.mutate({ id: b.id, expiryDate: editExpiry, lotNumber: editLot })}
                           >Guardar</button>
                           <button className="text-xs text-gray-500 px-1" onClick={() => setEditingId(null)}>Cancelar</button>
                         </div>
                       ) : (
                         <button
                           className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                          title="Editar vencimiento"
-                          onClick={() => { setEditingId(b.id); setEditExpiry(toISODate(b.expiryDate)); }}
+                          title="Editar lote / vencimiento"
+                          onClick={() => { setEditingId(b.id); setEditExpiry(toISODate(b.expiryDate)); setEditLot(b.supplierLotNo ?? ''); }}
                         ><Pencil size={13} /></button>
                       )}
                     </td>
@@ -883,6 +888,21 @@ function FinishedLotesModal({ product, onClose }: { product: FinishedProduct; on
   });
   const lotes: FinishedLote[] = data?.data ?? [];
   const [openLote, setOpenLote] = useState<string | null>(null);
+  // Edición del N° de lote / vencimiento (Comentarios ERP 09/11/26)
+  const qc = useQueryClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLot, setEditLot] = useState('');
+  const [editExpiry, setEditExpiry] = useState('');
+  const saveLote = useMutation({
+    mutationFn: (b: { id: string; lotNumber: string; expiryDate: string }) =>
+      api.patch(`/v1/inventory/finished/lotes/${b.id}`, { lotNumber: b.lotNumber, expiryDate: b.expiryDate || null }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['finished-lotes', product.productId] });
+      toast.success('Lote actualizado');
+      setEditingId(null);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.message ?? e.response?.data?.error ?? 'Error al actualizar el lote'),
+  });
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: '85vh' }}>
@@ -901,7 +921,26 @@ function FinishedLotesModal({ product, onClose }: { product: FinishedProduct; on
             : lotes.length === 0 ? <div className="text-center text-gray-400 py-8">Sin lotes registrados.</div>
             : lotes.map(l => (
               <div key={l.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                <button onClick={() => setOpenLote(openLote === l.id ? null : l.id)} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left">
+                {editingId === l.id ? (
+                  <div className="flex flex-wrap items-end gap-3 px-4 py-3 bg-brand-50/40">
+                    <div>
+                      <label className="block text-[11px] text-gray-500 mb-0.5">N° de lote</label>
+                      <input className="input py-1 text-sm font-mono w-40" value={editLot} onChange={e => setEditLot(e.target.value)} autoFocus />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-500 mb-0.5">Vencimiento</label>
+                      <input type="date" className="input py-1 text-sm" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} />
+                    </div>
+                    <div className="flex items-center gap-1 ml-auto">
+                      <button className="text-xs bg-brand-600 text-white px-3 py-1.5 rounded disabled:opacity-50"
+                        disabled={saveLote.isPending || !editLot.trim()}
+                        onClick={() => saveLote.mutate({ id: l.id, lotNumber: editLot.trim(), expiryDate: editExpiry })}>Guardar</button>
+                      <button className="text-xs text-gray-500 px-2" onClick={() => setEditingId(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                <div className="flex items-center">
+                <button onClick={() => setOpenLote(openLote === l.id ? null : l.id)} className="flex-1 min-w-0 flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left">
                   {openLote === l.id ? <ChevronDown size={15} className="text-gray-400 flex-shrink-0" /> : <ChevronRight size={15} className="text-gray-400 flex-shrink-0" />}
                   <div className="flex-1 min-w-0">
                     <p className="font-mono text-sm font-medium text-gray-800">{l.lotNumber || 'sin lote'}</p>
@@ -912,6 +951,17 @@ function FinishedLotesModal({ product, onClose }: { product: FinishedProduct; on
                     <p className="text-[11px] text-gray-400">S/ {Number(l.unitCostPen).toFixed(4)}/u</p>
                   </div>
                 </button>
+                <button
+                  className="p-2 mr-2 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                  title="Editar N° de lote / vencimiento"
+                  onClick={() => {
+                    setEditingId(l.id);
+                    setEditLot(l.lotNumber ?? l.productionOrderRef ?? '');
+                    setEditExpiry(l.expiryDate ? new Date(l.expiryDate).toISOString().slice(0, 10) : '');
+                  }}
+                ><Pencil size={14} /></button>
+                </div>
+                )}
                 {openLote === l.id && <LoteSources movementId={l.id} />}
               </div>
             ))}

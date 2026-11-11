@@ -82,13 +82,13 @@ async function openBatchCard(order: Order) {
     const rows = (recipe.bomLines ?? []).map((l: any) => {
       const planned = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
       const cons = consMap[l.ingredientId];
-      const qty = cons ? cons.actualQty : planned;
+      const qty = toDisplay(cons ? cons.actualQty : planned, l.uom);
       const loteCell = cons && cons.lotNumber
         ? `<td class="mono">${cons.lotNumber}</td>`
         : `<td class="blank"></td>`;
       return `<tr>
         <td>${l.ingredient?.name ?? ''}</td>
-        <td class="num">${qty.toFixed(3)} ${l.uom ?? ''}</td>
+        <td class="num">${fmtQty(qty)} ${displayUom(l.uom)}</td>
         ${loteCell}
         <td class="blank"></td></tr>`;
     }).join('');
@@ -590,6 +590,22 @@ function uomFactor(from?: string, to?: string): number | null {
   return null;
 }
 
+// Comentarios ERP 09/11/26: en Producción las cantidades de masa se muestran
+// siempre en gramos (y las de volumen en ml), esté la receta en kg o en g, para
+// uniformizar y ganar precisión. Unidades de conteo quedan tal cual.
+function displayUom(uom?: string): string {
+  const u = (uom ?? '').toLowerCase().trim().replace(/\.$/, '');
+  if (MASS_G[u]) return 'g';
+  if (VOL_ML[u]) return 'ml';
+  return uom ?? '';
+}
+function toDisplay(qty: number, uom?: string): number {
+  return qty * (uomFactor(uom, displayUom(uom)) ?? 1);
+}
+function fmtQty(n: number): string {
+  return n.toLocaleString('es-PE', { maximumFractionDigits: 2 });
+}
+
 // ── Lote (batch) picker for a single materia prima / intermedio ──────────────
 interface Batch { id: string; supplierLotNo: string | null; qtyRemaining: string; expiryDate: string | null; receivedDate: string; }
 function BatchSelect({ ingredientId, value, uom, onSelect }: { ingredientId: string; value?: string; uom?: string; onSelect: (batchId: string, label: string) => void }) {
@@ -611,7 +627,7 @@ function BatchSelect({ ingredientId, value, uom, onSelect }: { ingredientId: str
       <option value="">— Elegir lote —</option>
       {batches.map(b => (
         <option key={b.id} value={b.id}>
-          {(b.supplierLotNo || 'sin lote')} · {Number(b.qtyRemaining).toFixed(1)}{uom ? ` ${uom}` : ''} disp.{b.expiryDate ? ` · vence ${new Date(b.expiryDate).toLocaleDateString('es-PE')}` : ''}
+          {(b.supplierLotNo || 'sin lote')} · {fmtQty(toDisplay(Number(b.qtyRemaining), uom))}{uom ? ` ${displayUom(uom)}` : ''} disp.{b.expiryDate ? ` · vence ${new Date(b.expiryDate).toLocaleDateString('es-PE')}` : ''}
         </option>
       ))}
       {batches.length === 0 && <option value="" disabled>(sin lotes en inventario)</option>}
@@ -640,7 +656,8 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
     const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
     return iso;
   });
-  const [finishedLotNumber, setFinishedLotNumber] = useState('');
+  // Lote del terminado: por defecto el número de la OP (editable).
+  const [finishedLotNumber, setFinishedLotNumber] = useState(order.orderNumber ?? '');
   const [finishedExpiryDate, setFinishedExpiryDate] = useState('');
   const [notes, setNotes] = useState('');
   const [consumptions, setConsumptions] = useState<Record<string, { actualQty: string; lotNumber: string; batchId: string; manual: boolean }>>({});
@@ -658,7 +675,7 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
       recipe.bomLines.forEach(l => {
         const perBatch = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * plannedScale;
         if (!next[l.ingredientId]) {
-          next[l.ingredientId] = { actualQty: perBatch.toFixed(3), lotNumber: '', batchId: '', manual: false };
+          next[l.ingredientId] = { actualQty: String(Math.round(toDisplay(perBatch, l.uom) * 100) / 100), lotNumber: '', batchId: '', manual: false };
         }
       });
       return next;
@@ -708,8 +725,9 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Lote producto terminado</label>
-                  <input className="input font-mono" placeholder="L-2026-001"
+                  <input className="input font-mono" placeholder={order.orderNumber}
                     value={finishedLotNumber} onChange={e => setFinishedLotNumber(e.target.value)} />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Por defecto el N° de OP. Se puede editar luego en Inventario → Terminados.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Vencimiento producto terminado</label>
@@ -731,7 +749,8 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {recipe.bomLines.map(l => {
-                      const planned = Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale;
+                      const planned = toDisplay(Number(l.qtyRequired) * (1 + Number(l.wasteFactorPct) / 100) * scale, l.uom);
+                      const dUom = displayUom(l.uom);
                       const c = consumptions[l.ingredientId] ?? { actualQty: '', lotNumber: '', batchId: '', manual: false };
                       return (
                         <tr key={l.id}>
@@ -742,23 +761,23 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                             )}
                           </td>
                           <td className="px-3 py-2 text-right font-mono text-gray-500 text-xs">
-                            {planned.toFixed(3)} {l.uom}
+                            {fmtQty(planned)} {dUom}
                           </td>
                           <td className="px-3 py-2 text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <input type="number" min="0" step="0.001"
+                              <input type="number" min="0" step="0.01"
                                 className="input font-mono text-right w-28"
                                 value={c.actualQty}
                                 onChange={e => setConsumptions(p => ({ ...p, [l.ingredientId]: { ...c, actualQty: e.target.value, manual: true } }))} />
-                              <span className="text-xs text-gray-400 w-6 text-left">{l.uom}</span>
+                              <span className="text-xs text-gray-400 w-6 text-left">{dUom}</span>
                             </div>
                             {(() => {
                               const stockUom = l.ingredient.baseUom;
-                              const f = uomFactor(l.uom, stockUom);
-                              if (!stockUom || (l.uom ?? '').toLowerCase() === stockUom.toLowerCase() || f === 1) return null;
+                              const f = uomFactor(dUom, stockUom);
+                              if (!stockUom || dUom.toLowerCase() === stockUom.toLowerCase() || f === 1) return null;
                               return f == null
                                 ? <div className="text-[10px] text-red-500 mt-0.5">No convertible a {stockUom}</div>
-                                : <div className="text-[10px] text-gray-400 mt-0.5">= {((Number(c.actualQty) || 0) * f).toFixed(3)} {stockUom} de stock</div>;
+                                : <div className="text-[10px] text-gray-400 mt-0.5">= {fmtQty((Number(c.actualQty) || 0) * f)} {stockUom} de stock</div>;
                             })()}
                           </td>
                           <td className="px-3 py-2 w-56">
@@ -804,8 +823,8 @@ function CloseOrderModal({ order, onClose, onSuccess }: { order: Order; onClose:
                 .map(([ingredientId, v]) => ({
                   ingredientId,
                   actualQty: Number(v.actualQty) || 0,
-                  // Qty is typed in the formula's unit; the backend converts to stock unit.
-                  uom: recipe?.bomLines.find(b => b.ingredientId === ingredientId)?.uom,
+                  // Qty is typed in the display unit (g / ml); the backend converts to stock unit.
+                  uom: displayUom(recipe?.bomLines.find(b => b.ingredientId === ingredientId)?.uom) || undefined,
                   lotNumber: v.lotNumber || undefined,
                   batchId: v.batchId || undefined,
                 }))

@@ -415,47 +415,52 @@ export async function invoicingRoutes(app: FastifyInstance) {
     return reply.send({ data: prefill });
   });
 
-  // POST /guia-remision — crear la guía de un pedido
-  app.post('/guia-remision', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (req, reply) => {
-    const body = req.body as {
-      salesOrderId: string;
-      movementType?: string;  // VENTA|COMPRA|TRASLADO|DEVOLUCION|OTROS
-      senderName?: string;
-      senderAddress: string;      // punto de partida
-      originUbigeo?: string;
-      recipientName: string;
-      recipientDocNo?: string;
-      recipientAddress: string;   // punto de llegada
-      destUbigeo?: string;
-      startDate?: string;         // fecha de inicio del traslado (YYYY-MM-DD)
-      issueDate?: string;
-      transportMode?: '01' | '02';
-      transportistName?: string;  // transporte público: razón social del transportista
-      transportistRuc?: string;
-      transportistPlate?: string;
-      transportistLicense?: string;
-      driverDocNo?: string;
-      driverName?: string;
-      grossWeight?: number;
-      weightUnit?: string;
-      packages?: number;
-      goodsDescription?: string;
-      items?: { productId?: string; description: string; qty: number; unitCode?: string }[];
-      saveAsDefault?: boolean;
-    };
+  type GuiaCreateInput = {
+    salesOrderId: string;
+    movementType?: string;  // VENTA|COMPRA|TRASLADO|DEVOLUCION|OTROS
+    senderName?: string;
+    senderAddress: string;      // punto de partida
+    originUbigeo?: string;
+    recipientName: string;
+    recipientDocNo?: string;
+    recipientAddress: string;   // punto de llegada
+    destUbigeo?: string;
+    startDate?: string;         // fecha de inicio del traslado (YYYY-MM-DD)
+    issueDate?: string;
+    transportMode?: '01' | '02';
+    transportistName?: string;  // transporte público: razón social del transportista
+    transportistRuc?: string;
+    transportistPlate?: string;
+    transportistLicense?: string;
+    driverDocNo?: string;
+    driverName?: string;
+    grossWeight?: number;
+    weightUnit?: string;
+    packages?: number;
+    goodsDescription?: string;
+    items?: { productId?: string; description: string; qty: number; unitCode?: string }[];
+    saveAsDefault?: boolean;
+  };
 
-    if (!body.salesOrderId) return reply.code(400).send({ error: 'salesOrderId required', message: 'Falta el pedido' });
-    if (!body.senderAddress?.trim())    return reply.code(400).send({ error: 'senderAddress required', message: 'Falta el punto de partida' });
-    if (!body.recipientAddress?.trim()) return reply.code(400).send({ error: 'recipientAddress required', message: 'Falta el punto de llegada' });
+  class GuiaCreateError extends Error {
+    constructor(public statusCode: number, public code: string, message: string, public data?: unknown) { super(message); }
+  }
+
+  // Crea la guía (borrador interno, sin envío a SUNAT) de un pedido. La usan
+  // POST /guia-remision (una) y POST /guia-remision/bulk (masiva).
+  async function createGuia(body: GuiaCreateInput, actorId: string) {
+    if (!body.salesOrderId) throw new GuiaCreateError(400, 'salesOrderId required', 'Falta el pedido');
+    if (!body.senderAddress?.trim())    throw new GuiaCreateError(400, 'senderAddress required', 'Falta el punto de partida');
+    if (!body.recipientAddress?.trim()) throw new GuiaCreateError(400, 'recipientAddress required', 'Falta el punto de llegada');
     const mode = body.transportMode === '01' ? '01' : '02';
 
     const order = await prisma.salesOrder.findUnique({
       where: { id: body.salesOrderId },
       include: { customer: true, lines: { include: { product: true } } },
     });
-    if (!order) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Pedido no encontrado' });
+    if (!order) throw new GuiaCreateError(404, 'NOT_FOUND', 'Pedido no encontrado');
     if (GUIA_BLOCKED_ORDER_STATUSES.includes(order.status as string)) {
-      return reply.code(422).send({ error: 'ORDER_NOT_READY', message: 'El pedido debe estar aceptado para generar la guía' });
+      throw new GuiaCreateError(422, 'ORDER_NOT_READY', 'El pedido debe estar aceptado para generar la guía');
     }
 
     const existing = await prisma.invoice.findFirst({
@@ -463,7 +468,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
       select: { id: true, series: true, correlative: true },
     });
     if (existing) {
-      return reply.code(409).send({ error: 'GUIA_EXISTS', message: `El pedido ya tiene la guía ${existing.series}-${existing.correlative}`, data: existing });
+      throw new GuiaCreateError(409, 'GUIA_EXISTS', `El pedido ya tiene la guía ${existing.series}-${existing.correlative}`, existing);
     }
 
     // Series/correlativo propios de la guía
@@ -481,7 +486,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
       productId: l.productId, description: l.product?.name ?? 'Producto', qty: Number(l.qty),
       unitCode: sunatUnitCode(l.product?.unitOfSale),
     }))).filter(i => Number(i.qty) > 0);
-    if (!items.length) return reply.code(400).send({ error: 'items required', message: 'La guía no tiene ítems' });
+    if (!items.length) throw new GuiaCreateError(400, 'items required', 'La guía no tiene ítems');
 
     const lineItems = items.map(i => {
       const unitPrice = i.productId ? (priceByProduct.get(i.productId) ?? 0) : 0;
@@ -529,7 +534,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
         guiaWeightUnit: body.weightUnit === 'TNE' ? 'TNE' : 'KGM',
         guiaPackages: body.packages != null && Number(body.packages) > 0 ? Math.round(Number(body.packages)) : null,
         guiaGoodsDescription: body.goodsDescription?.trim() || autoGoods,
-        createdBy: req.actor!.sub,
+        createdBy: actorId,
         lines: { create: lineItems },
       },
       include: { lines: true, salesOrder: { select: { orderNumber: true, id: true } } },
@@ -553,10 +558,94 @@ export async function invoicingRoutes(app: FastifyInstance) {
         driverLicense:  body.transportistLicense,
         carrierRuc:     body.transportistRuc,
         carrierName:    body.transportistName,
-      }, req.actor?.sub).catch(err => req.log.warn({ err }, 'guia-config save failed'));
+      }, actorId).catch(err => app.log.warn({ err }, 'guia-config save failed'));
     }
 
-    return reply.code(201).send({ data: guia });
+    return guia;
+  }
+
+  // POST /guia-remision — crear la guía de un pedido
+  app.post('/guia-remision', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (req, reply) => {
+    try {
+      const guia = await createGuia(req.body as GuiaCreateInput, req.actor!.sub);
+      return reply.code(201).send({ data: guia });
+    } catch (err) {
+      if (err instanceof GuiaCreateError) return reply.code(err.statusCode).send({ error: err.code, message: err.message, data: err.data });
+      throw err;
+    }
+  });
+
+  // POST /guia-remision/bulk — guías masivas desde Ventas (Comentarios ERP 09/11/26)
+  // Genera, antes de facturar, la guía interna (borrador, SIN envío a SUNAT) de
+  // varios pedidos a la vez. Cada guía toma los datos pre-llenados del pedido
+  // (destinatario, llegada, ítems, peso) y comparte motivo, fecha de traslado y
+  // transporte. Los pedidos que ya tienen guía o no tienen dirección de
+  // llegada se saltan con su motivo. Secuencial para que el
+  // correlativo T001 no choque.
+  app.post('/guia-remision/bulk', { preHandler: [requireAnyOf(...GUIA_ROLES)] }, async (req, reply) => {
+    const body = req.body as {
+      orderIds: string[];
+      movementType?: string;
+      startDate?: string;          // YYYY-MM-DD; si falta, la fecha de entrega de cada pedido
+      senderAddress?: string;
+      originUbigeo?: string;
+      transportMode?: '01' | '02';
+      transportistName?: string;
+      transportistRuc?: string;
+      transportistPlate?: string;
+      transportistLicense?: string;
+      driverDocNo?: string;
+      driverName?: string;
+      saveAsDefault?: boolean;
+    };
+    const ids = [...new Set((body.orderIds ?? []).filter(Boolean))];
+    if (!ids.length) return reply.code(400).send({ error: 'orderIds required', message: 'Selecciona al menos un pedido' });
+    if (ids.length > 200) return reply.code(400).send({ error: 'TOO_MANY', message: 'Máximo 200 pedidos por lote' });
+
+    const results: { orderId: string; orderNumber?: string; ok: boolean; guia?: { id: string; series: string; correlative: string }; error?: string }[] = [];
+    let savedDefault = false;
+    for (const orderId of ids) {
+      const prefill = await buildGuiaPrefill(orderId);
+      if (!prefill) { results.push({ orderId, ok: false, error: 'Pedido no encontrado' }); continue; }
+      const orderNumber = prefill.order.orderNumber;
+      if (prefill.existingGuia) {
+        results.push({ orderId, orderNumber, ok: false, error: `Ya tiene la guía ${prefill.existingGuia.series}-${prefill.existingGuia.correlative}` });
+        continue;
+      }
+      const t = prefill.transport;
+      const mode = body.transportMode ?? (t.mode === '01' ? '01' : '02');
+      try {
+        const guia = await createGuia({
+          salesOrderId:        orderId,
+          movementType:        body.movementType ?? 'VENTA',
+          senderAddress:       body.senderAddress?.trim() || prefill.partida.address,
+          originUbigeo:        body.originUbigeo?.trim() || prefill.partida.ubigeo,
+          recipientName:       prefill.recipient.name,
+          recipientDocNo:      prefill.recipient.docNo,
+          recipientAddress:    prefill.llegada.address,
+          destUbigeo:          prefill.llegada.ubigeo,
+          startDate:           body.startDate || prefill.startDate,
+          transportMode:       mode,
+          transportistName:    body.transportistName ?? t.carrierName,
+          transportistRuc:     body.transportistRuc ?? t.carrierRuc,
+          transportistPlate:   body.transportistPlate ?? t.vehiclePlate,
+          transportistLicense: body.transportistLicense ?? t.driverLicense,
+          driverDocNo:         body.driverDocNo ?? t.driverDocNo,
+          driverName:          body.driverName ?? t.driverName,
+          grossWeight:         prefill.grossWeightKg ?? undefined,
+          weightUnit:          'KGM',
+          items:               prefill.items.map(i => ({ productId: i.productId, description: i.description, qty: i.qty, unitCode: i.unitCode })),
+          saveAsDefault:       !!body.saveAsDefault && !savedDefault,
+        }, req.actor!.sub);
+        if (body.saveAsDefault) savedDefault = true;
+        results.push({ orderId, orderNumber, ok: true, guia: { id: guia.id, series: guia.series, correlative: guia.correlative } });
+      } catch (err: any) {
+        if (!(err instanceof GuiaCreateError)) req.log.error({ err, orderId }, 'bulk guía failed');
+        results.push({ orderId, orderNumber, ok: false, error: err instanceof GuiaCreateError ? err.message : 'Error inesperado al generar la guía' });
+      }
+    }
+    const created = results.filter(r => r.ok).length;
+    return reply.send({ data: results, created, skipped: results.length - created });
   });
 
   // POST /guia-remision/:id/emitir — GRE remitente electrónica vía Factpro (fase B)

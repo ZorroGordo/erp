@@ -140,6 +140,27 @@ export async function inventoryRoutes(app: FastifyInstance) {
     return reply.send({ data: await InventoryService.getFinishedLotes(productId) });
   });
 
+  // PATCH /v1/inventory/finished/lotes/:id — corregir el número de lote o el
+  // vencimiento de un lote de producto terminado (movimiento PRODUCTION_OUTPUT).
+  app.patch('/finished/lotes/:id', { preHandler: [requireAnyOf('WAREHOUSE', 'OPS_MGR', 'PRODUCTION', 'SUPER_ADMIN')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { lotNumber?: string | null; expiryDate?: string | null };
+    const { prisma } = await import('../../lib/prisma');
+    const mv = await (prisma as any).productStockMovement.findUnique({ where: { id }, select: { id: true, type: true } });
+    if (!mv || mv.type !== 'PRODUCTION_OUTPUT') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Lote no encontrado' });
+    const data: Record<string, unknown> = {};
+    if (body.lotNumber !== undefined) {
+      const lot = (body.lotNumber ?? '').trim();
+      if (!lot) return reply.code(400).send({ error: 'LOT_REQUIRED', message: 'El número de lote no puede quedar vacío' });
+      data.lotNumber = lot;
+    }
+    if (body.expiryDate !== undefined) data.expiryDate = body.expiryDate ? new Date(body.expiryDate) : null;
+    if (Object.keys(data).length === 0) return reply.code(400).send({ error: 'Nada que actualizar' });
+    setAuditContext(req, 'inventory', 'ADJUSTMENT', id);
+    const updated = await (prisma as any).productStockMovement.update({ where: { id }, data });
+    return reply.send({ data: updated });
+  });
+
   app.get('/finished/lotes/:id/sources', { preHandler: [finishedRoles] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     return reply.send({ data: await InventoryService.getFinishedLoteSources(id) });

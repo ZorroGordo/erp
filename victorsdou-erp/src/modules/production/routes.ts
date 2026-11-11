@@ -744,6 +744,10 @@ export async function productionRoutes(app: FastifyInstance) {
 
     const product = order.recipe.product;
     const overheadRate = await getOverheadRate();
+    // Lote del producto terminado: el que escribió el operario o, por defecto,
+    // el número de la OP (= lote YYDDDLBB). Antes los terminados quedaban
+    // "sin lote" si el campo se dejaba vacío (Comentarios ERP 09/11/26).
+    const lote = body.finishedLotNumber?.trim() || order.orderNumber;
 
     // Release this order's reservations first, so its own consumption isn't
     // blocked by the stock it had reserved.
@@ -839,7 +843,6 @@ export async function productionRoutes(app: FastifyInstance) {
         return reply.code(422).send({ error: `No existe el ingrediente intermedio espejo (SKU ${product.sku}). Vuelve a guardar el producto en Catálogo.` });
       }
 
-      const lote = body.finishedLotNumber || order.orderNumber;
       // Create a lote/Batch so the intermediate can be consumed with FEFO + full
       // lot traceability downstream.
       const batch = await prisma.batch.create({
@@ -926,7 +929,7 @@ export async function productionRoutes(app: FastifyInstance) {
           totalCostPen:       totalCost,
           balanceAfter:       newQty,
           productionOrderRef: order.orderNumber,
-          lotNumber:          body.finishedLotNumber ?? null,
+          lotNumber:          lote,
           productionDate:     new Date(body.completedAt),
           expiryDate:         body.finishedExpiryDate ? new Date(body.finishedExpiryDate) : null,
           notes:              body.notes ?? null,

@@ -4,7 +4,7 @@
 // llega en la fase B).
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Printer, Truck, X, AlertCircle } from 'lucide-react';
+import { Loader2, Printer, Truck, X, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../lib/api';
 
@@ -27,8 +27,10 @@ export const GUIA_UNITS: { value: string; label: string }[] = [
 ];
 const unitLabel = (c?: string) => GUIA_UNITS.find(u => u.value === c)?.label ?? c ?? 'Unidad';
 
-/** Estados del pedido en los que se puede generar la guía desde Ventas. */
-export const GUIA_ORDER_STATUSES = ['READY', 'IN_DELIVERY', 'READY_FOR_DISPATCH', 'OUT_FOR_DELIVERY', 'DELIVERED', 'INVOICED', 'COMPLETED'];
+/** Estados del pedido en los que se puede generar la guía desde Ventas.
+ *  Desde 09/11/26 también antes de despachar/facturar (pedido aceptado): al
+ *  generar la guía el backend pasa el pedido a "Listo". */
+export const GUIA_ORDER_STATUSES = ['CONFIRMED', 'ACCEPTED', 'PAID', 'IN_PRODUCTION', 'READY', 'IN_DELIVERY', 'READY_FOR_DISPATCH', 'OUT_FOR_DELIVERY', 'DELIVERED', 'INVOICED', 'COMPLETED'];
 
 export const guiaNumber = (g: { series: string; correlative: string }) => `${g.series}-${String(g.correlative).padStart(8, '0')}`;
 
@@ -141,6 +143,29 @@ export async function printGuiaById(id: string, win?: Window | null) {
   } catch (e: any) {
     w.close();
     toast.error(e?.response?.data?.message ?? 'No se pudo cargar la guía');
+  }
+}
+
+/** Imprime varias guías en un solo documento (una por página). */
+export async function printGuiasByIds(ids: string[], win?: Window | null) {
+  const w = win ?? openPrintWindow();
+  if (!w) return;
+  try {
+    const cfg = await api.get('/v1/invoices/guia-config').then(r => r.data.data).catch(() => ({}));
+    const guias = await Promise.all(ids.map(id => api.get(`/v1/invoices/${id}`).then(r => r.data.data)));
+    const company = { ruc: cfg.companyRuc, name: cfg.companyName };
+    const docs = guias.map(g => buildGuiaHtml(g, company));
+    const head = docs[0].match(/<head>[\s\S]*<\/head>/)?.[0] ?? '<head><meta charset="utf-8"></head>';
+    const bodies = docs.map(d => (d.match(/<body>([\s\S]*)<\/body>/)?.[1] ?? '').replace(/<script>[\s\S]*?<\/script>/g, ''));
+    const html = `<!doctype html><html>${head.replace(/<title>[^<]*<\/title>/, `<title>Guías de remisión (${ids.length})</title>`)}<body>
+      ${bodies.map((b, i) => `<div style="${i < bodies.length - 1 ? 'page-break-after:always;' : ''}">${b}</div>`).join('')}
+      <script>setTimeout(function(){window.focus();window.print();},400);<\/script></body></html>`;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  } catch (e: any) {
+    w.close();
+    toast.error(e?.response?.data?.message ?? 'No se pudieron cargar las guías');
   }
 }
 
@@ -377,6 +402,189 @@ export function GuiaRemisionModal({ orderId, onClose, onCreated }: {
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700 disabled:opacity-50">
               {create.isPending ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
               Generar guía e imprimir
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Guías masivas ─────────────────────────────────────────────────────────────
+// Comentarios ERP 09/11/26: generar la guía de varios pedidos a la vez, antes de
+// facturar. Son guías INTERNAS (borrador, sin envío a SUNAT): sirven para probar
+// el flujo y como guía física; la emisión electrónica sigue siendo por guía.
+interface BulkResult { orderId: string; orderNumber?: string; ok: boolean; guia?: { id: string; series: string; correlative: string }; error?: string }
+
+export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
+  orders: { id: string; orderNumber: string; customerName?: string }[];
+  onClose: () => void;
+  onDone?: () => void;
+}) {
+  const qc = useQueryClient();
+  const [orders] = useState(ordersProp);   // fija la selección (onDone la limpia en Ventas)
+  const { data: cfg } = useQuery<any>({
+    queryKey: ['guia-config'],
+    queryFn: () => api.get('/v1/invoices/guia-config').then(r => r.data.data),
+    staleTime: 0,
+  });
+
+  const [motivo, setMotivo] = useState('VENTA');
+  const [startDate, setStartDate] = useState('');   // vacío = fecha de entrega de cada pedido
+  const [mode, setMode] = useState<'01' | '02'>('01');
+  const [plate, setPlate] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [driverDocNo, setDriverDocNo] = useState('');
+  const [driverLicense, setDriverLicense] = useState('');
+  const [carrierRuc, setCarrierRuc] = useState('');
+  const [carrierName, setCarrierName] = useState('');
+  const [saveDefault, setSaveDefault] = useState(true);
+  const [results, setResults] = useState<BulkResult[] | null>(null);
+
+  useEffect(() => {
+    if (!cfg) return;
+    setMode(cfg.transportMode === '02' ? '02' : '01');
+    setPlate(cfg.vehiclePlate ?? ''); setDriverName(cfg.driverName ?? ''); setDriverDocNo(cfg.driverDocNo ?? '');
+    setDriverLicense(cfg.driverLicense ?? ''); setCarrierRuc(cfg.carrierRuc ?? ''); setCarrierName(cfg.carrierName ?? '');
+  }, [cfg]);
+
+  const run = useMutation({
+    mutationFn: () => api.post('/v1/invoices/guia-remision/bulk', {
+      orderIds: orders.map(o => o.id),
+      movementType: motivo,
+      startDate: startDate || undefined,
+      transportMode: mode,
+      transportistPlate: plate || undefined,
+      transportistLicense: mode === '02' ? (driverLicense || undefined) : undefined,
+      driverName: mode === '02' ? (driverName || undefined) : undefined,
+      driverDocNo: mode === '02' ? (driverDocNo || undefined) : undefined,
+      transportistRuc: mode === '01' ? (carrierRuc || undefined) : undefined,
+      transportistName: mode === '01' ? (carrierName || undefined) : undefined,
+      saveAsDefault: saveDefault,
+    }).then(r => r.data),
+    onSuccess: (res) => {
+      setResults(res.data);
+      qc.invalidateQueries({ queryKey: ['sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      qc.invalidateQueries({ queryKey: ['guia-config'] });
+      if (res.created) toast.success(`${res.created} guía(s) generada(s)`);
+      if (res.skipped) toast.error(`${res.skipped} pedido(s) sin guía — revisa el detalle`);
+      onDone?.();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Error al generar las guías'),
+  });
+
+  const transportOk = mode === '02'
+    ? plate.trim() && driverName.trim() && /^\d{8}$/.test(driverDocNo.trim())
+    : /^\d{11}$/.test(carrierRuc.trim()) && carrierName.trim();
+  const createdIds = (results ?? []).filter(r => r.ok && r.guia).map(r => r.guia!.id);
+  const lbl = 'block text-xs font-medium text-gray-600 mb-1';
+  const sec = 'text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2';
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-gray-900 flex items-center gap-2"><Truck size={18} className="text-purple-600" /> Guías de remisión masivas</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{orders.length} pedido(s) seleccionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="p-6 space-y-5 overflow-y-auto">
+          {!results ? (
+            <>
+              <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2">
+                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                <span>Guías internas (no electrónicas): <b>no se envían a SUNAT</b>. Destinatario, punto de llegada, ítems y peso se toman de cada pedido; el punto de partida de la configuración ({cfg?.partidaAddress || '—'}).</span>
+              </div>
+
+              <div>
+                <p className={sec}>Pedidos</p>
+                <div className="border border-gray-100 rounded-xl max-h-40 overflow-y-auto divide-y divide-gray-100 text-sm">
+                  {orders.map(o => (
+                    <div key={o.id} className="px-3 py-1.5 flex justify-between gap-3">
+                      <span className="font-mono text-xs text-gray-700">{o.orderNumber}</span>
+                      <span className="text-gray-500 truncate">{o.customerName ?? ''}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={lbl}>Motivo de traslado</label>
+                  <select className="input" value={motivo} onChange={e => setMotivo(e.target.value)}>
+                    {GUIA_MOTIVOS.map(m => <option key={m.value} value={m.value}>{m.code} — {m.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={lbl}>Fecha de inicio del traslado</label>
+                  <input type="date" className="input" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                  <p className="text-[11px] text-gray-400 mt-1">Vacío = fecha de entrega de cada pedido</p>
+                </div>
+              </div>
+
+              <div>
+                <p className={sec}>Transporte (igual para todas)</p>
+                <div className="flex gap-2 mb-3">
+                  {([['02', 'Privado (vehículo propio)'], ['01', 'Público (transportista)']] as const).map(([v, l]) => (
+                    <button key={v} type="button" onClick={() => setMode(v)}
+                      className={`flex-1 px-3 py-2 rounded-xl text-sm font-medium border transition-all ${mode === v ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>{l}</button>
+                  ))}
+                </div>
+                {mode === '02' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={lbl}>Placa del vehículo *</label><input className="input font-mono uppercase" value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} placeholder="ABC-123" /></div>
+                    <div><label className={lbl}>Licencia de conducir</label><input className="input font-mono uppercase" value={driverLicense} onChange={e => setDriverLicense(e.target.value.toUpperCase())} /></div>
+                    <div><label className={lbl}>Conductor (nombre) *</label><input className="input" value={driverName} onChange={e => setDriverName(e.target.value)} /></div>
+                    <div><label className={lbl}>DNI del conductor *</label><input className="input font-mono" maxLength={8} value={driverDocNo} onChange={e => setDriverDocNo(e.target.value.replace(/\D/g, ''))} /></div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={lbl}>RUC del transportista *</label><input className="input font-mono" maxLength={11} value={carrierRuc} onChange={e => setCarrierRuc(e.target.value.replace(/\D/g, ''))} /></div>
+                    <div><label className={lbl}>Razón social *</label><input className="input" value={carrierName} onChange={e => setCarrierName(e.target.value)} /></div>
+                    <div><label className={lbl}>Placa (opcional)</label><input className="input font-mono uppercase" value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} /></div>
+                  </div>
+                )}
+                <label className="flex items-center gap-2 mt-3 text-xs text-gray-600 cursor-pointer">
+                  <input type="checkbox" checked={saveDefault} onChange={e => setSaveDefault(e.target.checked)} className="rounded border-gray-300" />
+                  Recordar vehículo / transportista para la próxima guía
+                </label>
+              </div>
+            </>
+          ) : (
+            <div>
+              <p className={sec}>Resultado</p>
+              <div className="border border-gray-100 rounded-xl divide-y divide-gray-100 text-sm">
+                {results.map(r => (
+                  <div key={r.orderId} className="px-3 py-2 flex items-center gap-2">
+                    {r.ok ? <CheckCircle2 size={15} className="text-green-600 flex-shrink-0" /> : <XCircle size={15} className="text-red-500 flex-shrink-0" />}
+                    <span className="font-mono text-xs text-gray-700 w-36 flex-shrink-0">{r.orderNumber ?? r.orderId.slice(0, 8)}</span>
+                    {r.ok && r.guia
+                      ? <button onClick={() => printGuiaById(r.guia!.id)} className="font-mono text-xs text-purple-700 hover:underline">{guiaNumber(r.guia)}</button>
+                      : <span className="text-xs text-red-600">{r.error}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-100 flex gap-2 bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-4 py-2.5 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200">Cerrar</button>
+          {!results ? (
+            <button onClick={() => run.mutate()} disabled={!transportOk || run.isPending || !orders.length}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700 disabled:opacity-50">
+              {run.isPending ? <Loader2 size={14} className="animate-spin" /> : <Truck size={14} />}
+              Generar {orders.length} guía(s)
+            </button>
+          ) : createdIds.length > 0 && (
+            <button onClick={() => printGuiasByIds(createdIds, openPrintWindow())}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700">
+              <Printer size={14} /> Imprimir {createdIds.length} guía(s)
             </button>
           )}
         </div>

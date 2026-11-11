@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fmtMoney, fmtNum } from '../lib/fmt';
-import { GuiaRemisionModal, GUIA_ORDER_STATUSES, guiaNumber, printGuiaById } from '../components/GuiaRemision';
+import { GuiaRemisionModal, BulkGuiaModal, GUIA_ORDER_STATUSES, guiaNumber, printGuiaById } from '../components/GuiaRemision';
 
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -1259,6 +1259,11 @@ export default function SalesOrders() {
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showExportReport, setShowExportReport] = useState(false);
   const [guiaOrderId, setGuiaOrderId] = useState<string | null>(null);
+  // Guías masivas (Comentarios ERP 09/11/26): pedidos B2B aceptados sin guía.
+  const [guiaSel, setGuiaSel] = useState<Set<string>>(new Set());
+  const [showBulkGuia, setShowBulkGuia] = useState(false);
+  const canGuia = (o: any) => o.channel !== 'ECOMMERCE' && !(o.invoices ?? [])[0] && GUIA_ORDER_STATUSES.includes(o.status);
+  const toggleGuiaSel = (id: string) => setGuiaSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   // Column configuration
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -1572,6 +1577,14 @@ export default function SalesOrders() {
             onClick={() => setShowBulkImport(true)}
           >
             <Upload size={14} /> Importar
+          </button>
+          <button
+            className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50"
+            disabled={guiaSel.size === 0}
+            onClick={() => setShowBulkGuia(true)}
+            title="Selecciona pedidos en la tabla (casilla a la izquierda) para generar sus guías de remisión"
+          >
+            <Truck size={14} /> Guías masivas{guiaSel.size > 0 ? ` (${guiaSel.size})` : ''}
           </button>
           <button
             className="btn-secondary flex items-center gap-2 text-sm"
@@ -2077,6 +2090,16 @@ export default function SalesOrders() {
             <table className="w-full text-sm">
               <thead className="bg-brand-50 text-brand-600 text-xs uppercase tracking-wide">
                 <tr>
+                  <th className="pl-4 pr-1 py-3 w-px" title="Seleccionar para guías masivas">
+                    {(() => {
+                      const eligible = (orders?.data ?? []).filter(canGuia);
+                      const all = eligible.length > 0 && eligible.every((o: any) => guiaSel.has(o.id));
+                      return (
+                        <input type="checkbox" className="rounded border-gray-300" disabled={eligible.length === 0} checked={all}
+                          onChange={() => setGuiaSel(all ? new Set() : new Set(eligible.map((o: any) => o.id)))} />
+                      );
+                    })()}
+                  </th>
                   {visibleColumns.map(col => (
                     <th key={col.id} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'}`} style={col.width ? { minWidth: col.width } : undefined}>
                       {col.label}
@@ -2097,6 +2120,12 @@ export default function SalesOrders() {
                         className={`cursor-pointer transition-colors ${isEcom ? 'bg-indigo-50/30' : ''} ${isExpanded ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
                         onClick={() => toggleDetail(o.id)}
                       >
+                        <td className="pl-4 pr-1 py-3" onClick={e => e.stopPropagation()}>
+                          {canGuia(o) && (
+                            <input type="checkbox" className="rounded border-gray-300" title="Seleccionar para guías masivas"
+                              checked={guiaSel.has(o.id)} onChange={() => toggleGuiaSel(o.id)} />
+                          )}
+                        </td>
                         {visibleColumns.map(col => (
                           <td key={col.id} className={`px-4 py-3 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : ''}`}>
                             {col.render(o)}
@@ -2163,7 +2192,7 @@ export default function SalesOrders() {
                       {/* ── Expanded detail row ─────────────────────────────── */}
                       {isExpanded && (
                         <tr key={`${o.id}-detail`} className="bg-indigo-50/60">
-                          <td colSpan={visibleColumns.length + 1} className="px-6 py-4">
+                          <td colSpan={visibleColumns.length + 2} className="px-6 py-4">
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
 
                               {/* Customer info */}
@@ -2288,6 +2317,15 @@ export default function SalesOrders() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {guiaOrderId && <GuiaRemisionModal orderId={guiaOrderId} onClose={() => setGuiaOrderId(null)} />}
+      {showBulkGuia && (
+        <BulkGuiaModal
+          orders={(orders?.data ?? []).filter((o: any) => guiaSel.has(o.id)).map((o: any) => ({
+            id: o.id, orderNumber: o.orderNumber, customerName: o.customer?.displayName ?? o.ecommerceCustomerName ?? '',
+          }))}
+          onClose={() => setShowBulkGuia(false)}
+          onDone={() => setGuiaSel(new Set())}
+        />
+      )}
       {showCreateCustomer && (
         <CreateCustomerModal
           onClose={() => setShowCreateCustomer(false)}
