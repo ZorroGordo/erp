@@ -28,9 +28,10 @@ export const GUIA_UNITS: { value: string; label: string }[] = [
 const unitLabel = (c?: string) => GUIA_UNITS.find(u => u.value === c)?.label ?? c ?? 'Unidad';
 
 /** Estados del pedido en los que se puede generar la guía desde Ventas.
+ *  17/11/26: también «Borrador» (pedidos B2B; e-commerce no tiene guía).
  *  Desde 09/11/26 también antes de despachar/facturar (pedido aceptado): al
  *  generar la guía el backend pasa el pedido a "Listo". */
-export const GUIA_ORDER_STATUSES = ['CONFIRMED', 'ACCEPTED', 'PAID', 'IN_PRODUCTION', 'READY', 'IN_DELIVERY', 'READY_FOR_DISPATCH', 'OUT_FOR_DELIVERY', 'DELIVERED', 'INVOICED', 'COMPLETED'];
+export const GUIA_ORDER_STATUSES = ['DRAFT', 'CONFIRMED', 'ACCEPTED', 'PAID', 'IN_PRODUCTION', 'READY', 'IN_DELIVERY', 'READY_FOR_DISPATCH', 'OUT_FOR_DELIVERY', 'DELIVERED', 'INVOICED', 'COMPLETED'];
 
 export const guiaNumber = (g: { series: string; correlative: string }) => `${g.series}-${String(g.correlative).padStart(8, '0')}`;
 

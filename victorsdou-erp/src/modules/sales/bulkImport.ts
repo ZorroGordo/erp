@@ -230,7 +230,10 @@ export async function importSalesOrders(
       sucursalId: suc?.id ?? null,
       sucursal: suc ? ((suc as any).label ?? null) : null,
       canal: norm(r.canal) || 'SALES_AGENT',
-      tipoComprobante: norm(r.tipoComprobante) || undefined,
+      tipoComprobante: (() => {
+        const t = norm(r.tipoComprobante).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return t.startsWith('GUIA') ? 'GUIA' : (norm(r.tipoComprobante) || undefined);
+      })(),
       notas: [] as string[],
       lines: [] as Group['lines'],
       filas: [] as number[],

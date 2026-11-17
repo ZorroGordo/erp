@@ -830,7 +830,7 @@ function buildColumns(paymentMethods: typeof PAYMENT_METHODS): ColumnDef[] {
       render: (o) => <span className="text-xs text-gray-500 font-mono">{o.invoiceId ?? '—'}</span> },
     { id: 'invoiceType', label: 'Comprobante', group: 'Pedido', defaultVisible: true,
       render: (o) => o.invoiceType
-        ? <span className={`px-2 py-0.5 rounded text-xs font-medium ${o.invoiceType === 'FACTURA' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{o.invoiceType}</span>
+        ? <span className={`px-2 py-0.5 rounded text-xs font-medium ${o.invoiceType === 'FACTURA' ? 'bg-blue-100 text-blue-700' : o.invoiceType === 'GUIA' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>{o.invoiceType === 'GUIA' ? 'SOLO GUÍA' : o.invoiceType}</span>
         : <span className="text-gray-300">—</span> },
     { id: 'notes', label: 'Notas', group: 'Pedido', defaultVisible: false,
       render: (o) => <span className="text-xs text-gray-500 truncate max-w-[120px] inline-block">{o.notes || '—'}</span> },
@@ -1390,9 +1390,12 @@ export default function SalesOrders() {
   // Mutations
   const createOrder = useMutation({
     mutationFn: (body: any) => api.post('/v1/sales-orders/', body),
-    onSuccess: () => {
+    onSuccess: (res: any, body: any) => {
       qc.invalidateQueries({ queryKey: ['sales-orders'] });
       toast.success('Pedido creado');
+      // «Solo guía»: abrir de una vez la guía de remisión del pedido nuevo
+      const newId = res?.data?.data?.id;
+      if (body?.invoiceType === 'GUIA' && newId) setGuiaOrderId(newId);
       setShowForm(false);
       setCustomerId('');
       setSucursalId('');
@@ -1689,6 +1692,7 @@ export default function SalesOrders() {
                 <option value="">Sin comprobante</option>
                 <option value="BOLETA">Boleta</option>
                 <option value="FACTURA">Factura</option>
+                <option value="GUIA">Solo guía de remisión (facturar después)</option>
               </select>
             </div>
           </div>
