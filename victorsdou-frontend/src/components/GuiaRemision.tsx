@@ -27,6 +27,10 @@ export const GUIA_UNITS: { value: string; label: string }[] = [
 ];
 const unitLabel = (c?: string) => GUIA_UNITS.find(u => u.value === c)?.label ?? c ?? 'Unidad';
 
+/** Obrador (punto de partida) por defecto si la configuración está vacía —
+ *  confirmado por Renzo el 21/10/26. */
+export const DEFAULT_PARTIDA = { address: 'Los Gorriones 250, Urb. La Campiña, Chorrillos, Lima', ubigeo: '150108' };
+
 /** Estados del pedido en los que se puede generar la guía desde Ventas.
  *  17/11/26: también «Borrador» (pedidos B2B; e-commerce no tiene guía).
  *  Desde 09/11/26 también antes de despachar/facturar (pedido aceptado): al
@@ -210,8 +214,8 @@ export function GuiaRemisionModal({ orderId, onClose, onCreated }: {
     setRecipientName(prefill.recipient?.name ?? '');
     setRecipientDocNo(prefill.recipient?.docNo ?? '');
     setStartDate(prefill.startDate ?? new Date().toISOString().slice(0, 10));
-    setPartida(prefill.partida?.address ?? '');
-    setPartidaUbigeo(prefill.partida?.ubigeo ?? '');
+    setPartida(prefill.partida?.address || DEFAULT_PARTIDA.address);
+    setPartidaUbigeo(prefill.partida?.ubigeo || (prefill.partida?.address ? '' : DEFAULT_PARTIDA.ubigeo));
     setLlegada(prefill.llegada?.address ?? '');
     setLlegadaUbigeo(prefill.llegada?.ubigeo ?? '');
     setItems((prefill.items ?? []).map((i: any) => ({ productId: i.productId, description: i.description, qty: i.qty, unitCode: i.unitCode ?? 'NIU' })));
@@ -432,6 +436,8 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
   });
 
   const [motivo, setMotivo] = useState('VENTA');
+  const [partida, setPartida] = useState('');
+  const [partidaUbigeo, setPartidaUbigeo] = useState('');
   const [startDate, setStartDate] = useState('');   // vacío = fecha de entrega de cada pedido
   const [mode, setMode] = useState<'01' | '02'>('01');
   const [plate, setPlate] = useState('');
@@ -445,6 +451,8 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
 
   useEffect(() => {
     if (!cfg) return;
+    setPartida(cfg.partidaAddress || DEFAULT_PARTIDA.address);
+    setPartidaUbigeo(cfg.partidaUbigeo || (cfg.partidaAddress ? '' : DEFAULT_PARTIDA.ubigeo));
     setMode(cfg.transportMode === '02' ? '02' : '01');
     setPlate(cfg.vehiclePlate ?? ''); setDriverName(cfg.driverName ?? ''); setDriverDocNo(cfg.driverDocNo ?? '');
     setDriverLicense(cfg.driverLicense ?? ''); setCarrierRuc(cfg.carrierRuc ?? ''); setCarrierName(cfg.carrierName ?? '');
@@ -454,6 +462,8 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
     mutationFn: () => api.post('/v1/invoices/guia-remision/bulk', {
       orderIds: orders.map(o => o.id),
       movementType: motivo,
+      senderAddress: partida.trim(),
+      originUbigeo: partidaUbigeo.trim() || undefined,
       startDate: startDate || undefined,
       transportMode: mode,
       transportistPlate: plate || undefined,
@@ -476,9 +486,9 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Error al generar las guías'),
   });
 
-  const transportOk = mode === '02'
+  const transportOk = !!partida.trim() && (mode === '02'
     ? plate.trim() && driverName.trim() && /^\d{8}$/.test(driverDocNo.trim())
-    : /^\d{11}$/.test(carrierRuc.trim()) && carrierName.trim();
+    : /^\d{11}$/.test(carrierRuc.trim()) && !!carrierName.trim());
   const createdIds = (results ?? []).filter(r => r.ok && r.guia).map(r => r.guia!.id);
   const lbl = 'block text-xs font-medium text-gray-600 mb-1';
   const sec = 'text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2';
@@ -499,7 +509,7 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
             <>
               <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2">
                 <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                <span>Guías internas (no electrónicas): <b>no se envían a SUNAT</b>. Destinatario, punto de llegada, ítems y peso se toman de cada pedido; el punto de partida de la configuración ({cfg?.partidaAddress || '—'}).</span>
+                <span>Guías internas (no electrónicas): <b>no se envían a SUNAT</b>. Destinatario, punto de llegada, ítems y peso se toman de cada pedido.</span>
               </div>
 
               <div>
@@ -511,6 +521,17 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
                       <span className="text-gray-500 truncate">{o.customerName ?? ''}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                <div className="col-span-3">
+                  <label className={lbl}>Punto de partida (obrador) *</label>
+                  <input className="input" value={partida} onChange={e => setPartida(e.target.value)} />
+                </div>
+                <div>
+                  <label className={lbl}>Ubigeo</label>
+                  <input className="input font-mono" maxLength={6} value={partidaUbigeo} onChange={e => setPartidaUbigeo(e.target.value.replace(/\D/g, ''))} />
                 </div>
               </div>
 
@@ -552,7 +573,7 @@ export function BulkGuiaModal({ orders: ordersProp, onClose, onDone }: {
                 )}
                 <label className="flex items-center gap-2 mt-3 text-xs text-gray-600 cursor-pointer">
                   <input type="checkbox" checked={saveDefault} onChange={e => setSaveDefault(e.target.checked)} className="rounded border-gray-300" />
-                  Recordar vehículo / transportista para la próxima guía
+                  Recordar punto de partida y vehículo / transportista para la próxima guía
                 </label>
               </div>
             </>
