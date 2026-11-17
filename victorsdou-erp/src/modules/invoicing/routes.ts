@@ -281,6 +281,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
     for (const order of orders) {
       if (order.invoiceId) { results.push({ orderId: order.id, error: 'ALREADY_INVOICED' }); continue; }
 
+      // invoiceType 'GUIA' (solo guía, se factura después de la entrega) → FACTURA
       const docType = order.invoiceType === 'BOLETA' ? 'BOLETA' : 'FACTURA';
       const series = docType === 'BOLETA' ? config.FACTPRO_SERIE_BOLETA : config.FACTPRO_SERIE_FACTURA;
       const correlative = await nextCorrelative(series);
@@ -459,7 +460,12 @@ export async function invoicingRoutes(app: FastifyInstance) {
       include: { customer: true, lines: { include: { product: true } } },
     });
     if (!order) throw new GuiaCreateError(404, 'NOT_FOUND', 'Pedido no encontrado');
-    if (GUIA_BLOCKED_ORDER_STATUSES.includes(order.status as string)) {
+    // Comentarios ERP Ventas 17/11/26: los pedidos B2B se quedan en «Borrador»
+    // (aceptar exige pago y muchos se cobran después de la entrega), así que la
+    // guía también se permite desde un borrador B2B. E-commerce sigue exigiendo
+    // que el pedido esté aceptado.
+    const draftB2B = (order.status as string) === 'DRAFT' && (order.channel as string) !== 'ECOMMERCE';
+    if (!draftB2B && GUIA_BLOCKED_ORDER_STATUSES.includes(order.status as string)) {
       throw new GuiaCreateError(422, 'ORDER_NOT_READY', 'El pedido debe estar aceptado para generar la guía');
     }
 
@@ -542,7 +548,7 @@ export async function invoicingRoutes(app: FastifyInstance) {
 
     // Un pedido aceptado/confirmado pasa a "Listo"; nunca retrocede uno que
     // ya está en camino o entregado.
-    if (['ACCEPTED', 'CONFIRMED', 'PAID', 'IN_PRODUCTION'].includes(order.status as string)) {
+    if (['DRAFT', 'ACCEPTED', 'CONFIRMED', 'PAID', 'IN_PRODUCTION'].includes(order.status as string)) {
       await prisma.salesOrder.update({ where: { id: order.id }, data: { status: 'READY' as any } });
     }
 
